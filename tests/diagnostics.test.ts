@@ -12,11 +12,11 @@ const rows=()=>readFileSync(path,'utf8').trim().split('\n').map(line=>JSON.parse
 
 test('deep traces retain useful context while removing credentials, image bytes and reasoning',async()=>{
  await trace('request',{chatId:'chat-one'},async()=>{
-  logEvent('model.request',{instructions:'Prefer add with chat.',history:[{role:'user',content:'Add my lunch'}],accessToken:'private-token',headers:{Authorization:'Bearer secret',cookie:'private-cookie'},arguments:JSON.stringify({client_secret:'private-client',date:'2026-10-04'}),input:[{type:'input_image',image_url:'data:image/png;base64,private-image'}]});
+  logEvent('model.request',{instructions:'Prefer add with chat.',history:[{role:'user',content:'Add my lunch'}],serverKey:'ls_guest_privateServerKey',accessToken:'private-token',headers:{Authorization:'Bearer secret',cookie:'private-cookie'},arguments:JSON.stringify({client_secret:'private-client',date:'2026-10-04'}),input:[{type:'input_image',image_url:'data:image/png;base64,private-image'}]});
   await trace('tool',{action:'add'},async()=>logEvent('tool.result',{calories:400,usage:{input_tokens:123,output_tokens:45},output:[{type:'reasoning',encrypted_content:'private-reasoning',summary:'private-summary'},{type:'response.reasoning_summary_text.done',text:'private-summary'}]}));
  });
  const text=readFileSync(path,'utf8');
- for(const secret of ['private-token','private-cookie','private-client','private-image','private-reasoning','private-summary'])assert.ok(!text.includes(secret));
+ for(const secret of ['ls_guest_privateServerKey','private-token','private-cookie','private-client','private-image','private-reasoning','private-summary'])assert.ok(!text.includes(secret));
  assert.ok(text.includes('Add my lunch'));assert.ok(text.includes('"input_tokens":123'));
  const events=rows();assert.equal(new Set(events.map(row=>row.traceId)).size,1);
  assert.ok(events.find(row=>row.event==='tool.start').parentSpanId);

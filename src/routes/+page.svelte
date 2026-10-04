@@ -38,11 +38,12 @@
     <div class="launcher-intro"><h1>Your apps.</h1><p>Small tools. Built around you.</p></div>
     <div class="app-grid">
       <a class="app-tile" href="/chat"><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span><span>Chat</span></a>
-      {#each data.spaces as space, i (space.id)}<a class="app-tile" href={`/spaces/${space.id}/applet`}><span class={`app-icon icon-tone-${i % 4}`}><span class="app-emoji" aria-hidden="true">{appEmoji(space.name,space.icon)}</span></span><span>{space.name}</span>{#if !space.appletCount}<small>In progress</small>{/if}</a>{/each}
+      {#each data.spaces as space, i (space.id)}<a class="app-tile" href={`/spaces/${space.id}/applet`}><span class={`app-icon icon-tone-${i % 4}`}><span class="app-emoji" aria-hidden="true">{appEmoji(space.name,space.icon)}</span></span><span>{space.name}</span>{#if space.serverName}<small>{space.serverName}</small>{/if}{#if !space.appletCount}<small>In progress</small>{/if}</a>{/each}
       <button class="app-tile add-app" disabled={creating} onclick={addApp}><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">✨</span></span><span>{creating ? 'Opening…' : 'Add new'}</span></button>
       <a class="app-tile" href="/settings"><span class="app-icon icon-settings"><span class="app-emoji" aria-hidden="true">⚙️</span></span><span>Settings</span></a>
     </div>
     {#if !data.spaces.length}<p class="launcher-hint">Choose Add new and describe an app. It will find a home here.</p>{/if}
+    {#each data.servers.filter(server=>server.error) as server}<p class="error">{server.name}: {server.error}</p>{/each}
     <Notifications home/>
   </section>
 </main>

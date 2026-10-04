@@ -14,7 +14,9 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
     "logs": "node scripts/logs.mjs",
-    "deploy:local": "node scripts/deploy-local.mjs"
+    "deploy:local": "node scripts/deploy-local.mjs",
+    "server:start": "tsx scripts/server.ts",
+    "server:local": "node scripts/server-local.mjs"
   },
   "dependencies": {
     "@sveltejs/adapter-node": "^5.2.0",

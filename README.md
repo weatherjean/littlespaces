@@ -94,3 +94,7 @@ The host uses a soft dark shell with colorful emoji app icons and subtle blue ac
 This workspace runs through the `little-spaces` user service, so it survives the coding agent's terminal sessions and starts with your user session. After building, run `npm run deploy:local` to copy the build into an immutable local release and restart the service. The previous server can keep running while `npm run build` creates the next build. The service still binds only to `127.0.0.1:5173` and uses the same workspace data.
 
 Use `systemctl --user status little-spaces` to inspect it and `journalctl --user -u little-spaces -n 50` for process logs. Stop it with `systemctl --user stop little-spaces` before running `npm start` or `npm run dev` manually on the same port. The deployment command retains the latest three release copies under `.data/runtime/releases`.
+
+## Connected app servers
+
+The experimental client/server access model supports owner and guest keys, private/shared apps, multiple server connections, and local ChatGPT inference. See [server access and deployment](docs/server-access.md). The local UI remains single-user and loopback-only; the separate app API can be deployed behind HTTPS.

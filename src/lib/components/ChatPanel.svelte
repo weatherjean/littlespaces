@@ -4,7 +4,7 @@
   import Icon from './Icon.svelte';
   import { request } from '$lib/client';
   import type { Account, Space, Chat, Message, Applet, ToolCall } from '$lib/types';
-  let { space, chats, activeChat, messages, pendingToolCalls = [], account, applet, base, onupdated = () => {} }: { space: Space; chats: Chat[]; activeChat: Chat; messages: Message[]; pendingToolCalls?:ToolCall[]; account: Account | null; applet: Applet | null; base: string; onupdated?: () => void } = $props();
+  let { space, chats, activeChat, messages, pendingToolCalls = [], account, applet, base, canBuild = true, onupdated = () => {} }: { space: Space; chats: Chat[]; activeChat: Chat; messages: Message[]; pendingToolCalls?:ToolCall[]; account: Account | null; applet: Applet | null; base: string; canBuild?: boolean; onupdated?: () => void } = $props();
   const pickerId = $props.id();
   let picker: HTMLDialogElement;
   let trigger: HTMLButtonElement;
@@ -31,7 +31,7 @@
 <div class="chat-panel">
   <div class="conversation-switcher"><button class="conversation-picker-trigger" bind:this={trigger} aria-label={`Choose conversation: ${activeChat.title}`} aria-haspopup="dialog" onclick={openPicker}><Icon name="chat" size={16} /><span>{activeChat.title}</span><Icon name="chevron" size={15} /></button><button class="icon-button" aria-label="New chat" disabled={busy} onclick={newChat}><Icon name="plus" size={18} /></button></div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#key activeChat.id}<ChatView {space} {activeChat} {messages} {pendingToolCalls} {account} {applet} {onupdated} launcher={base === '/chat'} />{/key}
+  {#key activeChat.id}<ChatView {space} {activeChat} {messages} {pendingToolCalls} {account} {applet} {canBuild} {onupdated} launcher={base === '/chat'} />{/key}
 </div>
 
 <dialog class="conversation-picker" bind:this={picker} aria-labelledby={`${pickerId}-title`} oncancel={event => { event.preventDefault(); event.stopPropagation(); closePicker(); }} onkeydown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePicker(); } }}>

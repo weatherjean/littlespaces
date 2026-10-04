@@ -1,3 +1,4 @@
+import { proxyRemote } from '$lib/server/remote-proxy';
 import { logEvent, trace } from '$lib/server/diagnostics';
 import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { origin } from '$lib/server/config';
@@ -12,7 +13,7 @@ const run=async()=>{
   if (event.url.pathname.startsWith('/api/') || event.url.pathname === '/auth/start' || event.url.pathname === '/auth/logout') {
     requireLocalSession(event);
   }
-  const response = await resolve(event);
+  const response = await proxyRemote(event) || await resolve(event);
   if(!event.url.pathname.startsWith('/_app/'))logEvent('http.response',{status:response.status});
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
