@@ -1,0 +1,36 @@
+{
+  "name": "little-spaces",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite dev --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "start": "node scripts/start.mjs",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "logs": "node scripts/logs.mjs",
+    "deploy:local": "node scripts/deploy-local.mjs"
+  },
+  "dependencies": {
+    "@sveltejs/adapter-node": "^5.2.0",
+    "@sveltejs/kit": "^2.20.0",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.25.0",
+    "jose": "^6.0.0",
+    "sharp": "^0.35.5",
+    "svelte": "^5.25.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/node": "^22.13.0",
+    "svelte-check": "^4.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.2.0"
+  }
+}

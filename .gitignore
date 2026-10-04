@@ -1,0 +1,9 @@
+node_modules/
+.svelte-kit/
+build/
+.data/
+.tools/
+.env
+.env.*
+!.env.example
+*.sqlite*
