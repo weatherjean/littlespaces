@@ -1,12 +1,10 @@
 import { logEvent, trace } from '$lib/server/diagnostics';
 import type { ToolCall } from '$lib/types';
-import { notify } from '$lib/server/notifications';
 import { liveChatContext } from '$lib/server/chat-context';
 import { json } from '@sveltejs/kit';
 import { body } from '$lib/server/security';
 import { account } from '$lib/server/auth';
-import { getChat, messages, revision, saveApplet, saveExchange, spaceApplets, readPhoto, saveToolCall, appletSpaceId } from '$lib/server/storage';
-import { prepareApp } from '$lib/server/publish';
+import { getChat, messages, revision, saveExchange, spaceApplets, readPhoto, saveToolCall } from '$lib/server/storage';
 import { launcherChatId } from '$lib/server/storage';
 import { generate, models } from '$lib/server/inference';
 import type { RequestHandler } from './$types';
@@ -63,18 +61,10 @@ export const POST: RequestHandler = async (event) => {
         const result = await generate(model, history, current?.source, (delta) => {
           chars += delta.length;
           if (Date.now() - lastUpdate > 500) { send('status', { message: `Working on your reply… ${Math.ceil(chars / 1000)}k characters` }); lastUpdate = Date.now(); }
-        }, abort.signal, { spaceId, appletId: id, context: liveChatContext(id, getChat(spaceId,thread).launch), effort, onTool: call=>{const item={...call,prompt:message};const index=toolCalls.findIndex(old=>old.id===item.id);if(index<0)toolCalls.push(item);else toolCalls[index]=item;saveToolCall(thread,item);send('tool',item);}, onActivity: message => send('status', {message}) });
-        let applet;
-        if (result.applet) {
-          send('status', { message: 'Compiling UI and testing backend…' });
-          const prepared = await prepareApp(result.applet, id);
-          if (abort.signal.aborted) return;
-          if (id && revision(id).version !== current?.version) throw new Error('The applet changed while AI was working. Retry against the current version.');
-          applet = saveApplet(prepared, id, isLauncher ? undefined : spaceId);
-        }
+        }, abort.signal, { spaceId, chatId: thread, appletId: id, context: liveChatContext(id, getChat(spaceId,thread).launch), effort, onTool: call=>{const item={...call,prompt:message};const index=toolCalls.findIndex(old=>old.id===item.id);if(index<0)toolCalls.push(item);else toolCalls[index]=item;saveToolCall(thread,item);send('tool',item);}, onActivity: message => send('status', {message}) });
+        const applet = result.published;
         if (abort.signal.aborted) return;
         saveExchange(thread, message, result.message, photos, toolCalls);
-        if(applet){try{notify(appletSpaceId(applet.id),{key:`build:${applet.version}`,title:`${applet.title} is ready`,body:id?'Your app has been updated.':'Your new app is ready to open.'});}catch(error){logEvent('notification.error',{error,appletId:applet.id});}}
         logEvent('chat.saved',{message:result.message,applet});
         send('done', { message: result.message, applet });
       } catch (error) {

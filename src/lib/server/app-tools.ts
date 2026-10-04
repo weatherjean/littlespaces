@@ -1,16 +1,24 @@
 import { notify, listNotifications, cancelNotification } from './notifications';
 import { appActions, callApp } from './backend';
 import { records, putRecord, removeRecord, listSpaces, launcherChatId, appletSpaceId, listPhotos, readPhoto } from './storage';
-import { prepareApp } from './publish';
+import { draftWorkspace } from './drafts';
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required = Object.keys(properties)) {
   return { type: 'function', name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, strict: false };
 }
 const string = { type: 'string' };
-export async function appTools(id?: string, spaceId?: string) {
+export async function appTools(id?: string, spaceId?: string, chatId?: string) {
   const photoOwner = id ? appletSpaceId(id) : spaceId;
   const catalog = id ? await appActions(id) : [];
-  const tools = [tool('validate_app', 'Compile a proposed Svelte UI and run the proposed TypeScript backend tests in isolated temporary storage. Does not publish or touch user records. Use this before returning an applet; fix failures.', { source: string, backend: string })];
+  const drafts = chatId && spaceId ? draftWorkspace(chatId,spaceId,id) : undefined;
+  const tools = drafts ? [
+    tool('read_draft','Read the persistent draft and its revision. If none exists, returns live app content and revision 0.',{}),
+    tool('write_draft','Create or update draft fields. Omitted fields are preserved. Does not change the live app. Use revision 0 for a new draft.',{revision:{type:'integer'},title:string,description:string,source:string,backend:string,chatInstructions:string},['revision']),
+    tool('edit_draft','Replace one exact, unique text block in a draft field. Invalidates test results. Use for focused fixes.',{revision:{type:'integer'},field:{type:'string',enum:['title','description','source','backend','chatInstructions']},search:string,replace:string}),
+    tool('test_draft','Compile the saved UI and run backend tests in isolated storage. Returns test results. Does not publish.',{revision:{type:'integer'}}),
+    tool('publish_draft','Publish the exact successfully tested draft revision. Creates or updates this app, preserving records. Only when requested by the user. Repeat calls are idempotent.',{revision:{type:'integer'}})
+  ] : [];
+
   if (id) {
     tools.push(tool('describe', 'Get this app’s available backend actions and their input schemas.', {}));
     if (catalog.length) tools.push(tool('invoke', 'Run an app action. First use describe to learn actions and schemas. inputJSON is the JSON-encoded action input. Only use writes when requested by the user.', { action: string, inputJSON: string }));
@@ -36,11 +44,7 @@ export async function appTools(id?: string, spaceId?: string) {
         const photo=readPhoto(photoOwner,input.id);
         return {id:photo.id,name:photo.name,dataUrl:`data:${photo.mime};base64,${photo.data.toString('base64')}`};
       }
-      if (name === 'validate_app') {
-        if (typeof input.source !== 'string' || typeof input.backend !== 'string') throw new Error('Provide source and backend strings.');
-        const prepared = await prepareApp({ title: 'Validation', description: '', source: input.source, backend: input.backend }, id);
-        return { compiled: true, tests: JSON.parse(prepared.testReport) };
-      }
+      if (drafts && ['read_draft','write_draft','edit_draft','test_draft','publish_draft'].includes(name)) return drafts.execute(name,input);
       if (name === 'list_apps') return listSpaces().filter(space => space.id !== launcherChatId).map(({id,name,appletCount}) => ({id,name,ready:!!appletCount}));
       if (!id) throw new Error('Open an app to access its data.');
       if (name === 'describe') return { actions: catalog };

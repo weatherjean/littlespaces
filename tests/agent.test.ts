@@ -69,3 +69,31 @@ test('agent receives current app guidance and bounded task context without treat
   await generate('test-model',[{role:'user',content:'Help with this plant'}],latest.source,()=>{},new AbortController().signal,{appletId:app.id,context:{selectedRecords:[{name:'Selected fern'}]}});
   assert.deepEqual(storage.records(app.id),before);
 });
+
+test('builder saves and tests a draft, publishes through a visible tool and returns no duplicate source', async()=>{
+ const space=storage.createSpace('Build flow'),chat=storage.createChat(space.id);
+ const backend=`export const actions={list:{description:'List',readOnly:true,parameters:{type:'object'},run:(_,ctx)=>ctx.db.list()}};export const tests=[{name:'Empty',run:async({call,assert})=>assert.deepEqual(await call('list',{}),[])}];`;
+ const steps=[['read_draft',{}],['write_draft',{revision:0,title:'New app',description:'Test',source:'<h1>New app</h1>',backend}],['test_draft',{revision:1}],['publish_draft',{revision:1}]] as const;
+ let step=0;
+ globalThis.fetch=async(_url,init)=>{
+  const body=JSON.parse(String(init?.body));
+  assert.ok(!body.tools[0].tools.some((tool:any)=>tool.name==='validate_app'));
+  if(step<steps.length){const [name,args]=steps[step++];return reply('',[{type:'function_call',name,namespace:'app',call_id:`build${step}`,arguments:JSON.stringify(args)}]);}
+  const results=body.input.filter((item:any)=>item.type==='function_call_output').map((item:any)=>JSON.parse(item.output));
+  assert.ok(results.every((item:any)=>!item.error));
+  return reply('{"message":"Your app is ready."}');
+ };
+ const events:import('../src/lib/types').ToolCall[]=[];
+ const result=await generate('test-model',[{role:'user',content:'Build an app'}],undefined,()=>{},new AbortController().signal,{spaceId:space.id,chatId:chat.id,onTool:call=>events.push(call)});
+ assert.equal(result.published?.version,1);
+ assert.equal(storage.spaceApplets(space.id).length,1);
+ assert.deepEqual(events.filter(e=>e.status==='complete').map(e=>e.name),steps.map(s=>s[0]));
+ assert.equal('applet' in result,false);
+});
+
+test('legacy source in a final reply cannot bypass builder tools',async()=>{
+ globalThis.fetch=async()=>reply(JSON.stringify({message:'Built',applet:{title:'Bypass',description:'',source:'<p/>'}}));
+ const before=storage.listApplets().length;
+ await assert.rejects(()=>generate('test-model',[],undefined,()=>{},new AbortController().signal),/builder tools/);
+ assert.equal(storage.listApplets().length,before);
+});
