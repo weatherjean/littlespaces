@@ -81,7 +81,7 @@ if (process.platform === 'darwin') {
     '"' + value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%') + '"';
   writeFileSync(
     join(units, 'little-spaces.service'),
-    `[Unit]\nDescription=Little Spaces local app server\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${quoted(root)}\nExecStart=${quoted(process.execPath)} ${quoted(start)}\nRestart=on-failure\nRestartSec=2\nEnvironment=NODE_ENV=production\n\n[Install]\nWantedBy=default.target\n`,
+    `[Unit]\nDescription=LittleSpaces local app server\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${quoted(root)}\nExecStart=${quoted(process.execPath)} ${quoted(start)}\nRestart=on-failure\nRestartSec=2\nEnvironment=NODE_ENV=production\n\n[Install]\nWantedBy=default.target\n`,
   );
   execFileSync('systemctl', ['--user', 'daemon-reload']);
   execFileSync('systemctl', ['--user', 'enable', 'little-spaces.service'], { stdio: 'inherit' });
@@ -90,4 +90,4 @@ if (process.platform === 'darwin') {
 // Retain the previous build for diagnosis; never delete the active release.
 for (const name of readdirSync(releases).sort().slice(0, -3))
   rmSync(join(releases, name), { recursive: true, force: true });
-console.log('Little Spaces is managed by the user service at http://127.0.0.1:5173');
+console.log('LittleSpaces is managed by the user service at http://127.0.0.1:5173');

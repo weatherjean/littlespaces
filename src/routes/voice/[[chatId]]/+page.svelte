@@ -6,7 +6,7 @@
   let { data }: { data: PageData } = $props();
 </script>
 
-<svelte:head><title>Voice · Little Spaces</title></svelte:head>
+<svelte:head><title>Voice · LittleSpaces</title></svelte:head>
 <main class="builtin-app">
   <header class="builtin-header">
     <a class="back-link" href="/" aria-label="Back to Home"><Icon name="back" /></a>

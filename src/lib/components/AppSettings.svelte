@@ -84,9 +84,9 @@
     gap: 14px;
     padding: 16px;
     margin-top: 12px;
-    border: 1px solid #ffffff10;
-    border-radius: 12px;
-    background: #ffffff02;
+    border: var(--border-width) solid var(--line);
+    border-radius: var(--radius);
+    background: var(--hover);
   }
   .app-symbol {
     display: grid;
@@ -94,8 +94,8 @@
     width: 40px;
     height: 40px;
     font-size: 24px;
-    border-radius: 11px;
-    background: #a8c9e309;
+    border-radius: calc(var(--radius) * 0.917);
+    background: var(--accent-soft);
     flex-shrink: 0;
   }
   .app-copy {
@@ -111,7 +111,7 @@
   }
   .app-copy > span {
     font-size: 11px;
-    color: #8e9eb3;
+    color: var(--muted);
   }
   button {
     flex-shrink: 0;
@@ -122,24 +122,24 @@
   summary {
     cursor: pointer;
     font-size: 12px;
-    color: #a6b6ca;
+    color: var(--accent);
     padding: 8px 0;
   }
   summary span {
     margin-left: 6px;
     font-size: 11px;
-    color: #8092a9;
+    color: var(--muted);
   }
   .empty-apps {
     margin-top: 18px;
   }
   .app-settings .success {
     margin-top: 14px;
-    color: #9ccdbd;
+    color: var(--success);
   }
   .app-settings .error {
     margin-top: 14px;
-    color: #edaaa9;
+    color: var(--danger);
   }
   @media (max-width: 450px) {
     .app-row {

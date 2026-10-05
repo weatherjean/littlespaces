@@ -262,6 +262,6 @@
   }
   .frame-status {
     padding: 40px;
-    color: #667085;
+    color: var(--muted);
   }
 </style>

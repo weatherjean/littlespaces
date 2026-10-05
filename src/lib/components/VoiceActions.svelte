@@ -121,11 +121,11 @@
   .voice-action {
     padding: 22px;
     margin: 18px 0;
-    border: 1px solid #b8d2e630;
-    border-radius: 16px;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 1.333);
     background: var(--panel);
     color: var(--ink);
-    box-shadow: 0 8px 28px #00000012;
+    box-shadow: var(--shadow);
   }
   header {
     display: flex;
@@ -163,18 +163,18 @@
     cursor: pointer;
   }
   .completed {
-    border-color: #9fd6bd38;
+    border-color: var(--line);
   }
   .completed .app-label,
   .completed .action-status {
-    color: #a9dbc2;
+    color: var(--success);
   }
   .completed .status-label {
-    color: #a9dbc2;
+    color: var(--success);
   }
   pre {
-    background: #10151e;
-    border-radius: 8px;
+    background: var(--bg);
+    border-radius: calc(var(--radius) * 0.667);
     padding: 12px;
     color: var(--ink);
   }
@@ -183,7 +183,7 @@
     align-items: center;
     justify-content: center;
     gap: 7px;
-    border: 1px solid var(--line);
+    border: var(--border-width) solid var(--line);
     background: transparent;
     color: var(--ink);
     min-height: 42px;
@@ -199,11 +199,11 @@
   }
   button {
     padding: 9px 18px;
-    border-radius: 10px;
+    border-radius: calc(var(--radius) * 0.833);
   }
   .primary {
     background: var(--accent);
-    color: #152333;
+    color: var(--on-accent);
     border-color: transparent;
     font-weight: 600;
   }

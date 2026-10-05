@@ -1,13 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { APPEARANCE_KEY, applyAppearance, readAppearance } from '$lib/appearance';
   import { page } from '$app/state';
+  import { afterNavigate } from '$app/navigation';
   import { notifications } from '$lib/notification-state';
   import { expertMode } from '$lib/preferences';
   import { refreshNotifications } from '$lib/notification-state';
   import type { Snippet } from 'svelte';
+  import '$lib/theme.css';
   import '$lib/style.css';
   import '$lib/polish.css';
+  afterNavigate(() => applyAppearance(readAppearance()));
   onMount(() => {
+    applyAppearance(readAppearance());
+    const syncAppearance = (event: StorageEvent) => {
+      if (event.key === APPEARANCE_KEY || event.key === null) applyAppearance(readAppearance());
+    };
+    window.addEventListener('storage', syncAppearance);
     expertMode.set(localStorage.getItem('little-spaces-expert') === 'true');
     const refresh = () => {
       if (page.data.owner) void refreshNotifications().catch(() => {});
@@ -22,6 +31,7 @@
     window.addEventListener('focus', refresh);
     window.addEventListener('notifications-changed', refresh);
     return () => {
+      window.removeEventListener('storage', syncAppearance);
       window.removeEventListener('pageshow', checkHistory);
       clearInterval(timer);
       window.removeEventListener('focus', refresh);

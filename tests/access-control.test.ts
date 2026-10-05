@@ -78,6 +78,7 @@ test('private pages, APIs, OAuth, unknown routes and page-data requests require 
   );
   guard(event('/login'));
   guard(event('/icon.svg'));
+  guard(event('/appearance.js'));
   guard(event('/_app/immutable/app.js'));
   assert.equal(sessionCookie.startsWith('__Host-'), true);
   assert.equal(cookieOptions.secure, true);

@@ -36,10 +36,10 @@
     place-items: center;
     width: 52px;
     height: 52px;
-    border-radius: 16px;
-    color: #bbd2e8;
-    background: #a8c9e30a;
-    border: 1px solid #a8c9e31a;
+    border-radius: calc(var(--radius) * 1.333);
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: var(--border-width) solid var(--line);
     flex-shrink: 0;
   }
   h2 {
@@ -51,7 +51,7 @@
   p {
     max-width: 330px;
     font-size: 13px;
-    color: #9aaabe;
+    color: var(--muted);
     line-height: 1.65;
   }
   a {
@@ -69,9 +69,9 @@
     justify-content: flex-start;
     gap: 16px;
     padding: 20px;
-    border: 1px solid #a8c9e324;
-    background: #a8c9e307;
-    border-radius: 16px;
+    border: var(--border-width) solid var(--line);
+    background: var(--accent-soft);
+    border-radius: calc(var(--radius) * 1.333);
     margin: 0 auto 32px;
   }
   .banner .connection-copy {
@@ -80,7 +80,7 @@
   .banner .connection-symbol {
     width: 40px;
     height: 40px;
-    border-radius: 12px;
+    border-radius: var(--radius);
   }
   .banner h2 {
     font-size: 14px;

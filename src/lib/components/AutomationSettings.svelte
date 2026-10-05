@@ -173,9 +173,9 @@
     gap: 20px;
     margin-top: 22px;
     padding: 24px;
-    background: #ffffff03;
-    border: 1px solid #ffffff10;
-    border-radius: 16px;
+    background: var(--hover);
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 1.333);
   }
   .form-heading,
   .form-footer {
@@ -189,11 +189,11 @@
     margin: 0;
     font-size: 13px;
     font-weight: 550;
-    color: #dce5ef;
+    color: var(--ink);
   }
   .form-heading > span {
     font-size: 11px;
-    color: #8eabb0;
+    color: var(--muted);
   }
   label {
     display: flex;
@@ -202,10 +202,10 @@
     gap: 9px;
     font-size: 12px;
     font-weight: 500;
-    color: #c3cedc;
+    color: var(--accent);
   }
   .optional {
-    color: #7f8fa3;
+    color: var(--muted);
     font-size: 11px;
     font-weight: 400;
   }
@@ -217,10 +217,10 @@
     width: 100%;
     min-width: 0;
     min-height: 44px;
-    border: 1px solid #ffffff19;
-    border-radius: 9px;
-    background: #0d141e;
-    color: #e3ebf5;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 0.75);
+    background: var(--bg);
+    color: var(--ink);
     padding: 11px 13px;
     font-size: 13px;
     line-height: 1.5;
@@ -229,23 +229,23 @@
       box-shadow 0.15s;
   }
   input::placeholder {
-    color: #748398;
+    color: var(--muted);
     opacity: 1;
   }
   input:hover {
-    border-color: #ffffff2d;
+    border-color: var(--line);
   }
   input:focus-visible {
     outline: none;
-    border-color: #a8c9e38c;
-    box-shadow: 0 0 0 3px #a8c9e312;
+    border-color: var(--line);
+    box-shadow: var(--shadow);
   }
   .form-footer {
     padding-top: 2px;
   }
   .form-footer p {
     font-size: 11px;
-    color: #8697ac;
+    color: var(--muted);
   }
   .form-footer button {
     flex-shrink: 0;
@@ -261,10 +261,10 @@
     margin-top: 12px;
   }
   .automation-card .success {
-    color: #9ccdbd;
+    color: var(--success);
   }
   .automation-card .error {
-    color: #edaaa9;
+    color: var(--danger);
   }
   .saved-row {
     display: flex;
@@ -273,9 +273,9 @@
     gap: 16px;
     margin-top: 16px;
     padding: 16px;
-    border: 1px solid #ffffff10;
-    border-radius: 12px;
-    background: #ffffff02;
+    border: var(--border-width) solid var(--line);
+    border-radius: var(--radius);
+    background: var(--hover);
     overflow-wrap: anywhere;
   }
   .saved-row > div {
@@ -291,14 +291,14 @@
   .empty-state {
     margin-top: 18px;
     padding: 22px;
-    border: 1px dashed #ffffff1a;
-    border-radius: 12px;
+    border: var(--border-width) dashed var(--line);
+    border-radius: var(--radius);
   }
   .empty-state strong {
     display: block;
     font-size: 12px;
     font-weight: 500;
-    color: #bdc9d8;
+    color: var(--accent);
     margin-bottom: 4px;
   }
   @media (max-width: 540px) {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AppearanceSettings from '$lib/components/AppearanceSettings.svelte';
   import AppSettings from '$lib/components/AppSettings.svelte';
   import DeviceSettings from '$lib/components/DeviceSettings.svelte';
   import AutomationSettings from '$lib/components/AutomationSettings.svelte';
@@ -48,7 +49,7 @@
   }
 </script>
 
-<svelte:head><title>Settings · Little Spaces</title></svelte:head>
+<svelte:head><title>Settings · LittleSpaces</title></svelte:head>
 <main class="settings-page">
   <header class="builtin-header">
     <a class="back-link" href="/" aria-label="Back to Home"><Icon name="back" /></a>
@@ -118,6 +119,7 @@
     <AutomationSettings
       archivedSpaceIds={data.apps.filter((app) => app.archived).map((app) => app.id)}
     />
+    <AppearanceSettings />
     <p class="settings-footnote">
       Your apps and their data stay on this server. AI requests are sent through your connected
       ChatGPT account.

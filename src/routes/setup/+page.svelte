@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import Icon from '$lib/components/Icon.svelte';
+  import BrandMark from '$lib/components/BrandMark.svelte';
   import type { ActionData, PageData } from './$types';
   let { data, form }: { data: PageData; form: ActionData } = $props();
   let token = $state('');
@@ -19,14 +19,14 @@
 </script>
 
 <svelte:head
-  ><title>Set up · Little Spaces</title><meta
+  ><title>Set up · LittleSpaces</title><meta
     name="robots"
     content="noindex,nofollow"
   /></svelte:head
 >
 <main class="setup-page">
   <section class="setup-card" aria-labelledby="setup-title">
-    <div class="setup-brand"><Icon name="grid" size={22} /><span>little spaces</span></div>
+    <div class="setup-brand"><BrandMark size={36} /><span>LittleSpaces</span></div>
     <p class="eyebrow">YOUR PRIVATE WORKSPACE</p>
     {#if data.canRegister}
       <h1 id="setup-title">Make yourself at home.</h1>
@@ -105,16 +105,17 @@
     width: 100%;
     max-width: 460px;
     padding: 38px;
-    border: 1px solid #ffffff13;
-    border-radius: 24px;
-    background: #171b29aa;
-    box-shadow: 0 24px 80px #0003;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 2);
+    background: var(--panel);
+    box-shadow: var(--modal-shadow);
   }
   .setup-brand {
+    --brand-halo: var(--panel);
     display: flex;
     align-items: center;
     gap: 10px;
-    color: #d5cef4;
+    color: var(--ink);
     margin-bottom: 32px;
     font-size: 17px;
   }
@@ -135,15 +136,15 @@
   }
   label {
     font-size: 12px;
-    color: #c7ccdb;
+    color: var(--accent);
     margin: 0 0 9px;
   }
   input {
     width: 100%;
-    background: #0c101c;
-    border: 1px solid #ffffff24;
-    color: #eff0f8;
-    border-radius: 10px;
+    background: var(--bg);
+    border: var(--border-width) solid var(--line);
+    color: var(--ink);
+    border-radius: calc(var(--radius) * 0.833);
     padding: 13px;
     margin-bottom: 20px;
   }

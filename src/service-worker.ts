@@ -58,7 +58,7 @@ worker.addEventListener('push', (event) => {
   const href =
     typeof value.href === 'string' && /^\/(chat|spaces\/)/.test(value.href) ? value.href : '/';
   event.waitUntil(
-    worker.registration.showNotification(value.title || 'Little Spaces', {
+    worker.registration.showNotification(value.title || 'LittleSpaces', {
       body: value.body || 'You have a new notification.',
       icon: '/icon-192.png',
       badge: '/icon-192.png',

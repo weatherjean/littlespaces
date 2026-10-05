@@ -94,7 +94,19 @@ test('production HTTP login protects data, locks after three failures, and inval
       '/auth/callback?state=forged',
     ])
       assert.equal((await request(path)).status, 401, path);
-    for (const path of ['/icon-192.png', '/icon-512.png', '/icon-180.png', '/manifest.webmanifest'])
+    for (const path of [
+      '/icon-192.png',
+      '/icon-512.png',
+      '/icon-180.png',
+      '/manifest.webmanifest',
+      '/appearance.js',
+      '/icon.svg',
+      '/favicon.ico',
+      '/favicon-16.png',
+      '/favicon-32.png',
+      '/apple-touch-icon.png',
+      '/icon-maskable-512.png',
+    ])
       assert.equal((await request(path)).status, 200);
     const aliasLogin = await fetch(`http://localhost:${port}/login?from=settings`, {
       redirect: 'manual',

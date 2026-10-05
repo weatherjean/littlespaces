@@ -1,13 +1,13 @@
 {
   "id": "/",
-  "name": "Little Spaces",
-  "short_name": "Spaces",
-  "description": "Your personal applet workspace",
+  "name": "LittleSpaces",
+  "short_name": "LittleSpaces",
+  "description": "Small tools. Built around you.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#141b2d",
-  "theme_color": "#141b2d",
+  "background_color": "#141b30",
+  "theme_color": "#141b30",
   "icons": [
     {
       "src": "/icon.svg",
@@ -26,6 +26,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

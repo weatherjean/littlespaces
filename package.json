@@ -21,7 +21,8 @@
     "test:http": "tsx --test tests/http/*.test.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify": "npm run format:check && npm run check && npm test && npm run build && npm run test:http"
+    "verify": "npm run format:check && npm run check && npm test && npm run build && npm run test:http",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "@sveltejs/adapter-node": "^5.2.0",

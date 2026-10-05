@@ -601,21 +601,21 @@
     align-items: center;
     gap: 10px 18px;
     padding: 16px;
-    border-top: 1px solid var(--line);
+    border-top: var(--border-width) solid var(--line);
   }
   .voice-talk {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 14px 22px;
-    border-radius: 28px;
+    border-radius: calc(var(--radius) * 2.333);
     background: var(--accent);
-    color: #152333;
+    color: var(--on-accent);
     font-weight: 600;
   }
   .voice-talk.listening {
-    background: #a83349;
-    color: #fff;
+    background: var(--danger-solid);
+    color: var(--on-danger);
   }
   .voice-controls label {
     display: flex;
@@ -639,13 +639,13 @@
     padding: 8px;
   }
   .composer.recording {
-    border-color: #ed8a9a;
+    border-color: var(--danger);
   }
   .dictation-status {
     display: flex;
     align-items: center;
     gap: 8px;
-    color: #ffb4c0;
+    color: var(--danger);
     font-size: 13px;
   }
   .dictation-status:not(:empty) {
@@ -655,13 +655,13 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #ff8fa3;
+    background: var(--danger-solid);
     animation: recording-pulse 1.2s ease-in-out infinite;
   }
   .icon-button.recording-mic {
-    background: #a83349;
-    color: #fff;
-    box-shadow: 0 0 0 3px #ed8a9a33;
+    background: var(--danger-solid);
+    color: var(--on-danger);
+    box-shadow: var(--shadow);
   }
   @keyframes recording-pulse {
     50% {

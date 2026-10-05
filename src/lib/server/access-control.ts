@@ -5,6 +5,12 @@ import { ownerStore } from './owner';
 
 const publicAssets = new Set([
   '/icon.svg',
+  '/favicon.ico',
+  '/favicon-16.png',
+  '/favicon-32.png',
+  '/apple-touch-icon.png',
+  '/icon-maskable-512.png',
+  '/appearance.js',
   '/icon-192.png',
   '/icon-512.png',
   '/icon-180.png',

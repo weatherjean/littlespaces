@@ -1,18 +1,18 @@
 <script lang="ts">
   import type { ActionData } from './$types';
-  import Icon from '$lib/components/Icon.svelte';
+  import BrandMark from '$lib/components/BrandMark.svelte';
   let { form }: { form: ActionData } = $props();
 </script>
 
 <svelte:head
-  ><title>Sign in · Little Spaces</title><meta
+  ><title>Sign in · LittleSpaces</title><meta
     name="robots"
     content="noindex,nofollow"
   /></svelte:head
 >
 <main class="login-page">
   <section class="login-card" aria-labelledby="login-title">
-    <div class="login-brand"><Icon name="grid" size={22} /><span>little spaces</span></div>
+    <div class="login-brand"><BrandMark size={36} /><span>LittleSpaces</span></div>
     <p class="eyebrow">YOUR PRIVATE WORKSPACE</p>
     <h1 id="login-title">Welcome home.</h1>
     <p class="intro">Sign in to your apps and conversations.</p>
@@ -53,16 +53,17 @@
     width: 100%;
     max-width: 420px;
     padding: 38px;
-    border: 1px solid #ffffff13;
-    border-radius: 24px;
-    background: #171b29aa;
-    box-shadow: 0 24px 80px #0003;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 2);
+    background: var(--panel);
+    box-shadow: var(--modal-shadow);
   }
   .login-brand {
+    --brand-halo: var(--panel);
     display: flex;
     align-items: center;
     gap: 10px;
-    color: #d5cef4;
+    color: var(--ink);
     margin-bottom: 48px;
     font-size: 17px;
   }
@@ -83,15 +84,15 @@
   }
   label {
     font-size: 12px;
-    color: #c7ccdb;
+    color: var(--accent);
     margin: 0 0 9px;
   }
   input {
     width: 100%;
-    background: #0c101c;
-    border: 1px solid #ffffff24;
-    color: #eff0f8;
-    border-radius: 10px;
+    background: var(--bg);
+    border: var(--border-width) solid var(--line);
+    color: var(--ink);
+    border-radius: calc(var(--radius) * 0.833);
     padding: 13px;
     margin-bottom: 20px;
   }
@@ -111,6 +112,7 @@
       padding: 28px 24px;
     }
     .login-brand {
+      --brand-halo: var(--panel);
       margin-bottom: 34px;
     }
   }

@@ -6,7 +6,7 @@
   import { goto } from '$app/navigation';
   import type { PageData } from './$types';
   import { request } from '$lib/client';
-  import Icon from '$lib/components/Icon.svelte';
+  import BrandMark from '$lib/components/BrandMark.svelte';
   let { data }: { data: PageData } = $props();
   let creating = $state(false),
     error = $state('');
@@ -49,16 +49,14 @@
   });
 </script>
 
-<svelte:head><title>Little Spaces</title></svelte:head>
+<svelte:head><title>LittleSpaces</title></svelte:head>
 <main class="launcher">
   {#if data.authError}<p class="error" role="alert">{data.authError}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <section class="launcher-content" aria-label="Your apps">
     <header class="launcher-header">
-      <a class="wordmark" href="/" aria-label="Little Spaces home"
-        ><span class="brand-symbol"><Icon name="grid" size={20} /></span> little spaces<span
-          class="beta-dot"
-        ></span></a
+      <a class="wordmark" href="/" aria-label="LittleSpaces home"
+        ><span class="brand-symbol"><BrandMark /></span> LittleSpaces</a
       >
     </header>
     <div class="launcher-intro">
@@ -68,8 +66,8 @@
     {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
     <div class="app-grid">
       <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat(false, true)}
-        ><span class="app-icon icon-chat"><Icon name="mic" size={36} /></span><span>Voice</span
-        ></button
+        ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">🎙️</span></span
+        ><span>Voice</span></button
       >
       <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat()}
         ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span

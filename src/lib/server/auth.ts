@@ -101,7 +101,7 @@ export function startSignIn() {
     code_challenge: createHash('sha256').update(attempt.verifier).digest('base64url'),
   });
   if (attempt.previous) params.set('id_token_hint', attempt.previous.idToken);
-  else params.set('agent_name_hint', 'Little Spaces');
+  else params.set('agent_name_hint', 'LittleSpaces');
   return { state, url: `${issuer}/api/accounts/authorize?${params}` };
 }
 

@@ -123,7 +123,7 @@
 
 <section class="setting-card">
   <div>
-    <h3>Install Little Spaces</h3>
+    <h3>Install LittleSpaces</h3>
     <p>
       {installed
         ? 'Installed on this device.'

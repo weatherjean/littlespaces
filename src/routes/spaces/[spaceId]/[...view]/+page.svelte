@@ -47,7 +47,7 @@
   }
 </script>
 
-<svelte:head><title>{data.space.name} · Little Spaces</title></svelte:head>
+<svelte:head><title>{data.space.name} · LittleSpaces</title></svelte:head>
 <main class="mounted-app">
   <div class="app-canvas">
     {#if data.applet}{#key `${data.applet.id}:${refresh}`}<AppletFrame
