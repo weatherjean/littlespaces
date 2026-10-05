@@ -67,17 +67,13 @@
 <details class="appearance-settings">
   <summary>
     <span class="appearance-emoji" aria-hidden="true">🎨</span>
-    <span><strong>Appearance</strong><small>Colors, corners, and your own CSS.</small></span>
+    <span><strong>Appearance</strong><small>Custom CSS</small></span>
     <span class="appearance-chevron" aria-hidden="true">⌄</span>
   </summary>
   <div class="appearance-body">
-    <h3>Make LittleSpaces yours.</h3>
-    <p>
-      Orbit is the default, with emoji for your apps. Override the shared styles here to make your
-      own theme. Changes stay in this browser; individual apps keep their own styles.
-    </p>
+    <p>Saved in this browser. App styles stay unchanged.</p>
     <div class="appearance-examples">
-      <label for="appearance-example">Start with an example</label>
+      <label for="appearance-example">Example</label>
       <select id="appearance-example" bind:value={example}>
         <option value="orbit">Orbit · dark</option>
         <option value="patchwork">Patchwork · pink</option>
@@ -87,7 +83,7 @@
         class="secondary-button"
         onclick={() => {
           css = example === 'orbit' ? orbitExample : patchworkExample;
-          message = 'Example loaded into the editor. Preview or save to apply it.';
+          message = 'Example loaded. Preview or save to apply.';
           error = '';
         }}>Load example</button
       >
@@ -107,12 +103,11 @@
     <p id="appearance-help" class="appearance-help">
       Use <code>:root</code> to override <code>--bg</code>, <code>--panel</code>,
       <code>--ink</code>, <code>--accent</code>, <code>--radius</code>,
-      <code>--app-radius</code>, <code>--border-width</code>, or <code>--shadow</code>. Ordinary CSS
-      selectors work too.
+      <code>--app-radius</code>, <code>--border-width</code>, or <code>--shadow</code>.
     </p>
     <div class="appearance-actions">
       <button type="button" class="primary-button" onclick={() => act('save')} disabled={!changed}
-        >Save appearance</button
+        >Save</button
       >
       <button type="button" class="secondary-button" onclick={() => act('preview')}>Preview</button>
       <button
@@ -128,9 +123,8 @@
     <p class="appearance-message" role="status">{message}</p>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <p class="appearance-help">
-      Need a fresh start? Open <a href="/settings?appearance=reset" data-sveltekit-reload
-        >/settings?appearance=reset</a
-      > to clear your custom CSS, even if the controls are hidden.
+      <a href="/settings?appearance=reset" data-sveltekit-reload>Reset custom CSS</a> if the interface
+      becomes unusable.
     </p>
   </div>
 </details>
@@ -176,13 +170,8 @@
     transform: rotate(180deg);
   }
   .appearance-body {
-    padding: 0 22px 22px;
+    padding: 22px;
     border-top: var(--border-width) solid var(--line);
-  }
-  h3 {
-    margin: 22px 0 10px;
-    font-size: 18px;
-    font-weight: 500;
   }
   p {
     font-size: 12px;
@@ -252,7 +241,7 @@
       padding: 18px;
     }
     .appearance-body {
-      padding: 0 18px 18px;
+      padding: 18px;
     }
     .appearance-examples label {
       width: 100%;

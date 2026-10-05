@@ -27,10 +27,8 @@
 <main class="setup-page">
   <section class="setup-card" aria-labelledby="setup-title">
     <div class="setup-brand"><BrandMark size={36} /><span>LittleSpaces</span></div>
-    <p class="eyebrow">YOUR PRIVATE WORKSPACE</p>
     {#if data.canRegister}
-      <h1 id="setup-title">Make yourself at home.</h1>
-      <p class="intro">Create the owner account for this workspace.</p>
+      <h1 id="setup-title">Create account</h1>
       <form method="POST" action="?/register">
         <label for="email">Email</label>
         <input
@@ -41,7 +39,7 @@
           maxlength="254"
           required
         />
-        <p class="field-note">Use the email of the ChatGPT account you’ll connect.</p>
+        <p class="field-note">Use your ChatGPT email.</p>
         <label for="password">Password</label>
         <input
           id="password"
@@ -53,9 +51,7 @@
           required
           aria-describedby="password-help"
         />
-        <p class="field-note" id="password-help">
-          Use a unique passphrase of at least 15 characters.
-        </p>
+        <p class="field-note" id="password-help">At least 15 characters.</p>
         <label for="confirmation">Confirm password</label>
         <input
           id="confirmation"
@@ -67,16 +63,13 @@
           required
         />
         {#if form?.message}<p class="error" role="alert">{form.message}</p>{/if}
-        <button class="primary-button" type="submit">Create owner account</button>
+        <button class="primary-button" type="submit">Create account</button>
       </form>
-      <p class="setup-note">Registration closes after your account is created.</p>
     {:else}
-      <h1 id="setup-title">Setup required.</h1>
-      <p class="intro">
-        Open the private setup link printed in your server terminal to create your owner account.
-      </p>
+      <h1 id="setup-title">Set up LittleSpaces</h1>
+      <p class="intro">Open the setup link from your server terminal.</p>
       <form method="POST" action="?/unlock" bind:this={unlockForm}>
-        <label for="token">Or enter your setup code</label>
+        <label for="token">Setup code</label>
         <input
           id="token"
           name="token"
@@ -87,9 +80,9 @@
           required
         />
         {#if form?.message}<p class="error" role="alert">{form.message}</p>{/if}
-        <button class="primary-button" type="submit">Continue setup</button>
+        <button class="primary-button" type="submit">Continue</button>
       </form>
-      <p class="setup-note">The link expires after 30 minutes. Restart the server for a new one.</p>
+      <p class="setup-note">Link expired? Restart the server for a new one.</p>
     {/if}
   </section>
 </main>

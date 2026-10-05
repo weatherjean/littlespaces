@@ -96,9 +96,7 @@
 
 <section class="setting-card automation-card">
   <h3>Secrets</h3>
-  <p>
-    Keep API keys and tokens encrypted on your server. Chat sees their names and descriptions only.
-  </p>
+  <p>Encrypted on your server. Values are hidden from chat.</p>
   {#if loading}<p role="status">Loading settings…</p>{/if}
   {#if loadError}<p class="error" role="alert">{loadError}</p>
     <button class="secondary-button" onclick={load}>Retry loading settings</button>{/if}
@@ -116,7 +114,6 @@
   <form onsubmit={save}>
     <div class="form-heading">
       <h4>Add a secret</h4>
-      <span>Stored securely</span>
     </div>
     <label
       >Name<input
@@ -155,25 +152,20 @@
       >
     </div>
   </form>
-  <p class="integration-note">
-    Using secrets in applets and external integrations is coming later.
-  </p>
+  <p class="integration-note">App integrations aren’t available yet.</p>
   {#if status}<p class="success" role="status">{status}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>
 <section class="setting-card automation-card">
   <h3>Scheduled checks</h3>
-  <p>
-    Ask an app’s chat to check your data at a specific time and notify you. Checks use your
-    connected ChatGPT account and need the server running.
-  </p>
+  <p>Schedule checks in app chat. Uses ChatGPT; requires the server to stay running.</p>
   {#if scheduleError}<p class="error" role="alert">{scheduleError}</p>{/if}
   {#if scheduleStatus}<p class="success" role="status">{scheduleStatus}</p>{/if}
   {#if loading}<p role="status">Loading scheduled checks…</p>{:else if loadError}<p>
-      Scheduled checks could not be loaded. Use Retry loading settings above.
+      Could not load checks. Retry loading settings above.
     </p>{:else if !schedules.length}<div class="empty-state">
       <strong>No scheduled checks yet</strong>
-      <p>Try “Check my plants every morning at 9.” in your plant app’s chat.</p>
+      <p>Try “Check my plants every morning at 9.”</p>
     </div>{/if}
   {#each schedules as schedule}<div class="saved-row">
       <div>
@@ -227,10 +219,6 @@
     font-size: 13px;
     font-weight: 550;
     color: var(--ink);
-  }
-  .form-heading > span {
-    font-size: 11px;
-    color: var(--muted);
   }
   label {
     display: flex;

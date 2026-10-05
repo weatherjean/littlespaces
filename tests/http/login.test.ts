@@ -126,7 +126,7 @@ test('production HTTP login protects data, locks after three failures, and inval
     assert.equal(aliasPost.status, 403, 'cross-origin writes remain blocked, never redirected');
     const loginPage = await request('/login');
     const html = await loginPage.text();
-    assert.ok(html.includes('Welcome home.'));
+    assert.ok(html.includes('id="login-title"'));
     assert.equal(html.includes('owner@example.com'), false);
     assert.equal(loginPage.headers.has('set-cookie'), false);
     const data = await request('/settings/__data.json');
@@ -471,7 +471,7 @@ test('fresh production install permits token-protected registration once and rot
     assert.equal(home.headers.get('location'), '/setup');
     assert.equal((await request('/api/spaces')).status, 401);
     const generic = await (await request('/setup')).text();
-    assert.ok(generic.includes('Setup required.'));
+    assert.ok(generic.includes('Set up LittleSpaces'));
     assert.equal(generic.includes('name="email"'), false);
     assert.equal(generic.includes(old), false);
     assert.equal(
@@ -486,7 +486,7 @@ test('fresh production install permits token-protected registration once and rot
     assert.ok(oldCookie);
     assert.match(unlocked.headers.getSetCookie().join(';'), /HttpOnly/);
     const form = await request('/setup', { headers: { cookie: oldCookie } });
-    assert.ok((await form.text()).includes('Create owner account'));
+    assert.ok((await form.text()).includes('Create account'));
     assert.equal(
       (
         await post(

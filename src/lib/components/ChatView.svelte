@@ -379,25 +379,25 @@
         <span class="card-icon"><Icon name={voiceMode ? 'mic' : 'spark'} size={28} /></span>
         <h2>
           {voiceMode
-            ? 'Tell me what happened.'
+            ? 'What would you like to do?'
             : launcher
               ? mode === 'build'
                 ? 'What would you like to build?'
                 : 'What’s on your mind?'
               : activeChat.launch?.title ||
-                (applet ? 'What can we do for you?' : 'What would you like to build?')}
+                (applet ? 'How can I help?' : 'What would you like to build?')}
         </h2>
         <p>
           {voiceMode
-            ? '“I just ate a Twix.” I’ll check your apps, suggest relevant changes, and ask you to confirm before saving anything.'
+            ? 'Talk about your apps. Confirm changes before they’re saved.'
             : launcher
               ? mode === 'build'
                 ? 'Describe an app you wish existed.'
-                : 'Ask a question, explore your apps’ data, or connect the dots.'
+                : 'Ask about your apps and data.'
               : activeChat.launch?.welcome ||
                 (applet
-                  ? 'Ask about your data, get something done, or change how this app works.'
-                  : 'Describe your app. We’ll build it here, just for you.')}
+                  ? 'Ask a question or change this app.'
+                  : 'Describe the app you want to make.')}
         </p>
       </div>{/if}
     {#each chat as message}{#if $expertMode && message.toolCalls?.length}<ToolCalls
@@ -481,12 +481,8 @@
             }}
           /> Read replies aloud</label
         >
-        {#if !voiceAvailable}<p>
-            Dictation is unavailable in this browser. Try Chrome or Edge, or use Chat to type.
-          </p>{/if}
-        {#if !speechReady}<p>
-            Local speech needs setup on the server. Text replies still work.
-          </p>{/if}
+        {#if !voiceAvailable}<p>Dictation unavailable. Try Chrome or Edge, or type in Chat.</p>{/if}
+        {#if !speechReady}<p>Speech needs server setup. Text replies are available.</p>{/if}
         {#if speechBusy}<p role="status">Preparing speech…</p>{/if}
         {#if speechURL}<audio
             bind:this={speechAudio}
@@ -505,7 +501,7 @@
             onbusy={(value) => (uploading = value)}
             disabled={busy || uploading || attachments.length >= 4}
           />
-          <p class="photo-note">Photos are sent to ChatGPT when you send your message.</p>
+          <p class="photo-note">Attached photos are sent to ChatGPT.</p>
         </div>{/if}
       <form
         class="composer"
@@ -618,15 +614,6 @@
         </div>
       </form>
     {/if}
-    <p class="composer-note">
-      {voiceMode
-        ? 'Suggestions need your confirmation. Completed actions appear in notifications.'
-        : launcher
-          ? mode === 'build'
-            ? 'Create a new app with a conversation.'
-            : 'Answers with context from your apps.'
-          : 'Connected to this app’s data and actions.'}
-    </p>
   </div>
 </section>
 

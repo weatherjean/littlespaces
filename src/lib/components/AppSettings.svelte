@@ -27,11 +27,8 @@
 </script>
 
 <section class="setting-card app-settings" id="apps">
-  <h3>Your apps</h3>
-  <p>
-    Archive apps to hide them from Home and pause their reminders. Your data and conversations stay
-    saved.
-  </p>
+  <h3>Apps</h3>
+  <p>Archiving hides apps and pauses reminders. Data stays saved.</p>
   {#each active as app (app.id)}
     <div class="app-row">
       <span class="app-symbol" aria-hidden="true">{appEmoji(app.name, app.icon)}</span>

@@ -126,10 +126,9 @@
     <h3>Install LittleSpaces</h3>
     <p>
       {installed
-        ? 'Installed on this device.'
-        : 'Use your browser’s Install option. On iPhone or iPad, choose Share → Add to Home Screen.'}
+        ? 'Installed.'
+        : 'Install from your browser menu. On iOS: Share → Add to Home Screen.'}
     </p>
-    <p>The app needs the server for live data. An offline screen is available when disconnected.</p>
   </div>
   {#if install}<button class="secondary-button" onclick={installApp}>Install app</button>{/if}
   {#if waiting}<button class="secondary-button" onclick={updateApp}>Update and reload</button>{/if}
@@ -137,13 +136,9 @@
 <section class="setting-card">
   <div>
     <h3>Device notifications</h3>
-    <p>
-      Receive reminders even when this app is closed. Your server must remain running. This setting
-      applies to this device; your inbox is always available.
-    </p>
+    <p>Reminders on this device. Requires the server to stay running.</p>
     {#if !supported}<p>
-        Push is unavailable here. Use HTTPS or localhost and a supported browser. On iOS, open the
-        installed app.
+        Unavailable here. Use a supported browser over HTTPS. On iOS, open the installed app.
       </p>{/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </div>

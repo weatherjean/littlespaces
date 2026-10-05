@@ -26,8 +26,7 @@
               launch: {
                 title: 'Create an app',
                 task: 'New app creation from the home launcher. Help the user shape and build a personal app from their own description.',
-                welcome:
-                  'What would you like to make? Describe what you want to track, organize, or get done. We’ll shape it together, and your new app will appear on Home.',
+                welcome: 'Describe what you want to track, organize, or get done.',
               },
             }
           : {}),
@@ -61,8 +60,7 @@
       >
     </header>
     <div class="launcher-intro">
-      <h1>Your apps.</h1>
-      <p>Small tools. Built around you.</p>
+      <h1>Your apps</h1>
     </div>
     {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
     <div class="app-grid">
@@ -93,7 +91,7 @@
       >
     </div>
     {#if data.account?.canUsePlan && !data.spaces.length}<p class="launcher-hint">
-        Choose Add new and describe an app. It will find a home here.
+        Choose Add new to create your first app.
       </p>{/if}
     <Notifications home />
   </section>

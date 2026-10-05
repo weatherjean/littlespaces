@@ -66,29 +66,23 @@
     <Notifications />
   </header>
   <div class="settings-content">
-    <p class="eyebrow">MAKE YOURSELF AT HOME</p>
-    <h2>Your space, your way.</h2>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <section class="setting-card">
       <div class="setting-icon"><Icon name="spark" size={24} /></div>
       <div>
         <h3>ChatGPT</h3>
         <p>
-          {data.account
-            ? `Connected as ${data.account.name}`
-            : 'Connect your account to build and use apps with AI.'}
+          {data.account ? `Connected as ${data.account.name}` : 'Connect to build apps and chat.'}
         </p>
         {#if data.account && !data.account.canUsePlan}<p>Reconnect to grant plan access.</p>{/if}
       </div>
       {#if data.account?.canUsePlan}<button
           class="secondary-button"
           disabled={busy}
-          onclick={signOut}>Disconnect ChatGPT</button
+          onclick={signOut}>Disconnect</button
         >{:else if data.localOAuth}<button class="primary-button" disabled={busy} onclick={signIn}
           >Continue with ChatGPT</button
-        >{:else}<p class="muted">
-          Connect ChatGPT from the server terminal using the self-hosting guide.
-        </p>{/if}
+        >{:else}<p class="muted">For server setup, follow the self-hosting guide.</p>{/if}
     </section>
     <section class="setting-card">
       <div class="setting-icon"><Icon name="mic" size={24} /></div>
@@ -108,10 +102,7 @@
       <div class="setting-icon"><Icon name="code" size={24} /></div>
       <div>
         <h3>Expert mode</h3>
-        <p>
-          Show every tool call in chat, including inputs, results, errors, and timing. New calls are
-          saved with each conversation.
-        </p>
+        <p>Show tool calls and results in chat.</p>
       </div>
       <input
         aria-label="Expert mode"
@@ -129,9 +120,5 @@
       archivedSpaceIds={data.apps.filter((app) => app.archived).map((app) => app.id)}
     />
     <AppearanceSettings />
-    <p class="settings-footnote">
-      Your apps and their data stay on this server. AI requests are sent through your connected
-      ChatGPT account.
-    </p>
   </div>
 </main>

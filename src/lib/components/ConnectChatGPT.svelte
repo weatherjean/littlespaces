@@ -9,16 +9,14 @@
   <div class="connection-copy">
     <h2>{reconnect ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</h2>
     <p>
-      {reconnect
-        ? 'Reconnect with plan access to use chat.'
-        : 'Connect your account to chat with your apps and build new ones.'}
+      {reconnect ? 'Allow plan access to resume.' : 'Build apps and chat with your data.'}
     </p>
   </div>
   <a
     class="primary-button"
     href={`/settings?returnTo=${encodeURIComponent(page.url.pathname + page.url.search)}`}
   >
-    {reconnect ? 'Reconnect ChatGPT' : 'Connect ChatGPT'} <span aria-hidden="true">↗</span>
+    {reconnect ? 'Reconnect' : 'Connect'} <span aria-hidden="true">↗</span>
   </a>
 </section>
 
