@@ -12,12 +12,21 @@ import {
   spaceApplets,
   readPhoto,
   saveToolCall,
+  activeChatTurns,
+  deleteEmptyChats,
 } from '$lib/server/storage';
 import { launcherChatId } from '$lib/server/storage';
 import { generate, models } from '$lib/server/inference';
 import type { RequestHandler } from './$types';
 
 const running = new Set<string>();
+
+export const DELETE: RequestHandler = async (event) => {
+  const input = await body(event);
+  if (typeof input.chatId !== 'string' || !input.chatId)
+    return json({ error: 'Choose a conversation.' }, { status: 400 });
+  return json({ deleted: deleteEmptyChats(input.chatId) > 0 });
+};
 
 export const GET: RequestHandler = ({ url }) => {
   const spaceId = url.searchParams.get('spaceId') || '';
@@ -95,9 +104,17 @@ export const POST: RequestHandler = async (event) => {
     { role: 'user' as const, content: message, ...(photos.length ? { photos } : {}) },
   ];
   const abort = new AbortController();
+  // Model discovery can await network I/O; the empty composer may have been
+  // discarded in another request in the meantime.
+  try {
+    getChat(spaceId, thread);
+  } catch {
+    return json({ error: 'This empty conversation was closed. Open a new chat.' }, { status: 404 });
+  }
   const encoder = new TextEncoder();
   const toolCalls: ToolCall[] = [];
   running.add(spaceId);
+  activeChatTurns.add(thread);
   const stream = new ReadableStream({
     async start(controller) {
       return trace('chat', { spaceId, chatId: thread, appletId: id, model, effort }, async () => {
@@ -129,7 +146,12 @@ export const POST: RequestHandler = async (event) => {
             },
             abort.signal,
             {
-              mode: input.mode === 'build' ? 'build' : 'knowledge',
+              mode:
+                input.mode === 'voice' && isLauncher
+                  ? 'voice'
+                  : input.mode === 'build'
+                    ? 'build'
+                    : 'knowledge',
               spaceId,
               chatId: thread,
               appletId: id,
@@ -158,6 +180,7 @@ export const POST: RequestHandler = async (event) => {
           });
         } finally {
           running.delete(spaceId);
+          activeChatTurns.delete(thread);
           if (!abort.signal.aborted) controller.close();
         }
       });

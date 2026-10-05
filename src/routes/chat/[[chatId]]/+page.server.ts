@@ -1,4 +1,4 @@
-import { error, redirect } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
 import { launcherChat, listChats, pendingTools, messages } from '$lib/server/storage';
 import type { PageServerLoad } from './$types';
 export const load: PageServerLoad = ({ params, depends }) => {
@@ -7,7 +7,7 @@ export const load: PageServerLoad = ({ params, depends }) => {
   const chats = listChats(space.id);
   if (!params.chatId) redirect(307, `/chat/${chats[0].id}`);
   const activeChat = chats.find((chat) => chat.id === params.chatId);
-  if (!activeChat) error(404, 'Chat not found.');
+  if (!activeChat) redirect(307, `/chat/${chats[0].id}`);
   return {
     space,
     chats,

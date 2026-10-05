@@ -4,10 +4,12 @@ import { isHttpError, isRedirect, type Handle, type HandleServerError } from '@s
 import { guard, privateHeaders } from '$lib/server/access-control';
 import { initializeOwnerSetup } from '$lib/server/setup';
 import { logEvent } from '$lib/server/diagnostics';
+import { deleteEmptyChats } from '$lib/server/storage';
 
 export function init() {
   if (!building) {
     initializeOwnerSetup();
+    deleteEmptyChats();
     startScheduler();
   }
 }

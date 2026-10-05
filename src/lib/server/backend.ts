@@ -67,10 +67,18 @@ async function actionsForRevision(id: string, current: Revision): Promise<Action
   return catalog;
 }
 
-export async function callApp(id: string, name: string, input: unknown, readOnlyOnly = false) {
+export async function callApp(
+  id: string,
+  name: string,
+  input: unknown,
+  readOnlyOnly = false,
+  expectedVersion?: number,
+) {
   return trace('action', { appletId: id, action: name }, async () => {
     logEvent('action.input', { input });
     const current = revision(id);
+    if (expectedVersion !== undefined && current.version !== expectedVersion)
+      throw new Error('The app changed since confirmation. Ask for a fresh suggestion.');
     const actions = await actionsForRevision(id, current);
     if (revision(id).version !== current.version)
       throw new Error('The app changed during this action. Please retry.');

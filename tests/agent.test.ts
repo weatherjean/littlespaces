@@ -308,3 +308,57 @@ test('scheduled turns refuse writable backend actions at the current revision', 
     Array.isArray(await tools.execute('invoke', { action: 'listPlants', inputJSON: '{}' })),
   );
 });
+
+test('hosted web search is enabled in every mode and returns persistent citations', async () => {
+  const launcher = storage.launcherChat();
+  const chat = storage.createChat(launcher.id);
+  const marker = 'citeturn0search0';
+  const text = JSON.stringify({ message: `Verified. ${marker}` });
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.ok(body.tools.some((tool: { type: string }) => tool.type === 'web_search'));
+    assert.ok(body.tools.some((tool: { type: string }) => tool.type === 'namespace'));
+    return reply(text, [
+      { type: 'web_search_call', status: 'completed', id: 'search1' },
+      {
+        type: 'message',
+        content: [
+          {
+            type: 'output_text',
+            text,
+            annotations: [
+              {
+                type: 'url_citation',
+                url: 'https://example.com/source',
+                title: 'Official source',
+                start_index: text.indexOf(marker),
+                end_index: text.indexOf(marker) + marker.length,
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  };
+  for (const mode of ['knowledge', 'build', 'scheduled', 'voice'] as const) {
+    const result = await generate(
+      'test-model',
+      [],
+      undefined,
+      () => {},
+      new AbortController().signal,
+      { mode, spaceId: launcher.id, chatId: chat.id },
+    );
+    assert.equal(result.message, 'Verified. [Official source](https://example.com/source)');
+  }
+  const scoped = await generate(
+    'test-model',
+    [],
+    undefined,
+    () => {},
+    new AbortController().signal,
+    { mode: 'knowledge', appletId: app.id, spaceId: app.id },
+  );
+  storage.saveExchange(chat.id, 'Check online', scoped.message);
+  assert.equal(storage.messages(chat.id)[1].content, scoped.message);
+});

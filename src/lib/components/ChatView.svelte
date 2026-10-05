@@ -1,8 +1,11 @@
 <script lang="ts">
   import { expertMode } from '$lib/preferences';
   import ToolCalls from './ToolCalls.svelte';
+  import VoiceActions from './VoiceActions.svelte';
+  import MessageText from './MessageText.svelte';
+  import { speechText } from '$lib/web-citations';
   import { onMount, tick, untrack } from 'svelte';
-  import { beforeNavigate, invalidateAll } from '$app/navigation';
+  import { beforeNavigate, onNavigate, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
   import { request, responseJson } from '$lib/client';
   import { canDictate, dictate } from '$lib/voice';
@@ -19,6 +22,7 @@
     account,
     applet,
     launcher = false,
+    voiceMode = false,
     onupdated = () => {},
   }: {
     space: Space;
@@ -28,6 +32,7 @@
     account: Account | null;
     applet: Applet | null;
     launcher?: boolean;
+    voiceMode?: boolean;
     onupdated?: () => void;
   } = $props();
   let calls = $state<ToolCall[]>(untrack(() => pendingToolCalls));
@@ -79,6 +84,54 @@
     voiceAvailable = $state(false);
   let cancelRequest: AbortController | undefined;
   let stopVoice: (() => void) | undefined;
+  let voiceRefresh = $state(0);
+  let speechURL = $state('');
+  let speechBusy = $state(false);
+  let speechReady = $state(false);
+  let speechAudio = $state<HTMLAudioElement>();
+  let speechRequest: AbortController | undefined;
+  let disposed = false;
+  function stopSpeaking() {
+    speechRequest?.abort();
+    speechRequest = undefined;
+    speechAudio?.pause();
+    if (speechURL) URL.revokeObjectURL(speechURL);
+    speechURL = '';
+    speechBusy = false;
+  }
+  async function speakReply(text: string) {
+    if (!voiceMode || !readReplies || !speechReady || disposed) return;
+    stopSpeaking();
+    const controller = new AbortController();
+    speechRequest = controller;
+    speechBusy = true;
+    try {
+      const response = await fetch('/api/voice/speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: speechText(text).slice(0, 1200) }),
+        signal: controller.signal,
+      });
+      if (!response.ok) await responseJson(response);
+      const blob = await response.blob();
+      if (controller.signal.aborted || disposed) return;
+      speechURL = URL.createObjectURL(blob);
+      await tick();
+      await speechAudio?.play();
+    } catch (e) {
+      if (!controller.signal.aborted && !disposed)
+        error = speechURL
+          ? 'Tap Play to hear the reply.'
+          : e instanceof Error
+            ? e.message
+            : 'Could not read the reply aloud.';
+    } finally {
+      if (speechRequest === controller) {
+        speechBusy = false;
+        speechRequest = undefined;
+      }
+    }
+  }
   let transcript: HTMLDivElement;
   async function scrollChat() {
     await tick();
@@ -90,9 +143,36 @@
       error = 'Wait for the upload or stop the current reply before leaving this chat.';
     }
   });
+  async function discardEmptyChat() {
+    if (chat.length || busy || uploading) return;
+    await fetch('/api/chat', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId: activeChat.id }),
+      keepalive: true,
+    }).catch(() => {});
+  }
+  onNavigate((navigation) => {
+    // Query-only changes keep the current composer open.
+    if (navigation.to?.url.pathname !== navigation.from?.url.pathname)
+      return discardEmptyChat().then(() => () => {
+        void invalidateAll();
+      });
+  });
   onMount(() => {
+    window.addEventListener('pagehide', discardEmptyChat);
+    const restoreChat = (event: PageTransitionEvent) => {
+      if (event.persisted) void invalidateAll();
+    };
+    window.addEventListener('pageshow', restoreChat);
     voiceAvailable = canDictate();
-    readReplies = localStorage.getItem('little-spaces-read-replies') === 'true';
+    readReplies = voiceMode || localStorage.getItem('little-spaces-read-replies') === 'true';
+    if (voiceMode)
+      request('/api/voice/speech')
+        .then((value) => {
+          if (!disposed) speechReady = value.available;
+        })
+        .catch(() => {});
     if (account?.canUsePlan)
       request('/api/models')
         .then((value) => {
@@ -107,6 +187,11 @@
         .catch((e) => (error = e.message));
     void scrollChat();
     return () => {
+      window.removeEventListener('pagehide', discardEmptyChat);
+      window.removeEventListener('pageshow', restoreChat);
+      void discardEmptyChat();
+      disposed = true;
+      stopSpeaking();
       cancelRequest?.abort();
       stopVoice?.();
       window.speechSynthesis?.cancel();
@@ -121,6 +206,7 @@
       !account?.canUsePlan
     )
       return;
+    stopSpeaking();
     const message = draft.trim() || 'What is in this photo?';
     const sentPhotos = [...attachments];
     attachments = [];
@@ -148,7 +234,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          mode,
+          mode: voiceMode ? 'voice' : mode,
           photos: sentPhotos.map((photo) => photo.id),
           model,
           effort,
@@ -196,9 +282,13 @@
               window.dispatchEvent(new Event('notifications-changed'));
               if (launcher && payload.applet) createdApp = payload.applet.id;
               await invalidateAll();
-              if (readReplies && window.speechSynthesis) {
+              voiceRefresh++;
+              if (voiceMode) void speakReply(payload.message);
+              else if (readReplies && window.speechSynthesis) {
                 window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(new SpeechSynthesisUtterance(payload.message));
+                window.speechSynthesis.speak(
+                  new SpeechSynthesisUtterance(speechText(payload.message)),
+                );
               }
               await scrollChat();
             }
@@ -222,6 +312,7 @@
         chat = chat.slice(0, -1);
       }
     } finally {
+      voiceRefresh++;
       busy = false;
       status = '';
       cancelRequest = undefined;
@@ -234,9 +325,14 @@
       return;
     }
     error = '';
+    stopSpeaking();
     try {
       stopVoice = dictate(
-        (text) => (draft = [draft, text].filter(Boolean).join(' ')),
+        (text) => {
+          if (disposed) return;
+          draft = [draft, text].filter(Boolean).join(' ');
+          if (voiceMode) void send();
+        },
         () => (listening = false),
         (message) => {
           error = message;
@@ -253,24 +349,28 @@
 <section class="chat-view" aria-label="Conversation">
   <div class="transcript" bind:this={transcript} aria-live="polite">
     {#if !chat.length}<div class="chat-welcome">
-        <span class="card-icon"><Icon name="spark" size={28} /></span>
+        <span class="card-icon"><Icon name={voiceMode ? 'mic' : 'spark'} size={28} /></span>
         <h2>
-          {launcher
-            ? mode === 'build'
-              ? 'What would you like to build?'
-              : 'What’s on your mind?'
-            : activeChat.launch?.title ||
-              (applet ? 'What can we do for you?' : 'What would you like to build?')}
+          {voiceMode
+            ? 'Tell me what happened.'
+            : launcher
+              ? mode === 'build'
+                ? 'What would you like to build?'
+                : 'What’s on your mind?'
+              : activeChat.launch?.title ||
+                (applet ? 'What can we do for you?' : 'What would you like to build?')}
         </h2>
         <p>
-          {launcher
-            ? mode === 'build'
-              ? 'Describe an app you wish existed.'
-              : 'Ask a question, explore your apps’ data, or connect the dots.'
-            : activeChat.launch?.welcome ||
-              (applet
-                ? 'Ask about your data, get something done, or change how this app works.'
-                : 'Describe your app. We’ll build it here, just for you.')}
+          {voiceMode
+            ? '“I just ate a Twix.” I’ll check your apps, suggest relevant changes, and ask you to confirm before saving anything.'
+            : launcher
+              ? mode === 'build'
+                ? 'Describe an app you wish existed.'
+                : 'Ask a question, explore your apps’ data, or connect the dots.'
+              : activeChat.launch?.welcome ||
+                (applet
+                  ? 'Ask about your data, get something done, or change how this app works.'
+                  : 'Describe your app. We’ll build it here, just for you.')}
         </p>
       </div>{/if}
     {#each chat as message}{#if $expertMode && message.toolCalls?.length}<ToolCalls
@@ -278,7 +378,7 @@
         />{/if}
       <article class:from-user={message.role === 'user'} class="message">
         <span class="message-label">{message.role === 'user' ? 'You' : 'ChatGPT'}</span>
-        <p>{message.content}</p>
+        <p><MessageText text={message.content} /></p>
         {#if message.photos?.length}<div class="message-photos">
             {#each message.photos as photoId}<a
                 href={`/api/spaces/${space.id}/photos/${photoId}`}
@@ -293,6 +393,15 @@
         >Open your new app <Icon name="grid" size={17} /></a
       >{/if}
     {#if busy}<p class="status">{status}</p>{/if}
+    {#if voiceMode}<VoiceActions
+        chatId={activeChat.id}
+        refreshKey={voiceRefresh}
+        disabled={busy || listening}
+        ondone={(text) => {
+          void speakReply(text);
+          void scrollChat();
+        }}
+      />{/if}
   </div>
   {#if activeChat.launch && (!launcher || mode === 'build')}<details class="chat-context">
       <summary>{activeChat.launch.title || 'App task'} · App context</summary>
@@ -317,121 +426,251 @@
         <a href={`/settings?returnTo=${encodeURIComponent(page.url.pathname)}`}>Reconnect ChatGPT</a
         > to grant plan access.
       </p>{/if}
-    {#if photoOptions}<div class="chat-photo-options">
-        <PhotoPicker
-          spaceId={space.id}
-          onpicked={picked}
-          onbusy={(value) => (uploading = value)}
-          disabled={busy || attachments.length >= 4}
-        />
-        <p class="photo-note">Photos are sent to ChatGPT when you send your message.</p>
-      </div>{/if}
-    <form
-      class="composer"
-      onsubmit={(event) => {
-        event.preventDefault();
-        void send();
-      }}
-    >
-      {#if attachments.length}<div class="attachment-tray">
-          {#each attachments as photo}<div class="attachment-tile">
-              <img src={photo.url} alt={photo.name} /><button
-                type="button"
-                aria-label={`Remove ${photo.name}`}
-                onclick={() => (attachments = attachments.filter((item) => item.id !== photo.id))}
-                ><Icon name="close" size={13} /></button
-              >
-            </div>{/each}
-        </div>{/if}
-      {#if uploading}<p class="upload-progress" role="status">Saving photo…</p>{/if}
-      <textarea
-        onpaste={(event) => {
-          const files = Array.from(event.clipboardData?.files || []);
-          if (files.some((file) => file.type.startsWith('image/'))) {
-            event.preventDefault();
-            void attachFiles(files);
-          }
-        }}
-        ondragover={(event) => {
-          if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
-        }}
-        ondrop={(event) => {
-          event.preventDefault();
-          void attachFiles(Array.from(event.dataTransfer?.files || []));
-        }}
-        aria-label="Message"
-        bind:value={draft}
-        placeholder={launcher ? 'What’s on your mind?' : 'Ask your app anything…'}
-        disabled={busy}
-        onkeydown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-            event.preventDefault();
-            void send();
-          }
-        }}></textarea>
-      <div class="composer-controls">
-        <div class="model-controls">
-          <select aria-label="Chat mode" bind:value={mode} disabled={busy}>
-            <option value="knowledge">Knowledge</option><option value="build">Build</option>
-          </select>
-          <select
-            aria-label="Model"
-            bind:value={model}
-            onchange={() => {
-              localStorage.setItem('little-spaces-model', model);
-              effort = 'default';
+    {#if voiceMode}<div class="voice-controls">
+        <button
+          class="voice-talk"
+          class:listening
+          disabled={!busy && (!voiceAvailable || !model || !account?.canUsePlan)}
+          aria-pressed={listening}
+          onclick={() => (busy ? cancelRequest?.abort() : voice())}
+        >
+          <Icon name={busy || listening ? 'stop' : 'mic'} size={26} />
+          {busy ? 'Stop reply' : listening ? 'Listening… tap to finish' : 'Tap to talk'}
+        </button>
+        <label
+          ><input
+            type="checkbox"
+            bind:checked={readReplies}
+            onchange={(event) => {
+              if (!event.currentTarget.checked) stopSpeaking();
             }}
-            disabled={busy || !models.length}
-            >{#if !models.length}<option value="">ChatGPT</option>{/if}{#each models as item}<option
-                value={item.slug}>{item.display_name}</option
-              >{/each}</select
-          ><select
-            class="effort-select"
-            aria-label="Reasoning effort"
-            bind:value={effort}
-            onchange={() => localStorage.setItem(`little-spaces-effort:${model}`, effort)}
-            disabled={busy || !efforts.length}
-            ><option value="default">Effort: Default</option>{#each efforts as level}<option
-                value={level}>Effort: {level}</option
-              >{/each}</select
-          >
+          /> Read replies aloud</label
+        >
+        {#if !voiceAvailable}<p>
+            Dictation is unavailable in this browser. Try Chrome or Edge, or use Chat to type.
+          </p>{/if}
+        {#if !speechReady}<p>
+            Local speech needs setup on the server. Text replies still work.
+          </p>{/if}
+        {#if speechBusy}<p role="status">Preparing speech…</p>{/if}
+        {#if speechURL}<audio
+            bind:this={speechAudio}
+            src={speechURL}
+            controls
+            aria-label="Spoken reply"
+          ></audio>{/if}
+        {#if speechURL || speechBusy}<button class="stop-speech" onclick={stopSpeaking}
+            >Stop audio</button
+          >{/if}
+      </div>{:else}
+      {#if photoOptions}<div class="chat-photo-options">
+          <PhotoPicker
+            spaceId={space.id}
+            onpicked={picked}
+            onbusy={(value) => (uploading = value)}
+            disabled={busy || attachments.length >= 4}
+          />
+          <p class="photo-note">Photos are sent to ChatGPT when you send your message.</p>
+        </div>{/if}
+      <form
+        class="composer"
+        class:recording={listening}
+        onsubmit={(event) => {
+          event.preventDefault();
+          void send();
+        }}
+      >
+        {#if attachments.length}<div class="attachment-tray">
+            {#each attachments as photo}<div class="attachment-tile">
+                <img src={photo.url} alt={photo.name} /><button
+                  type="button"
+                  aria-label={`Remove ${photo.name}`}
+                  onclick={() => (attachments = attachments.filter((item) => item.id !== photo.id))}
+                  ><Icon name="close" size={13} /></button
+                >
+              </div>{/each}
+          </div>{/if}
+        {#if uploading}<p class="upload-progress" role="status">Saving photo…</p>{/if}
+        <div class="dictation-status" role="status" aria-live="polite">
+          {#if listening}
+            <span class="recording-dot" aria-hidden="true"></span>
+            Listening… tap {voiceMode ? 'the talk button' : 'the stop button'} to finish.
+          {/if}
         </div>
-        <div>
-          <button
-            type="button"
-            class="icon-button"
-            aria-label="Attach photos"
-            disabled={busy || uploading || attachments.length >= 4}
-            onclick={() => (photoOptions = !photoOptions)}><Icon name="image" /></button
-          ><button
-            type="button"
-            class="icon-button"
-            class:chosen={listening}
-            aria-label={listening ? 'Stop dictation' : 'Dictate message'}
-            disabled={!voiceAvailable || busy}
-            onclick={voice}><Icon name="mic" /></button
-          >{#if busy}<button
+        <textarea
+          onpaste={(event) => {
+            const files = Array.from(event.clipboardData?.files || []);
+            if (files.some((file) => file.type.startsWith('image/'))) {
+              event.preventDefault();
+              void attachFiles(files);
+            }
+          }}
+          ondragover={(event) => {
+            if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+          }}
+          ondrop={(event) => {
+            event.preventDefault();
+            void attachFiles(Array.from(event.dataTransfer?.files || []));
+          }}
+          aria-label="Message"
+          bind:value={draft}
+          placeholder={launcher ? 'What’s on your mind?' : 'Ask your app anything…'}
+          disabled={busy}
+          onkeydown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}></textarea>
+        <div class="composer-controls">
+          <div class="model-controls">
+            {#if !voiceMode}<select aria-label="Chat mode" bind:value={mode} disabled={busy}>
+                <option value="knowledge">Knowledge</option><option value="build">Build</option>
+              </select>{/if}
+            <select
+              aria-label="Model"
+              bind:value={model}
+              onchange={() => {
+                localStorage.setItem('little-spaces-model', model);
+                effort = 'default';
+              }}
+              disabled={busy || !models.length}
+              >{#if !models.length}<option value="">ChatGPT</option
+                >{/if}{#each models as item}<option value={item.slug}>{item.display_name}</option
+                >{/each}</select
+            ><select
+              class="effort-select"
+              aria-label="Reasoning effort"
+              bind:value={effort}
+              onchange={() => localStorage.setItem(`little-spaces-effort:${model}`, effort)}
+              disabled={busy || !efforts.length}
+              ><option value="default">Effort: Default</option>{#each efforts as level}<option
+                  value={level}>Effort: {level}</option
+                >{/each}</select
+            >
+          </div>
+          <div>
+            <button
               type="button"
-              class="send-button"
-              aria-label="Stop reply"
-              onclick={() => cancelRequest?.abort()}><Icon name="stop" /></button
-            >{:else}<button
-              class="send-button"
-              aria-label="Send message"
-              disabled={uploading ||
-                (!draft.trim() && !attachments.length) ||
-                !model ||
-                !account?.canUsePlan}><Icon name="send" /></button
-            >{/if}
+              class="icon-button"
+              aria-label="Attach photos"
+              disabled={busy || uploading || attachments.length >= 4}
+              onclick={() => (photoOptions = !photoOptions)}><Icon name="image" /></button
+            >{#if !voiceMode}<button
+                type="button"
+                class="icon-button"
+                class:recording-mic={listening}
+                aria-label={listening ? 'Stop dictation' : 'Dictate message'}
+                aria-pressed={listening}
+                disabled={!voiceAvailable || busy}
+                onclick={voice}><Icon name={listening ? 'stop' : 'mic'} /></button
+              >{/if}{#if busy}<button
+                type="button"
+                class="send-button"
+                aria-label="Stop reply"
+                onclick={() => cancelRequest?.abort()}><Icon name="stop" /></button
+              >{:else}<button
+                class="send-button"
+                aria-label="Send message"
+                disabled={uploading ||
+                  (!draft.trim() && !attachments.length) ||
+                  !model ||
+                  !account?.canUsePlan}><Icon name="send" /></button
+              >{/if}
+          </div>
         </div>
-      </div>
-    </form>
+      </form>
+    {/if}
     <p class="composer-note">
-      {launcher
-        ? mode === 'build'
-          ? 'Create a new app with a conversation.'
-          : 'Answers with context from your apps.'
-        : 'Connected to this app’s data and actions.'}
+      {voiceMode
+        ? 'Suggestions need your confirmation. Completed actions appear in notifications.'
+        : launcher
+          ? mode === 'build'
+            ? 'Create a new app with a conversation.'
+            : 'Answers with context from your apps.'
+          : 'Connected to this app’s data and actions.'}
     </p>
   </div>
 </section>
+
+<style>
+  .voice-controls {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 10px 18px;
+    padding: 16px;
+    border-top: 1px solid var(--line);
+  }
+  .voice-talk {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 22px;
+    border-radius: 28px;
+    background: var(--accent);
+    color: #152333;
+    font-weight: 600;
+  }
+  .voice-talk.listening {
+    background: #a83349;
+    color: #fff;
+  }
+  .voice-controls label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .voice-controls p {
+    width: 100%;
+    text-align: center;
+    font-size: 12px;
+    margin: 0;
+    opacity: 0.7;
+  }
+  .voice-controls audio {
+    max-width: 100%;
+    height: 36px;
+  }
+  .stop-speech {
+    font-size: 12px;
+    padding: 8px;
+  }
+  .composer.recording {
+    border-color: #ed8a9a;
+  }
+  .dictation-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #ffb4c0;
+    font-size: 13px;
+  }
+  .dictation-status:not(:empty) {
+    padding: 4px 0 12px;
+  }
+  .recording-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff8fa3;
+    animation: recording-pulse 1.2s ease-in-out infinite;
+  }
+  .icon-button.recording-mic {
+    background: #a83349;
+    color: #fff;
+    box-shadow: 0 0 0 3px #ed8a9a33;
+  }
+  @keyframes recording-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .recording-dot {
+      animation: none;
+    }
+  }
+</style>

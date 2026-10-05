@@ -16,6 +16,7 @@
     "logs": "node scripts/logs.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "setup": "node scripts/setup.mjs",
+    "voice:setup": "node scripts/setup-voice.mjs",
     "owner:reset": "node scripts/setup.mjs --reset",
     "test:http": "tsx --test tests/http/*.test.ts",
     "format": "prettier --write .",

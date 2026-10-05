@@ -145,16 +145,21 @@ test('concurrent renewal rotates credentials exactly once', async () => {
 });
 
 test('ChatGPT connection rejects wrong, missing, or unverified email without saving credentials', async () => {
-  for (const [address, verified] of [
-    ['other@example.com', true],
-    ['test@example.com', false],
-    [undefined, true],
-    ['test@example.com', undefined],
+  for (const [address, verified, message] of [
+    [
+      'other@example.com',
+      true,
+      /belongs to test@example.com.*connected ChatGPT as other@example.com/,
+    ],
+    ['test@example.com', false, /verified email address/],
+    [undefined, true, /did not return an email address/],
+    ['', true, /did not return an email address/],
+    ['test@example.com', undefined, /verified email address/],
   ] as const) {
     email = address;
     emailVerified = verified;
     const a = attempt();
-    await assert.rejects(() => auth.finishSignIn(a.callback, a.state), /not allowed/);
+    await assert.rejects(() => auth.finishSignIn(a.callback, a.state), message);
     assert.equal(auth.account(), null);
   }
   email = 'test@example.com';

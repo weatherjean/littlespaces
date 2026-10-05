@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import MessageText from './MessageText.svelte';
   import { notifications, readNotifications, refreshNotifications } from '$lib/notification-state';
   let { home = false }: { home?: boolean } = $props();
   let dialog: HTMLDialogElement;
@@ -32,13 +33,12 @@
       >
     </header>
     {#if unread.length}<div class="notification-preview">
-        {#each unread.slice(0, 3) as item}<a
-            class="notification-card"
-            href={item.href}
-            onclick={() => void read(item.id)}
-            ><span class="eyebrow">{item.source}</span><strong>{item.title}</strong>
-            <p>{item.body}</p></a
-          >{/each}
+        {#each unread.slice(0, 3) as item}<div class="notification-card">
+            <a href={item.href} onclick={() => void read(item.id)}
+              ><span class="eyebrow">{item.source}</span><strong>{item.title}</strong></a
+            >
+            <p><MessageText text={item.body} /></p>
+          </div>{/each}
       </div>{:else}<p class="notification-empty">
         All clear. Reminders and app updates will appear here.
       </p>{/if}
@@ -81,17 +81,20 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <div class="notification-list">
     {#each $notifications as item}<article class:unread={!item.read}>
-        <a
-          href={item.href}
-          onclick={() => {
-            void read(item.id);
-            dialog.close();
-          }}
-          ><span class="eyebrow">{item.source}</span>
-          <h3>{item.title}</h3>
-          <p>{item.body}</p>
-          <small>{new Date(item.dueAt).toLocaleString()}</small></a
-        >{#if !item.read}<button
+        <div class="notification-copy">
+          <a
+            href={item.href}
+            onclick={() => {
+              void read(item.id);
+              dialog.close();
+            }}
+            ><span class="eyebrow">{item.source}</span>
+            <h3>{item.title}</h3></a
+          >
+          <p><MessageText text={item.body} /></p>
+          <small>{new Date(item.dueAt).toLocaleString()}</small>
+        </div>
+        {#if !item.read}<button
             class="icon-button"
             aria-label={`Mark ${item.title} read`}
             onclick={() => read(item.id)}><Icon name="check" size={17} /></button
@@ -103,3 +106,11 @@
       </div>{/each}
   </div>
 </dialog>
+
+<style>
+  .notification-copy {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+</style>

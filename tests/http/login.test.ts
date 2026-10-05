@@ -74,7 +74,7 @@ test('production HTTP login protects data, locks after three failures, and inval
       ?.split(';')[0] || '';
   try {
     await start();
-    for (const path of ['/', '/settings', '/chat', '/spaces/private/applet']) {
+    for (const path of ['/', '/settings', '/chat', '/voice', '/spaces/private/applet']) {
       const response = await request(path);
       assert.equal(response.status, 303, path);
       assert.equal(response.headers.get('location'), '/login');
@@ -89,6 +89,8 @@ test('production HTTP login protects data, locks after three failures, and inval
       '/api/settings/push',
       '/api/spaces/private/schedules',
       '/api/spaces/private/photos/private',
+      '/api/voice/actions?chatId=private',
+      '/api/voice/speech',
       '/auth/callback?state=forged',
     ])
       assert.equal((await request(path)).status, 401, path);
@@ -152,6 +154,7 @@ test('production HTTP login protects data, locks after three failures, and inval
     assert.equal((await request('/settings', { headers: { cookie: first } })).status, 200);
     const homeHtml = await (await request('/', { headers: { cookie: first } })).text();
     assert.match(homeHtml, /ChatGPT connection required/);
+    assert.ok(homeHtml.indexOf('>Voice</span>') < homeHtml.indexOf('>Chat</span>'));
     const chatRedirect = await request('/chat', { headers: { cookie: first } });
     const disconnectedChat = await (
       await request(chatRedirect.headers.get('location')!, { headers: { cookie: first } })
@@ -162,6 +165,23 @@ test('production HTTP login protects data, locks after three failures, and inval
     assert.ok(!disconnectedChat.includes('Choose conversation:'));
     assert.equal((await request('/api/spaces', { headers: { cookie: first } })).status, 200);
     const headers = { origin, cookie: first, 'content-type': 'application/json' };
+    const voiceRedirect = await request('/voice', { headers });
+    assert.match(voiceRedirect.headers.get('location')!, /^\/voice\//);
+    const speechStatus = await request('/api/voice/speech', { headers });
+    assert.equal((await speechStatus.json()).engine, 'piper');
+    for (const path of ['/api/voice/actions', '/api/voice/speech']) {
+      assert.equal(
+        (
+          await request(path, {
+            method: 'POST',
+            headers: { ...headers, origin: 'https://evil.example' },
+            body: '{}',
+          })
+        ).status,
+        403,
+      );
+      assert.equal((await request(path, { method: 'POST', headers, body: '{}' })).status, 400);
+    }
     const missingSchedule = await request('/api/settings/schedules', {
       method: 'POST',
       headers,
@@ -208,6 +228,42 @@ test('production HTTP login protects data, locks after three failures, and inval
     });
     assert.equal(created.status, 200, await created.clone().text());
     const { applet } = await created.json();
+    const emptyChat = await request(`/api/spaces/${applet.id}/chats`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    const { chat: empty } = await emptyChat.json();
+    const cleanupBody = JSON.stringify({ chatId: empty.id });
+    assert.equal(
+      (
+        await request('/api/chat', {
+          method: 'DELETE',
+          headers: { ...headers, origin: 'https://evil.example' },
+          body: cleanupBody,
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await request('/api/chat', {
+          method: 'DELETE',
+          headers: { origin, 'content-type': 'application/json' },
+          body: cleanupBody,
+        })
+      ).status,
+      401,
+    );
+    assert.deepEqual(
+      await (await request('/api/chat', { method: 'DELETE', headers, body: cleanupBody })).json(),
+      { deleted: true },
+    );
+    assert.deepEqual(
+      await (await request('/api/chat', { method: 'DELETE', headers, body: cleanupBody })).json(),
+      { deleted: false },
+    );
+    assert.equal((await request(`/spaces/${applet.id}/chat/${empty.id}`, { headers })).status, 307);
     const scheduled = await request(`/api/spaces/${applet.id}/schedules`, {
       method: 'POST',
       headers,

@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173** (use that exact address, not `localhost`). On first startup, copy the private setup link from the server terminal and open it to create your owner email and password. The link expires after 30 minutes and registration closes once the owner exists. Visitors without the link see only “Setup required.” After setup, sign in with your owner email and password. Home contains **Chat**, **Settings**, and your app icons. Connect ChatGPT in Settings, then select Build in Chat and describe an app. Knowledge is the default for questions and reading your apps’ data. New apps appear on Home. Opening an app shows its UI directly, with **Home** and **Chat** in the bottom bar. The app's chat opens in a modal: use it to change the app or interact with its data. Each app supports multiple separate conversations.
+Open **http://127.0.0.1:5173** (use that exact address, not `localhost`). On first startup, copy the private setup link from the server terminal and open it to create your owner email and password. The link expires after 30 minutes and registration closes once the owner exists. Visitors without the link see only “Setup required.” After setup, sign in with your owner email and password. Home contains **Voice**, **Chat**, **Settings**, and your app icons. Connect ChatGPT in Settings, then select Build in Chat and describe an app. Knowledge is the default for questions and reading your apps’ data. New apps appear on Home. Opening an app shows its UI directly, with **Home** and **Chat** in the bottom bar. The app's chat opens in a modal: use it to change the app or interact with its data. Each app supports multiple separate conversations.
 
 Settings lets you archive apps and restore them later. Archiving hides an app from Home and Knowledge chat and pauses its reminders and scheduled checks, while preserving its records, photos, and conversations. Restoring resumes its schedules, with missed recurrences coalesced into one check.
 
@@ -43,7 +43,8 @@ Keep the local server running while using the app. Browser installation support 
 - A real SQLite file per applet, persistent records, immutable UI revisions, and code rollback without resetting records.
 - Shared photo uploads and native camera capture where supported, in chat and applets. Chat accepts pasted and dropped images.
 - A plant journal with photo identification, editable care suggestions, and confirmation before saving. Manual tracking works without signing in.
-- Browser dictation where supported, plus optional browser text-to-speech. Dictation may use the browser vendor’s speech service. It does not use the ChatGPT transcription API.
+- Voice uses browser dictation, reads current app context, and proposes changes for explicit confirmation. Confirmed backend actions produce inbox notifications and device push when enabled. Suggestions persist across reloads, expire after 30 minutes, and cannot execute twice. Legacy apps without backend actions remain read-only in Voice.
+- On-demand local Piper speech in Voice, with one process at a time and no speech API charges. Run `npm run voice:setup` first (Python 3.9+ and venv/pip required). Browser dictation may use the browser vendor’s speech service; it does not use the ChatGPT transcription API. Text input remains available in unsupported browsers.
 
 ## Storage and isolation
 
@@ -75,7 +76,7 @@ Database files are real, independent SQLite databases. The prototype deliberatel
 
 First registration uses `dynamic_agent_client` and a stable host ID. The callback’s issued client ID is used for token exchange and retained for subsequent sign-ins. Callback URI: `http://127.0.0.1:5173/auth/callback`. Credentials stay on the local server; the browser only receives account display details and a separate owner-login session cookie. Only the configured owner’s verified email can connect ChatGPT.
 
-The integration follows the official [registration guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [models and inference guide](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Actual account eligibility, consent, and successful inference must be verified with your ChatGPT account. Identity sign-in alone does not grant plan access. There is no fallback to separately billed API usage.
+The integration follows the official [registration guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [models and inference guide](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations). Actual account eligibility, consent, and successful inference must be verified with your ChatGPT account. Identity sign-in alone does not grant plan access. There is no fallback to separately billed API usage. Hosted web search is enabled for Chat, Voice, scoped app chats, and scheduled checks through this same subscription connection, subject to model and account policy. Replies retain clickable source links; spoken replies omit citation URLs.
 
 ## Prototype limits
 

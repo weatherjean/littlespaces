@@ -195,3 +195,54 @@ test('task chats persist scoped references, refresh records, and handle deleted 
   );
   assert.throws(() => storage.getChat(b.id, chat.id), /not found/);
 });
+
+test('empty chat cleanup removes placeholders but preserves history, work, and active turns', () => {
+  const space = storage.createSpace('Empty chat cleanup');
+  const empty = storage.createChat(space.id);
+  assert.equal(storage.deleteEmptyChats(empty.id), 1);
+  assert.equal(storage.deleteEmptyChats(empty.id), 0);
+  const used = storage.createChat(space.id);
+  storage.saveExchange(used.id, 'Keep my question', 'Keep my reply');
+  assert.equal(storage.deleteEmptyChats(used.id), 0);
+  assert.equal(storage.messages(used.id).length, 2);
+  const active = storage.createChat(space.id);
+  storage.activeChatTurns.add(active.id);
+  try {
+    assert.equal(storage.deleteEmptyChats(active.id), 0);
+  } finally {
+    storage.activeChatTurns.delete(active.id);
+  }
+  assert.equal(storage.deleteEmptyChats(active.id), 1);
+  for (const kind of ['tool', 'draft', 'action']) {
+    const chat = storage.createChat(space.id);
+    storage.workspace((db) => {
+      if (kind === 'tool')
+        db.prepare('INSERT INTO chat_tools(id,thread,data) VALUES (?,?,?)').run(
+          chat.id,
+          chat.id,
+          '{}',
+        );
+      if (kind === 'draft')
+        db.prepare('INSERT INTO build_drafts(chat_id,data) VALUES (?,?)').run(chat.id, '{}');
+      if (kind === 'action')
+        db.prepare('INSERT INTO voice_actions(id,chat_id,status,data) VALUES (?,?,?,?)').run(
+          chat.id,
+          chat.id,
+          'pending',
+          '{}',
+        );
+    });
+    assert.equal(storage.deleteEmptyChats(chat.id), 0);
+  }
+});
+
+test('starting a fresh chat does not manufacture an empty First chat', () => {
+  const space = storage.createSpace('Fresh chats');
+  // Older callers may already have materialized the default placeholder.
+  storage.deleteEmptyChats(space.id);
+  const chat = storage.createChat(space.id);
+  assert.deepEqual(
+    storage.listChats(space.id).map((item) => item.id),
+    [chat.id],
+  );
+});

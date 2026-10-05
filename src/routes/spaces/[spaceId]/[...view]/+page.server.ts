@@ -26,7 +26,7 @@ export const load: PageServerLoad = ({ params, depends }) => {
   const match = /^chat\/([^/]+)$/.exec(params.view);
   if (params.view !== 'applet' && !match) error(404, 'Page not found.');
   const activeChat = match ? chats.find((chat) => chat.id === match[1]) : chats[0];
-  if (!activeChat) error(404, 'Chat not found in this app.');
+  if (!activeChat) redirect(307, `/spaces/${space.id}/chat/${chats[0].id}`);
   return {
     space,
     chats,

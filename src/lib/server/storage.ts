@@ -260,6 +260,33 @@ export function spaceApplets(spaceId: string): Applet[] {
   return ids.flatMap((id) => appletInfo(id) ?? []);
 }
 
+// Empty placeholders may exist while a composer is open, but are not history.
+export const activeChatTurns = new Set<string>();
+
+export function deleteEmptyChats(chatId?: string): number {
+  return workspace((db) => {
+    const candidates = db.prepare(`SELECT id FROM chats
+      WHERE (? IS NULL OR id = ?)
+      AND NOT EXISTS (SELECT 1 FROM messages WHERE thread = chats.id)
+      AND NOT EXISTS (SELECT 1 FROM chat_tools WHERE thread = chats.id)
+      AND NOT EXISTS (SELECT 1 FROM build_drafts WHERE chat_id = chats.id)
+      AND NOT EXISTS (SELECT 1 FROM voice_actions WHERE chat_id = chats.id)`);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      let deleted = 0;
+      for (const row of candidates.all(chatId ?? null, chatId ?? null)) {
+        if (!activeChatTurns.has(String(row.id)))
+          deleted += Number(db.prepare('DELETE FROM chats WHERE id=?').run(row.id).changes);
+      }
+      db.exec('COMMIT');
+      return deleted;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  });
+}
+
 export function listChats(spaceId: string): Chat[] {
   getSpace(spaceId);
   return workspace((db) => {
@@ -293,8 +320,20 @@ export function getChat(spaceId: string, chatId: string): Chat {
 }
 
 export function createChat(spaceId: string, launch?: import('../types').ChatLaunch): Chat {
-  // Materialize a legacy thread before adding a second conversation.
-  listChats(spaceId);
+  getSpace(spaceId);
+  // Preserve legacy history without manufacturing an unused "First chat".
+  workspace((db) =>
+    db
+      .prepare(
+        `INSERT INTO chats(id,space_id,title)
+    SELECT ?,?,'First chat' WHERE NOT EXISTS (SELECT 1 FROM chats WHERE space_id=?)
+    AND (EXISTS (SELECT 1 FROM messages WHERE thread=?)
+      OR EXISTS (SELECT 1 FROM chat_tools WHERE thread=?)
+      OR EXISTS (SELECT 1 FROM build_drafts WHERE chat_id=?)
+      OR EXISTS (SELECT 1 FROM voice_actions WHERE chat_id=?))`,
+      )
+      .run(spaceId, spaceId, spaceId, spaceId, spaceId, spaceId, spaceId),
+  );
   const id = randomUUID();
   workspace((db) =>
     db

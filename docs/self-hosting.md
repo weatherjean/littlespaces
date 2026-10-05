@@ -97,3 +97,23 @@ Production builds include install icons, an offline fallback, an update/reload c
 VAPID keys are generated once and stored in the private workspace database. Set `VAPID_SUBJECT=mailto:you@example.com` to provide the push service with your operational contact. Supported push providers are Google's FCM, Mozilla, and Apple's Web Push service. Keep outbound HTTPS available to these providers and to ChatGPT. Push contains notification title, body, and app navigation target, encrypted for the subscribed device. Device subscriptions persist across browser logout and server restarts; disable notifications in Settings before relinquishing a device.
 
 Backups must include `workspace.sqlite` and `secrets.key`, in addition to applet databases and credentials. Secret values are encrypted in the workspace database, with a separate owner-readable key file. A backup without this key cannot recover secrets. Encryption protects a database copy alone, not an attacker who can read the entire server data directory. Never commit or share the data directory or key. The single-process scheduler is unsuitable for multiple replicas sharing the same files.
+
+## Local speech for Voice
+
+Voice appears before Chat on Home. It uses browser/device speech recognition to send text to the existing ChatGPT subscription connection, then uses Piper locally to speak the reply. Browser recognition availability and languages depend on the browser; it may use the browser vendor’s online service. Microphone access requires a secure context (HTTPS or loopback). No audio is sent to OpenAI, and there are no additional speech API charges.
+
+Install Python 3.9 or newer with venv and pip support, then run from the checkout:
+
+```sh
+npm run voice:setup
+```
+
+If `python3` points to an older Python, select one explicitly, for example `PYTHON=/usr/bin/python3 npm run voice:setup`. Setup pins `piper-tts` 1.8.0 in `.tools/piper`, downloads the English `en_US-lessac-medium` voice and its model card to `.tools/piper-voices`, and leaves both directories ignored by Git. Run setup on each server; Python virtual environments are not portable between machines. The current Piper engine is GPL-3.0; consult its bundled license and the downloaded voice model card when redistributing it. Upstream: https://github.com/OHF-Voice/piper1-gpl.
+
+Optional `PIPER_PYTHON` and `PIPER_MODEL` environment variables override the Python executable and ONNX model file. Keep the model’s `.onnx.json` beside it. The selected voice’s language should match your conversations; the bundled default is English.
+
+The Node server starts one CPU-only Piper subprocess per spoken reply. It exits immediately afterward, releasing the model and runtime memory. Concurrent speech requests receive 429 rather than spawning extra model copies. Requests are owner-authenticated, same-origin, limited to 1,200 characters and split into small inference chunks. Generation times out after 30 seconds; cancelled requests terminate the child. Temporary WAV files are removed after reading and are never stored in conversation history.
+
+Budget about 400–500 MB for the active Piper process, in addition to Node and other server tasks. This is a planning budget, not a hard RSS limit. A local Apple Silicon test of Piper 1.8.0 with ONNX Runtime 1.19.2 measured approximately 190 MB peak RSS after model load, 230–270 MB for short replies, and 295–347 MB after a longer reply across Amy low and Lessac medium voices. Actual memory and speed depend on platform, runtime and text. Idle Piper memory is zero because there is no persistent worker. Text replies remain usable when speech is unavailable or browser autoplay requires tapping Play.
+
+Voice can inspect current app records and backend schemas but cannot perform mutations through model tools. The owner must press Confirm on a saved suggestion, which executes the exact stored input. Changed app revisions, archived apps and expired suggestions are rejected. Repeated confirmations do not repeat an action. If a server dies during execution, the suggestion remains marked as started; inspect the app before asking for a new suggestion. Completion and failure notifications use the existing inbox and opted-in Web Push delivery.

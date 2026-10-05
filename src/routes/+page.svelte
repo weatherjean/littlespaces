@@ -10,9 +10,9 @@
   let { data }: { data: PageData } = $props();
   let creating = $state(false),
     error = $state('');
-  async function openChat(build = false) {
+  async function openChat(build = false, voice = false) {
     if (!data.account?.canUsePlan) {
-      await goto('/chat');
+      await goto(voice ? '/voice' : '/chat');
       return;
     }
     if (creating) return;
@@ -31,7 +31,9 @@
             }
           : {}),
       });
-      await goto(`/chat/${chat.id}${build ? '?mode=build' : ''}`, { invalidateAll: true });
+      await goto(`${voice ? '/voice' : '/chat'}/${chat.id}${build ? '?mode=build' : ''}`, {
+        invalidateAll: true,
+      });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not open a new chat.';
     } finally {
@@ -65,6 +67,10 @@
     </div>
     {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
     <div class="app-grid">
+      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat(false, true)}
+        ><span class="app-icon icon-chat"><Icon name="mic" size={36} /></span><span>Voice</span
+        ></button
+      >
       <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat()}
         ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span
         ><span>Chat</span></button

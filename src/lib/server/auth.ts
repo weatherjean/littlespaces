@@ -148,12 +148,17 @@ export async function finishSignIn(query: URLSearchParams, cookieState: string |
   });
   if (payload.nonce !== attempt.nonce || !payload.sub)
     throw new Error('ChatGPT identity validation failed.');
-  if (
-    typeof payload.email !== 'string' ||
-    payload.email_verified !== true ||
-    normalizeEmail(payload.email) !== ownerStore().requireOwner().email
-  )
-    throw new Error('This ChatGPT account is not allowed for this installation.');
+  if (typeof payload.email !== 'string' || !payload.email.trim())
+    throw new Error('ChatGPT did not return an email address. Reconnect and grant email access.');
+  if (payload.email_verified !== true)
+    throw new Error(
+      'ChatGPT did not confirm a verified email address. Verify your account email and reconnect.',
+    );
+  const ownerEmail = ownerStore().requireOwner().email;
+  if (normalizeEmail(payload.email) !== ownerEmail)
+    throw new Error(
+      `This installation belongs to ${ownerEmail}, but you connected ChatGPT as ${normalizeEmail(payload.email)}. Connect the matching ChatGPT account or update the installation owner email.`,
+    );
   if (attempt.previous && payload.sub !== attempt.previous.subject)
     throw new Error('Sign out before choosing a different ChatGPT account.');
   const scopes = (tokens.scope || '').split(' ').filter(Boolean);

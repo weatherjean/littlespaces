@@ -77,7 +77,7 @@ Call `pick` from a user action. It offers file selection and native camera captu
 
 Analysis sends selected images through the connected ChatGPT account using the host's selected model. It requires sign-in and has no separately billed API fallback. Display uncertain identifications honestly, let users edit suggestions, and require confirmation before saving plant details. Backend actions remain isolated from the network; the UI requests analysis and passes confirmed data to a backend action. Scoped chat can also list and inspect saved photos.
 
-GPT speech, arbitrary network access, and package dependencies are not implemented. Background work uses the host’s scheduled read-only agent turns described below. Browser voice remains available where supported.
+GPT speech, arbitrary network access, and package dependencies are not implemented. Background work uses the host’s scheduled read-only agent turns described below. Browser dictation remains available where supported. Home Voice adds local Piper playback and explicit confirmation cards for cross-app backend actions; see the self-hosting guide.
 
 ## App-defined conversations
 

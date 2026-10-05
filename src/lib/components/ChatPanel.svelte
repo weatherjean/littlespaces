@@ -14,6 +14,7 @@
     account,
     applet,
     base,
+    voiceMode = false,
     onupdated = () => {},
   }: {
     space: Space;
@@ -24,6 +25,7 @@
     account: Account | null;
     applet: Applet | null;
     base: string;
+    voiceMode?: boolean;
     onupdated?: () => void;
   } = $props();
   const pickerId = $props.id();
@@ -102,7 +104,8 @@
         {account}
         {applet}
         {onupdated}
-        launcher={base === '/chat'}
+        launcher={base === '/chat' || voiceMode}
+        {voiceMode}
       />{/key}
   </div>
 
