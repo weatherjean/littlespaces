@@ -10,7 +10,7 @@ A plant journal, a reading tracker, that oddly specific tool you've always wante
 
 ## Get started
 
-**[Copy the setup prompt into Codex →](docs/get-started.md)** It will install LittleSpaces on your computer or VPS and guide you through setup.
+**[Set up with the ChatGPT desktop app →](docs/get-started.md)** Copy the prompt and let ChatGPT help you through the steps.
 
 You'll need an eligible ChatGPT account with subscription usage or available credits to build apps and use AI chat. LittleSpaces connects through ChatGPT sign-in; separate API keys aren't currently supported.
 

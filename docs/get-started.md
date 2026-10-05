@@ -1,6 +1,6 @@
-# Set up with Codex
+# Set up with the ChatGPT desktop app
 
-Copy this prompt into Codex on your computer:
+Open the ChatGPT desktop app and paste this prompt:
 
 ```text
 Install and set up LittleSpaces for me:
@@ -26,6 +26,7 @@ the documented local sign-in and protected credential-transfer procedure.
 Verify the running installation, help me create my first app, and give
 me the URL plus brief instructions for restarting, updating, and backups.
 Tell me clearly if any step still needs my action or could not be tested.
+If you don't have the tools or access to perform a step, guide me through it.
 ```
 
-LittleSpaces runs on macOS or Linux. Codex will check Node.js 24+, npm, and Linux's Bubblewrap requirement. AI usage comes from your eligible ChatGPT plan or available credits through [Sign in with ChatGPT](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt).
+LittleSpaces runs on macOS or Linux. ChatGPT can help check Node.js 24+, npm, and Linux's Bubblewrap requirement. AI usage comes from your eligible ChatGPT plan or available credits through [Sign in with ChatGPT](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt).
