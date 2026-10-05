@@ -11,7 +11,7 @@
   import type { Photo } from '$lib/photo-types';
   import Icon from './Icon.svelte';
   import type { Account, Space, Chat, Message, Model, Applet, ToolCall } from '$lib/types';
-  let { space, activeChat, messages, pendingToolCalls = [], account, applet, launcher = false, canBuild = true, onupdated = () => {} }: { space: Space; activeChat: Chat; messages: Message[]; pendingToolCalls?:ToolCall[]; account: Account | null; applet: Applet | null; launcher?: boolean; canBuild?: boolean; onupdated?: () => void } = $props();
+  let { space, activeChat, messages, pendingToolCalls = [], account, applet, launcher = false, onupdated = () => {} }: { space: Space; activeChat: Chat; messages: Message[]; pendingToolCalls?:ToolCall[]; account: Account | null; applet: Applet | null; launcher?: boolean; onupdated?: () => void } = $props();
   let calls=$state<ToolCall[]>(untrack(()=>pendingToolCalls));
   let activeCalls:ToolCall[]=[];
   let attachments=$state<Photo[]>([]), uploading=$state(false), photoOptions=$state(false);
@@ -81,7 +81,7 @@
               chat = [...chat, { role: 'assistant', content: payload.message,toolCalls:activeCalls }];
               calls=calls.filter(item=>!activeCalls.some(active=>active.id===item.id));
               window.dispatchEvent(new Event('notifications-changed'));
-              if ((launcher || !applet) && payload.applet) createdApp = payload.applet.id;
+              if (launcher && payload.applet) createdApp = payload.applet.id;
               await invalidateAll();
               if (readReplies && window.speechSynthesis) { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(payload.message)); }
               await scrollChat();
@@ -107,7 +107,7 @@
 </script>
 <section class="chat-view" aria-label="Conversation">
   <div class="transcript" bind:this={transcript} aria-live="polite">
-    {#if !chat.length}<div class="chat-welcome"><span class="card-icon"><Icon name="spark" size={28} /></span><h2>{activeChat.launch?.title || (launcher ? 'An idea is all you need.' : applet ? 'What can we do for you?' : 'What would you like to build?')}</h2><p>{activeChat.launch?.welcome || (launcher ? 'Ask anything, or describe an app you wish existed.' : applet ? (canBuild ? 'Ask about your data, get something done, or change how this app works.' : 'Ask about this shared app or get something done. App changes are managed by its owner.') : 'Describe your app. We’ll build it here, just for you.')}</p></div>{/if}
+    {#if !chat.length}<div class="chat-welcome"><span class="card-icon"><Icon name="spark" size={28} /></span><h2>{activeChat.launch?.title || (launcher ? 'An idea is all you need.' : applet ? 'What can we do for you?' : 'What would you like to build?')}</h2><p>{activeChat.launch?.welcome || (launcher ? 'Ask anything, or describe an app you wish existed.' : applet ? 'Ask about your data, get something done, or change how this app works.' : 'Describe your app. We’ll build it here, just for you.')}</p></div>{/if}
     {#each chat as message}{#if $expertMode && message.toolCalls?.length}<ToolCalls calls={message.toolCalls}/>{/if}<article class:from-user={message.role === 'user'} class="message"><span class="message-label">{message.role === 'user' ? 'You' : 'ChatGPT'}</span><p>{message.content}</p>{#if message.photos?.length}<div class="message-photos">{#each message.photos as photoId}<a href={`/api/spaces/${space.id}/photos/${photoId}`} target="_blank" rel="noreferrer"><img src={`/api/spaces/${space.id}/photos/${photoId}`} alt="Attachment" /></a>{/each}</div>{/if}</article>{/each}
     {#if $expertMode && calls.length}<ToolCalls {calls}/>{/if}
     {#if createdApp}<a class="created-app-link" href={`/spaces/${createdApp}/applet`}>Open your new app <Icon name="grid" size={17} /></a>{/if}

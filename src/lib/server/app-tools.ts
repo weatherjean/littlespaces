@@ -1,17 +1,16 @@
-import { connectedCatalog } from './connections';
 import { notify, listNotifications, cancelNotification } from './notifications';
 import { appActions, callApp } from './backend';
-import { records, putRecord, removeRecord, listSpaces, launcherChatId, appletSpaceId, listPhotos, readPhoto, workspace } from './storage';
+import { records, putRecord, removeRecord, listSpaces, launcherChatId, appletSpaceId, listPhotos, readPhoto } from './storage';
 import { draftWorkspace } from './drafts';
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required = Object.keys(properties)) {
   return { type: 'function', name, description, parameters: { type: 'object', properties, required, additionalProperties: false }, strict: false };
 }
 const string = { type: 'string' };
-export async function appTools(id?: string, spaceId?: string, chatId?: string, options: { canBuild?: boolean; visibleSpaces?: () => ReturnType<typeof listSpaces> } = {}) {
+export async function appTools(id?: string, spaceId?: string, chatId?: string) {
   const photoOwner = id ? appletSpaceId(id) : spaceId;
   const catalog = id ? await appActions(id) : [];
-  const drafts = options.canBuild !== false && chatId && spaceId ? draftWorkspace(chatId,spaceId,id) : undefined;
+  const drafts = chatId && spaceId ? draftWorkspace(chatId,spaceId,id) : undefined;
   const tools = drafts ? [
     tool('read_draft','Read the persistent draft and its revision. If none exists, returns live app content and revision 0.',{}),
     tool('write_draft','Create or update draft fields. Omitted fields are preserved. Does not change the live app. Use revision 0 for a new draft.',{revision:{type:'integer'},title:string,description:string,source:string,backend:string,chatInstructions:string},['revision']),
@@ -46,11 +45,7 @@ export async function appTools(id?: string, spaceId?: string, chatId?: string, o
         return {id:photo.id,name:photo.name,dataUrl:`data:${photo.mime};base64,${photo.data.toString('base64')}`};
       }
       if (drafts && ['read_draft','write_draft','edit_draft','test_draft','publish_draft'].includes(name)) return drafts.execute(name,input);
-      if (name === 'list_apps') {
-        const local=(options.visibleSpaces ? options.visibleSpaces() : listSpaces()).filter(space => space.id !== launcherChatId && !workspace(db=>db.prepare('SELECT 1 FROM settings WHERE key=?').get(`remote-space:${space.id}`)));
-        const remote=options.visibleSpaces?[]:(await connectedCatalog()).flatMap(server=>server.spaces);
-        return [...local,...remote].map(({id,name,appletCount}) => ({id,name,ready:!!appletCount}));
-      }
+      if (name === 'list_apps') return listSpaces().filter(space => space.id !== launcherChatId).map(({id,name,appletCount}) => ({id,name,ready:!!appletCount}));
       if (!id) throw new Error('Open an app to access its data.');
       if (name === 'describe') return { actions: catalog };
       if (name === 'invoke') {

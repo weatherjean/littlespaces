@@ -1,5 +1,4 @@
 <script lang="ts">
-  import ServerSettings from '$lib/components/ServerSettings.svelte';
   import {expertMode} from '$lib/preferences';
   import Notifications from '$lib/components/Notifications.svelte';
   import { onMount } from 'svelte';
@@ -37,6 +36,5 @@
 <section class="setting-card"><div class="setting-icon"><Icon name="mic" size={24} /></div><div><h3>Read replies aloud</h3><p>Uses your browser’s voice.</p></div><input aria-label="Read replies aloud" type="checkbox" bind:checked={readReplies} onchange={() => localStorage.setItem('little-spaces-read-replies', String(readReplies))} /></section>
 <section class="setting-card"><div class="setting-icon"><Icon name="code" size={24}/></div><div><h3>Expert mode</h3><p>Show every tool call in chat, including inputs, results, errors, and timing. New calls are saved with each conversation.</p></div><input aria-label="Expert mode" type="checkbox" checked={$expertMode} onchange={event=>{expertMode.set(event.currentTarget.checked);localStorage.setItem('little-spaces-expert',String(event.currentTarget.checked));}}/></section>
 <section class="setting-card"><div class="setting-icon"><Icon name="leaf" size={24} /></div><div><h3>Try a little app</h3><p>A plant journal with a tested TypeScript backend.</p></div><button class="secondary-button" disabled={busy} onclick={demo}>Add plant tracker</button></section>
-<ServerSettings servers={data.servers}/>
-<p class="settings-footnote">Local apps stay on this computer; connected apps store data on their server. AI requests use your own connected ChatGPT account.</p>
+<p class="settings-footnote">Your apps and their data stay on this computer. AI requests are sent through your connected ChatGPT account.</p>
 </div></main>

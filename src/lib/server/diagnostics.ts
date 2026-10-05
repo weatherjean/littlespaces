@@ -14,7 +14,6 @@ export function diagnosticValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     const clean = value.replace(/data:image\/[^\s"']+/gi,'[image omitted]')
       .replace(/\bBearer\s+[^\s"']+/gi,'Bearer [redacted]')
-      .replace(/\bls_(?:owner|guest)_[A-Za-z0-9_-]+/g,'[redacted]')
       .replace(/\bsk-[A-Za-z0-9_-]+/g,'[redacted]')
       .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[redacted]');
     // Tool arguments and results are often JSON encoded inside a string.
