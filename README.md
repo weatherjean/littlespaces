@@ -21,3 +21,5 @@ You'll need an eligible ChatGPT account with subscription usage or available cre
 - [Self-hosting and VPS deployment](docs/self-hosting.md) — including remote ChatGPT setup.
 - [Project reference](docs/project-reference.md) — features, limitations, customization, and development.
 - [App backend API](docs/applet-backends.md) · [Diagnostics](docs/diagnostics.md)
+
+[MIT License](LICENSE) © 2026 weatherjean
