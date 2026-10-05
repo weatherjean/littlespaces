@@ -21,16 +21,32 @@
     error = $state(''),
     busy = $state(false),
     status = $state('');
+  let loading = $state(true),
+    loadError = $state(''),
+    scheduleError = $state(''),
+    scheduleStatus = $state('');
+  async function load() {
+    loading = true;
+    loadError = '';
+    try {
+      const [a, b] = await Promise.all([
+        request('/api/settings/secrets'),
+        request('/api/settings/schedules'),
+      ]);
+      secrets = a.secrets;
+      schedules = b.schedules;
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : 'Could not load settings.';
+    } finally {
+      loading = false;
+    }
+  }
   onMount(() => {
-    void Promise.all([request('/api/settings/secrets'), request('/api/settings/schedules')])
-      .then(([a, b]) => {
-        secrets = a.secrets;
-        schedules = b.schedules;
-      })
-      .catch((e) => (error = e.message));
+    void load();
   });
   async function save(event: SubmitEvent) {
     event.preventDefault();
+    if (busy || loading || loadError) return;
     busy = true;
     error = '';
     status = '';
@@ -47,12 +63,14 @@
     }
   }
   async function removeSecret(secret: Secret) {
+    if (busy || loading) return;
     if (!confirm(`Delete ${secret.name}?`)) return;
     busy = true;
-    error = '';
+    error = status = '';
     try {
       secrets = (await request('/api/settings/secrets', { action: 'delete', name: secret.name }))
         .secrets;
+      status = `${secret.name} deleted.`;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not delete.';
     } finally {
@@ -60,14 +78,16 @@
     }
   }
   async function cancel(schedule: Schedule) {
+    if (busy || loading) return;
     busy = true;
-    error = '';
+    scheduleError = scheduleStatus = '';
     try {
       schedules = (
         await request('/api/settings/schedules', { spaceId: schedule.space_id, key: schedule.key })
       ).schedules;
+      scheduleStatus = `${schedule.title} removed.`;
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Could not cancel.';
+      scheduleError = e instanceof Error ? e.message : 'Could not cancel.';
     } finally {
       busy = false;
     }
@@ -79,13 +99,18 @@
   <p>
     Keep API keys and tokens encrypted on your server. Chat sees their names and descriptions only.
   </p>
+  {#if loading}<p role="status">Loading settings…</p>{/if}
+  {#if loadError}<p class="error" role="alert">{loadError}</p>
+    <button class="secondary-button" onclick={load}>Retry loading settings</button>{/if}
   {#each secrets as secret}<div class="saved-row">
       <div>
         <strong>{secret.name}</strong>
         <p>{secret.description || 'No description'} · Value hidden</p>
       </div>
-      <button class="secondary-button" disabled={busy} onclick={() => removeSecret(secret)}
-        >Delete</button
+      <button
+        class="secondary-button"
+        disabled={busy || loading || !!loadError}
+        onclick={() => removeSecret(secret)}>Delete</button
       >
     </div>{/each}
   <form onsubmit={save}>
@@ -95,6 +120,7 @@
     </div>
     <label
       >Name<input
+        disabled={busy || loading || !!loadError}
         required
         pattern={'[A-Z][A-Z0-9_]{0,63}'}
         maxlength="64"
@@ -104,6 +130,7 @@
     >
     <label
       >Description <span class="optional">Optional</span><input
+        disabled={busy || loading || !!loadError}
         maxlength="500"
         placeholder="What this credential is for"
         bind:value={description}
@@ -111,6 +138,7 @@
     >
     <label class="value-field"
       >Secret value<input
+        disabled={busy || loading || !!loadError}
         required
         type="password"
         autocomplete="new-password"
@@ -121,7 +149,10 @@
     >
     <div class="form-footer">
       <p>Use an existing name to replace its value.</p>
-      <button class="primary-button" disabled={busy || !name.trim() || !value}>Save secret</button>
+      <button
+        class="primary-button"
+        disabled={busy || loading || !!loadError || !name.trim() || !value}>Save secret</button
+      >
     </div>
   </form>
   <p class="integration-note">
@@ -136,7 +167,11 @@
     Ask an app’s chat to check your data at a specific time and notify you. Checks use your
     connected ChatGPT account and need the server running.
   </p>
-  {#if !schedules.length}<div class="empty-state">
+  {#if scheduleError}<p class="error" role="alert">{scheduleError}</p>{/if}
+  {#if scheduleStatus}<p class="success" role="status">{scheduleStatus}</p>{/if}
+  {#if loading}<p role="status">Loading scheduled checks…</p>{:else if loadError}<p>
+      Scheduled checks could not be loaded. Use Retry loading settings above.
+    </p>{:else if !schedules.length}<div class="empty-state">
       <strong>No scheduled checks yet</strong>
       <p>Try “Check my plants every morning at 9.” in your plant app’s chat.</p>
     </div>{/if}
@@ -153,8 +188,10 @@
         </p>
         {#if schedule.last_error}<p class="error">{schedule.last_error}</p>{/if}
       </div>
-      <button class="secondary-button" disabled={busy} onclick={() => cancel(schedule)}
-        >Remove</button
+      <button
+        class="secondary-button"
+        disabled={busy || loading || !!loadError}
+        onclick={() => cancel(schedule)}>Remove</button
       >
     </div>{/each}
 </section>
@@ -236,8 +273,9 @@
     border-color: var(--line);
   }
   input:focus-visible {
-    outline: none;
-    border-color: var(--line);
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-color: var(--accent);
     box-shadow: var(--shadow);
   }
   .form-footer {

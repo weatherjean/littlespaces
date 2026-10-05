@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readBrowserValue, writeBrowserValue } from '$lib/browser-storage';
   import { expertMode } from '$lib/preferences';
   import ToolCalls from './ToolCalls.svelte';
   import VoiceActions from './VoiceActions.svelte';
@@ -24,6 +25,7 @@
     launcher = false,
     voiceMode = false,
     onupdated = () => {},
+    onbusy = (_value: boolean) => {},
   }: {
     space: Space;
     activeChat: Chat;
@@ -34,6 +36,7 @@
     launcher?: boolean;
     voiceMode?: boolean;
     onupdated?: () => void;
+    onbusy?: (value: boolean) => void;
   } = $props();
   let calls = $state<ToolCall[]>(untrack(() => pendingToolCalls));
   let activeCalls: ToolCall[] = [];
@@ -68,6 +71,34 @@
     status = $state(''),
     model = $state('');
   let models = $state<Model[]>([]);
+  let modelsLoading = $state(false),
+    modelError = $state('');
+  async function loadModels() {
+    if (modelsLoading) return;
+    modelsLoading = true;
+    modelError = '';
+    try {
+      const value = await request('/api/models');
+      if (disposed) return;
+      models = value.models;
+      const savedModel = readBrowserValue('little-spaces-model');
+      model = models.some((item) => item.slug === savedModel) ? savedModel! : models[0]?.slug || '';
+      restoreEffort();
+      if (!model)
+        modelError = 'No models are available. Try again or reconnect ChatGPT in Settings.';
+    } catch (e) {
+      if (!disposed) modelError = e instanceof Error ? e.message : 'Could not load models.';
+    } finally {
+      modelsLoading = false;
+    }
+  }
+  function restoreEffort() {
+    const saved = readBrowserValue(`little-spaces-effort:${model}`);
+    effort =
+      saved && models.find((item) => item.slug === model)?.efforts?.includes(saved)
+        ? saved
+        : 'default';
+  }
   let effort = $state('default');
   let mode = $state<'knowledge' | 'build'>(
     untrack(() =>
@@ -82,6 +113,7 @@
     listening = $state(false),
     readReplies = $state(false),
     voiceAvailable = $state(false);
+  $effect(() => onbusy(busy || uploading || listening));
   let cancelRequest: AbortController | undefined;
   let stopVoice: (() => void) | undefined;
   let voiceRefresh = $state(0);
@@ -92,6 +124,7 @@
   let speechRequest: AbortController | undefined;
   let disposed = false;
   function stopSpeaking() {
+    window.speechSynthesis?.cancel();
     speechRequest?.abort();
     speechRequest = undefined;
     speechAudio?.pause();
@@ -135,12 +168,17 @@
   let transcript: HTMLDivElement;
   async function scrollChat() {
     await tick();
-    transcript?.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' });
+    transcript?.scrollTo({
+      top: transcript.scrollHeight,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'instant'
+        : 'smooth',
+    });
   }
   beforeNavigate((navigation) => {
-    if (busy || uploading) {
+    if (busy || uploading || listening) {
       navigation.cancel();
-      error = 'Wait for the upload or stop the current reply before leaving this chat.';
+      error = 'Finish dictation, wait for the upload, or stop the reply before leaving this chat.';
     }
   });
   async function discardEmptyChat() {
@@ -166,25 +204,14 @@
     };
     window.addEventListener('pageshow', restoreChat);
     voiceAvailable = canDictate();
-    readReplies = voiceMode || localStorage.getItem('little-spaces-read-replies') === 'true';
+    readReplies = voiceMode || readBrowserValue('little-spaces-read-replies') === 'true';
     if (voiceMode)
       request('/api/voice/speech')
         .then((value) => {
           if (!disposed) speechReady = value.available;
         })
         .catch(() => {});
-    if (account?.canUsePlan)
-      request('/api/models')
-        .then((value) => {
-          models = value.models;
-          model = models.some((item) => item.slug === localStorage.getItem('little-spaces-model'))
-            ? localStorage.getItem('little-spaces-model')!
-            : models[0]?.slug || '';
-          effort = localStorage.getItem(`little-spaces-effort:${model}`) || 'default';
-          if (!models.find((item) => item.slug === model)?.efforts?.includes(effort))
-            effort = 'default';
-        })
-        .catch((e) => (error = e.message));
+    if (account?.canUsePlan) void loadModels();
     void scrollChat();
     return () => {
       window.removeEventListener('pagehide', discardEmptyChat);
@@ -418,12 +445,20 @@
     </details>{/if}
   <div class="composer-area">
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if modelsLoading}<p class="status" role="status">Loading models…</p>{/if}
+    {#if modelError}<div role="alert">
+        <p class="error">{modelError}</p>
+        <button type="button" class="secondary-button" disabled={modelsLoading} onclick={loadModels}
+          >Retry loading models</button
+        >
+      </div>{/if}
     {#if !account}<p class="connection-note">
-        <a href={`/settings?returnTo=${encodeURIComponent(page.url.pathname)}`}
+        <a href={`/settings?returnTo=${encodeURIComponent(page.url.pathname + page.url.search)}`}
           >Connect ChatGPT <span aria-hidden="true">↗</span></a
         > to start chatting.
       </p>{:else if !account.canUsePlan}<p class="connection-note">
-        <a href={`/settings?returnTo=${encodeURIComponent(page.url.pathname)}`}>Reconnect ChatGPT</a
+        <a href={`/settings?returnTo=${encodeURIComponent(page.url.pathname + page.url.search)}`}
+          >Reconnect ChatGPT</a
         > to grant plan access.
       </p>{/if}
     {#if voiceMode}<div class="voice-controls">
@@ -468,7 +503,7 @@
             spaceId={space.id}
             onpicked={picked}
             onbusy={(value) => (uploading = value)}
-            disabled={busy || attachments.length >= 4}
+            disabled={busy || uploading || attachments.length >= 4}
           />
           <p class="photo-note">Photos are sent to ChatGPT when you send your message.</p>
         </div>{/if}
@@ -530,9 +565,10 @@
             <select
               aria-label="Model"
               bind:value={model}
-              onchange={() => {
-                localStorage.setItem('little-spaces-model', model);
-                effort = 'default';
+              onchange={(event) => {
+                model = event.currentTarget.value;
+                writeBrowserValue('little-spaces-model', model);
+                restoreEffort();
               }}
               disabled={busy || !models.length}
               >{#if !models.length}<option value="">ChatGPT</option
@@ -542,7 +578,8 @@
               class="effort-select"
               aria-label="Reasoning effort"
               bind:value={effort}
-              onchange={() => localStorage.setItem(`little-spaces-effort:${model}`, effort)}
+              onchange={(event) =>
+                writeBrowserValue(`little-spaces-effort:${model}`, event.currentTarget.value)}
               disabled={busy || !efforts.length}
               ><option value="default">Effort: Default</option>{#each efforts as level}<option
                   value={level}>Effort: {level}</option

@@ -14,7 +14,10 @@
         : 'Connect your account to chat with your apps and build new ones.'}
     </p>
   </div>
-  <a class="primary-button" href={`/settings?returnTo=${encodeURIComponent(page.url.pathname)}`}>
+  <a
+    class="primary-button"
+    href={`/settings?returnTo=${encodeURIComponent(page.url.pathname + page.url.search)}`}
+  >
     {reconnect ? 'Reconnect ChatGPT' : 'Connect ChatGPT'} <span aria-hidden="true">↗</span>
   </a>
 </section>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readBrowserValue } from '$lib/browser-storage';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { request as hostRequest, responseJson } from '$lib/client';
@@ -174,7 +175,7 @@
                     photoIds: request.params?.photoIds,
                     prompt: request.params?.prompt,
                     format: request.params?.format || 'text',
-                    model: localStorage.getItem('little-spaces-model') || undefined,
+                    model: readBrowserValue('little-spaces-model') || undefined,
                   }),
                 }
               : {},

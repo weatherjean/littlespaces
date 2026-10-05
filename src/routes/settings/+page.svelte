@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readBrowserValue, writeBrowserValue } from '$lib/browser-storage';
   import AppearanceSettings from '$lib/components/AppearanceSettings.svelte';
   import AppSettings from '$lib/components/AppSettings.svelte';
   import DeviceSettings from '$lib/components/DeviceSettings.svelte';
@@ -15,14 +16,20 @@
   let busy = $state(false),
     error = $state(''),
     readReplies = $state(false);
-  onMount(() => (readReplies = localStorage.getItem('little-spaces-read-replies') === 'true'));
+  onMount(() => (readReplies = readBrowserValue('little-spaces-read-replies') === 'true'));
+  function savePreference(key: string, value: boolean) {
+    error = writeBrowserValue(key, String(value))
+      ? ''
+      : 'Browser storage is unavailable. This preference could not be saved.';
+  }
   async function signIn() {
     busy = true;
     error = '';
     try {
-      sessionStorage.setItem(
+      writeBrowserValue(
         'little-spaces-return',
         page.url.searchParams.get('returnTo') || '/chat',
+        'session',
       );
       const value = await request('/auth/start', {});
       window.location.assign(value.url);
@@ -33,6 +40,7 @@
   }
   async function signOut() {
     busy = true;
+    error = '';
     try {
       const response = await fetch('/auth/logout', {
         method: 'POST',
@@ -92,7 +100,8 @@
         aria-label="Read replies aloud"
         type="checkbox"
         bind:checked={readReplies}
-        onchange={() => localStorage.setItem('little-spaces-read-replies', String(readReplies))}
+        onchange={(event) =>
+          savePreference('little-spaces-read-replies', event.currentTarget.checked)}
       />
     </section>
     <section class="setting-card">
@@ -110,7 +119,7 @@
         checked={$expertMode}
         onchange={(event) => {
           expertMode.set(event.currentTarget.checked);
-          localStorage.setItem('little-spaces-expert', String(event.currentTarget.checked));
+          savePreference('little-spaces-expert', event.currentTarget.checked);
         }}
       />
     </section>

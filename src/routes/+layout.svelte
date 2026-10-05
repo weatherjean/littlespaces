@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readBrowserValue } from '$lib/browser-storage';
   import { onMount } from 'svelte';
   import { APPEARANCE_KEY, applyAppearance, readAppearance } from '$lib/appearance';
   import { page } from '$app/state';
@@ -17,7 +18,7 @@
       if (event.key === APPEARANCE_KEY || event.key === null) applyAppearance(readAppearance());
     };
     window.addEventListener('storage', syncAppearance);
-    expertMode.set(localStorage.getItem('little-spaces-expert') === 'true');
+    expertMode.set(readBrowserValue('little-spaces-expert') === 'true');
     const refresh = () => {
       if (page.data.owner) void refreshNotifications().catch(() => {});
       else notifications.set([]);

@@ -359,7 +359,7 @@ button:hover:not(:disabled) {
   box-shadow: var(--shadow);
 }
 .composer:focus-within {
-  border-color: var(--line);
+  border-color: var(--accent);
 }
 .composer textarea {
   border: 0;
@@ -908,7 +908,7 @@ button:hover:not(:disabled) {
   flex-shrink: 0;
 }
 .picker-search:focus-within {
-  border-color: var(--line);
+  border-color: var(--accent);
 }
 .picker-search input {
   width: 100%;
@@ -1159,4 +1159,20 @@ button:hover:not(:disabled) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+}
+
+/* Visible keyboard focus also works with the custom appearance palette. */
+:is(button, a, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

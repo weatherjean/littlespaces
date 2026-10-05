@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readBrowserValue, writeBrowserValue, chatReturnPath } from '$lib/browser-storage';
   import ConnectChatGPT from '$lib/components/ConnectChatGPT.svelte';
   import { appEmoji } from '$lib/app-emoji';
   import Notifications from '$lib/components/Notifications.svelte';
@@ -41,10 +42,10 @@
     }
   }
   onMount(() => {
-    const returnTo = sessionStorage.getItem('little-spaces-return');
-    if (data.account && returnTo) {
-      sessionStorage.removeItem('little-spaces-return');
-      if (returnTo.startsWith('/spaces/') || returnTo.startsWith('/chat')) void goto(returnTo);
+    const returnTo = chatReturnPath(readBrowserValue('little-spaces-return', 'session'));
+    if (data.account?.canUsePlan && !data.authError && returnTo) {
+      writeBrowserValue('little-spaces-return', null, 'session');
+      void goto(returnTo);
     }
   });
 </script>

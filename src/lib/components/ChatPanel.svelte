@@ -38,6 +38,7 @@
       chat.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
     ),
   );
+  let chatBusy = $state(false);
   let busy = $state(false),
     error = $state('');
   function openPicker() {
@@ -51,6 +52,7 @@
     trigger?.focus();
   }
   async function selectChat(id: string) {
+    if (busy || chatBusy) return;
     closePicker();
     error = '';
     if (id === activeChat.id) return;
@@ -62,6 +64,7 @@
   }
 
   async function newChat() {
+    if (busy || chatBusy) return;
     busy = true;
     error = '';
     try {
@@ -86,13 +89,17 @@
         bind:this={trigger}
         aria-label={`Choose conversation: ${activeChat.title}`}
         aria-haspopup="dialog"
+        disabled={busy || chatBusy}
         onclick={openPicker}
         ><Icon name="chat" size={16} /><span>{activeChat.title}</span><Icon
           name="chevron"
           size={15}
         /></button
-      ><button class="icon-button" aria-label="New chat" disabled={busy} onclick={newChat}
-        ><Icon name="plus" size={18} /></button
+      ><button
+        class="icon-button"
+        aria-label="New chat"
+        disabled={busy || chatBusy}
+        onclick={newChat}><Icon name="plus" size={18} /></button
       >
     </div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -104,6 +111,7 @@
         {account}
         {applet}
         {onupdated}
+        onbusy={(value) => (chatBusy = value)}
         launcher={base === '/chat' || voiceMode}
         {voiceMode}
       />{/key}
@@ -151,7 +159,7 @@
         }}
       />
     </div>
-    <button class="picker-new" disabled={busy} onclick={newChat}
+    <button class="picker-new" disabled={busy || chatBusy} onclick={newChat}
       ><Icon name="plus" size={19} />{busy ? 'Creating chat…' : 'New chat'}<span>Start fresh</span
       ></button
     >
@@ -164,6 +172,7 @@
           class="picker-chat"
           class:current={chat.id === activeChat.id}
           aria-current={chat.id === activeChat.id ? 'true' : undefined}
+          disabled={busy || chatBusy}
           onclick={() => selectChat(chat.id)}
           ><span class="picker-chat-icon"><Icon name="chat" size={18} /></span><span
             class="picker-chat-copy"

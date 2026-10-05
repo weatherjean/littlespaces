@@ -20,7 +20,7 @@
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
-    if (!file) return;
+    if (!file || busy || disabled) return;
     busy = true;
     onbusy(true);
     error = '';
