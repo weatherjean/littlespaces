@@ -113,20 +113,6 @@ button:hover:not(:disabled) {
   align-self: start;
   margin: 9px 0 0 -5px;
 }
-.local-indicator {
-  font-size: 11px;
-  color: #747b8a;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.local-indicator > span {
-  height: 5px;
-  width: 5px;
-  border-radius: 50%;
-  background: #87b9a8;
-  box-shadow: 0 0 10px #75ad9570;
-}
 .launcher-content {
   flex: 1;
   width: 100%;
@@ -242,19 +228,6 @@ button:hover:not(:disabled) {
   color: #646d80;
   font-size: 12px;
 }
-.launcher-footer {
-  color: #555e70;
-  font-size: 10px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding-bottom: 5px;
-}
-.orbit-line {
-  width: 25px;
-  height: 1px;
-  background: #566078;
-}
 .primary-button,
 .secondary-button {
   display: inline-flex;
@@ -332,16 +305,6 @@ button:hover:not(:disabled) {
   border-bottom: 1px solid #ffffff06;
   flex-shrink: 0;
 }
-.conversation-switcher select {
-  appearance: auto;
-  background: transparent;
-  border: 0;
-  color: #8993aa;
-  font-size: 12px;
-  max-width: 80%;
-  padding: 6px 0;
-}
-.conversation-switcher option,
 .model-controls option {
   background: #1b2031;
   color: #dddfea;
@@ -756,9 +719,6 @@ button:hover:not(:disabled) {
   .launcher {
     padding: 25px 22px;
   }
-  .local-indicator {
-    display: none;
-  }
   .launcher-content {
     padding: 75px 0 55px;
   }
@@ -790,9 +750,6 @@ button:hover:not(:disabled) {
   }
   .app-tile small {
     display: none;
-  }
-  .launcher-footer {
-    font-size: 9px;
   }
   .builtin-app,
   .settings-page {

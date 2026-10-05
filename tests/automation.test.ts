@@ -11,7 +11,7 @@ const storage = await import('../src/lib/server/storage');
 const secrets = await import('../src/lib/server/secrets');
 const schedules = await import('../src/lib/server/schedules');
 const { appTools } = await import('../src/lib/server/app-tools');
-const { runSchedule } = await import('../src/lib/server/scheduler');
+const { runSchedule, schedulerTick } = await import('../src/lib/server/scheduler');
 const { listNotifications } = await import('../src/lib/server/notifications');
 const push = await import('../src/lib/server/push');
 const webpush = (await import('web-push')).default;
@@ -307,4 +307,140 @@ test('archiving hides an app, preserves data and conversations, and pauses remin
   assert.equal(calls, 1);
   assert.throws(() => storage.setSpaceArchived(storage.launcherChatId, true), /cannot be archived/);
   assert.throws(() => storage.setSpaceArchived('not-an-app', true), /not found/);
+});
+
+test('schedule edits invalidate queued snapshots and old completion cannot overwrite a replacement', async () => {
+  const target = storage.createSpace('Schedule edits');
+  const input = {
+    key: 'edited',
+    title: 'Check',
+    prompt: 'Original prompt',
+    model: 'test',
+    timezone: 'UTC',
+    dueAt: '2099-01-01T00:00:00Z',
+  };
+  const original = schedules.saveSchedule(target.id, input);
+  const updated = schedules.saveSchedule(target.id, { ...input, prompt: 'Replacement prompt' });
+  let calls = 0;
+  const now = new Date('2099-01-01T00:00:01Z');
+  await runSchedule(original, now, async () => {
+    calls++;
+    return { message: 'Stale', published: undefined };
+  });
+  assert.equal(calls, 0);
+  await runSchedule(updated, now, async (_model, history) => {
+    assert.match(history[0].content, /Replacement prompt/);
+    schedules.saveSchedule(target.id, { ...input, prompt: 'Third prompt' });
+    throw Error('Old execution failed');
+  });
+  const current = schedules.listSchedules(target.id)[0];
+  assert.equal(current.prompt, 'Third prompt');
+  assert.equal(current.enabled, 1);
+  assert.equal(current.last_error, null);
+});
+
+test('a full inbox records schedule failure and does not prevent another due job from running', async () => {
+  const full = storage.createSpace('Full inbox');
+  const healthy = storage.createSpace('Healthy inbox');
+  storage.workspace((db) => {
+    const insert = db.prepare(
+      'INSERT INTO notifications(id,space_id,key,title,body,due_at) VALUES(?,?,?,?,?,?)',
+    );
+    for (let i = 0; i < 500; i++)
+      insert.run(`full-${i}`, full.id, String(i), 'Full', '', '2000-01-01T00:00:00Z');
+  });
+  for (const target of [full, healthy])
+    schedules.saveSchedule(target.id, {
+      key: 'check',
+      title: 'Check',
+      prompt: 'Check',
+      model: 'test',
+      timezone: 'UTC',
+      dueAt: '2099-01-01T00:00:00Z',
+    });
+  storage.workspace((db) =>
+    db
+      .prepare('UPDATE schedules SET next_run=? WHERE space_id IN (?,?)')
+      .run('2000-01-01T00:00:00.000Z', full.id, healthy.id),
+  );
+  const called: string[] = [];
+  await schedulerTick(async (_model, _history, _source, _delta, _signal, options) => {
+    called.push(options!.spaceId!);
+    return { message: 'Completed', published: undefined };
+  });
+  assert.deepEqual(called, [healthy.id]);
+  assert.match(schedules.listSchedules(full.id)[0].last_error!, /notification capacity/);
+  assert.equal(listNotifications(healthy.id)[0].body, 'Completed');
+});
+
+test('cancelling notifications or disabling devices during delivery leaves no orphan receipts', async () => {
+  const { notify, cancelNotification, markNotificationsRead } =
+    await import('../src/lib/server/notifications');
+  markNotificationsRead();
+  const target = storage.createSpace('Delivery races');
+  const subscription = {
+    endpoint: 'https://fcm.googleapis.com/fcm/send/race-device',
+    keys: { p256dh: 'A'.repeat(87), auth: 'A'.repeat(22) },
+  };
+  const original = webpush.sendNotification;
+  try {
+    for (const operation of ['notification', 'subscription']) {
+      push.subscribePush(subscription);
+      const notification = notify(target.id, { key: operation, title: 'Check', body: 'Reminder' });
+      let sends = 0;
+      webpush.sendNotification = async (_subscription, payload) => {
+        assert.equal(JSON.parse(String(payload)).id, notification.id);
+        sends++;
+        if (operation === 'notification') cancelNotification(target.id, operation);
+        else push.unsubscribePush(subscription.endpoint);
+        return { statusCode: 201, body: '', headers: {} };
+      };
+      await push.deliverPush();
+      assert.equal(sends, 1);
+      assert.equal(
+        storage.workspace(
+          (db) =>
+            db
+              .prepare('SELECT COUNT(*) AS n FROM push_deliveries WHERE notification_id=?')
+              .get(notification.id)!.n,
+        ),
+        0,
+      );
+      cancelNotification(target.id, operation);
+    }
+  } finally {
+    webpush.sendNotification = original;
+    push.unsubscribePush(subscription.endpoint);
+  }
+});
+
+test('push stops a queued batch when its device is disabled or its app is archived', async () => {
+  const { notify, markNotificationsRead } = await import('../src/lib/server/notifications');
+  markNotificationsRead();
+  const original = webpush.sendNotification;
+  const subscription = {
+    endpoint: 'https://fcm.googleapis.com/fcm/send/stopped-batch',
+    keys: { p256dh: 'A'.repeat(87), auth: 'A'.repeat(22) },
+  };
+  try {
+    for (const operation of ['disable', 'archive']) {
+      const target = storage.createSpace('Stopped delivery');
+      push.subscribePush(subscription);
+      for (let i = 0; i < 3; i++)
+        notify(target.id, { key: String(i), title: 'Check', body: 'Pending' });
+      let sends = 0;
+      webpush.sendNotification = async () => {
+        sends++;
+        if (operation === 'disable') push.unsubscribePush(subscription.endpoint);
+        else storage.setSpaceArchived(target.id, true);
+        return { statusCode: 201, body: '', headers: {} };
+      };
+      await push.deliverPush();
+      assert.equal(sends, 1);
+      markNotificationsRead();
+    }
+  } finally {
+    webpush.sendNotification = original;
+    push.unsubscribePush(subscription.endpoint);
+  }
 });

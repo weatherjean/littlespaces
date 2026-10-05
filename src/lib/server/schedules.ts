@@ -14,6 +14,7 @@ export type Schedule = {
   enabled: number;
   last_run: string | null;
   last_error: string | null;
+  revision: number;
 };
 export function nextCron(cron: string, timezone: string, after = new Date()) {
   if (cron.trim().split(/\s+/).length !== 5) throw Error('Use a five-field cron expression.');
@@ -45,7 +46,12 @@ export function saveSchedule(spaceId: string, input: Record<string, unknown>) {
       String(input[name]).length > max
     )
       throw Error(`Provide a valid ${name}.`);
-  if (Boolean(input.cron) === Boolean(input.dueAt)) throw Error('Provide either cron or dueAt.');
+  if (
+    Boolean(input.cron) === Boolean(input.dueAt) ||
+    (input.cron !== undefined && (typeof input.cron !== 'string' || input.cron.length > 200)) ||
+    (input.dueAt !== undefined && typeof input.dueAt !== 'string')
+  )
+    throw Error('Provide either cron or dueAt as a string.');
   new Intl.DateTimeFormat('en', { timeZone: String(input.timezone) }).format();
   const next = input.cron
     ? nextCron(String(input.cron), String(input.timezone))
@@ -61,7 +67,7 @@ export function saveSchedule(spaceId: string, input: Record<string, unknown>) {
       throw Error('Schedule limit reached.');
     db.prepare(
       `INSERT INTO schedules(id,space_id,key,title,prompt,cron,timezone,model,next_run) VALUES(?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(space_id,key) DO UPDATE SET title=excluded.title,prompt=excluded.prompt,cron=excluded.cron,timezone=excluded.timezone,model=excluded.model,next_run=excluded.next_run,enabled=1,last_error=NULL`,
+      ON CONFLICT(space_id,key) DO UPDATE SET title=excluded.title,prompt=excluded.prompt,cron=excluded.cron,timezone=excluded.timezone,model=excluded.model,next_run=excluded.next_run,enabled=1,last_error=NULL,revision=schedules.revision+1`,
     ).run(
       randomUUID(),
       spaceId,

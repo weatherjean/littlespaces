@@ -84,3 +84,24 @@ test('successful tool calls attach to replies while failed-turn calls survive se
   assert.deepEqual(storage.pendingTools(other.id), []);
   assert.deepEqual(storage.messages(other.id), []);
 });
+
+test('notifications saved while archived return their identity and reappear on restore', () => {
+  storage.setSpaceArchived(a.id, true);
+  const saved = notify(a.id, {
+    key: 'archived',
+    title: 'Finished check',
+    body: 'Saved while hidden',
+  });
+  assert.equal(saved.spaceId, a.id);
+  assert.equal(listNotifications(a.id, true).length, 0);
+  storage.setSpaceArchived(a.id, false);
+  assert.equal(listNotifications(a.id)[0].id, saved.id);
+  storage.workspace((db) =>
+    db.prepare('INSERT INTO push_deliveries VALUES(?,?,?)').run('device', saved.id, 'fingerprint'),
+  );
+  cancelNotification(a.id, 'archived');
+  assert.equal(
+    storage.workspace((db) => db.prepare('SELECT COUNT(*) AS n FROM push_deliveries').get()!.n),
+    0,
+  );
+});

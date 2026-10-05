@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -15,6 +15,32 @@ const content = {
   source: '<p>test</p>',
   bundle: 'test',
 };
+
+test('scoped reads and writes do not open unrelated app databases', () => {
+  const app = storage.saveApplet(content);
+  const unrelated = join(directory, 'applets', '10000000-0000-4000-8000-000000000000.sqlite');
+  writeFileSync(unrelated, 'Not a SQLite database');
+  try {
+    assert.equal(storage.getSpace(app.id).appletCount, 1);
+    assert.equal(storage.spaceApplets(app.id)[0].id, app.id);
+    assert.equal(storage.listChats(app.id)[0].id, app.id);
+    storage.saveApplet({ ...content, title: 'Updated' }, app.id, app.id);
+    assert.equal(storage.revision(app.id).title, 'Updated');
+  } finally {
+    rmSync(unrelated);
+  }
+});
+
+test('creating a chat preserves an unmigrated legacy conversation', () => {
+  const space = storage.createSpace('Legacy conversation');
+  storage.saveExchange(space.id, 'Keep this question', 'Keep this answer');
+  storage.workspace((db) => db.prepare('DELETE FROM chats WHERE space_id=?').run(space.id));
+  const added = storage.createChat(space.id);
+  assert.notEqual(added.id, space.id);
+  assert.equal(storage.listChats(space.id).length, 2);
+  assert.equal(storage.getChat(space.id, space.id).id, space.id);
+  assert.equal(storage.messages(space.id)[0].content, 'Keep this question');
+});
 
 test('each applet uses a real, separate SQLite file and the same record key stays isolated', () => {
   const a = storage.saveApplet(content);

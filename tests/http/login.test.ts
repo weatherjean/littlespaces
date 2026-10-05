@@ -162,6 +162,13 @@ test('production HTTP login protects data, locks after three failures, and inval
     assert.ok(!disconnectedChat.includes('Choose conversation:'));
     assert.equal((await request('/api/spaces', { headers: { cookie: first } })).status, 200);
     const headers = { origin, cookie: first, 'content-type': 'application/json' };
+    const missingSchedule = await request('/api/settings/schedules', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ spaceId: 'missing', key: 'check' }),
+    });
+    assert.equal(missingSchedule.status, 400);
+    assert.match((await missingSchedule.json()).error, /not found/);
     const savedSecret = await request('/api/settings/secrets', {
       method: 'POST',
       headers,

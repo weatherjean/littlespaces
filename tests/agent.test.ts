@@ -124,6 +124,37 @@ test('a provider failure after a completed action reports that changes remain sa
   );
 });
 
+test('a failed reply after scheduling reports the persisted change before the user retries', async () => {
+  const { listSchedules } = await import('../src/lib/server/schedules');
+  let step = 0;
+  globalThis.fetch = async () =>
+    step++ === 0
+      ? reply('', [
+          {
+            type: 'function_call',
+            name: 'schedule_turn',
+            namespace: 'app',
+            call_id: 'schedule',
+            arguments: JSON.stringify({
+              key: 'check',
+              title: 'Check plants',
+              prompt: 'Check soil',
+              timezone: 'UTC',
+              dueAt: '2099-01-01T00:00:00Z',
+            }),
+          },
+        ])
+      : new Response('failed', { status: 503 });
+  await assert.rejects(
+    () =>
+      generate('test-model', [], undefined, () => {}, new AbortController().signal, {
+        appletId: app.id,
+      }),
+    /Completed app actions remain saved/,
+  );
+  assert.equal(listSchedules(app.id)[0].key, 'check');
+});
+
 test('model catalog retains account-specific effort options without inventing defaults', async () => {
   globalThis.fetch = async () =>
     Response.json({

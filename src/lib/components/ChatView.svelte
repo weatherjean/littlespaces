@@ -4,7 +4,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import { beforeNavigate, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
-  import { request } from '$lib/client';
+  import { request, responseJson } from '$lib/client';
   import { canDictate, dictate } from '$lib/voice';
   import PhotoPicker from './PhotoPicker.svelte';
   import { uploadPhoto } from '$lib/photos';
@@ -57,7 +57,6 @@
       uploading = false;
     }
   }
-  let data = $derived({ account });
   let chat = $state<Message[]>(untrack(() => messages));
   let draft = $state(''),
     error = $state(''),
@@ -67,7 +66,9 @@
   let effort = $state('default');
   let mode = $state<'knowledge' | 'build'>(
     untrack(() =>
-      launcher && page.url.searchParams.get('mode') === 'build' ? 'build' : 'knowledge',
+      (launcher && page.url.searchParams.get('mode') === 'build') || (!launcher && !applet)
+        ? 'build'
+        : 'knowledge',
     ),
   );
   let efforts = $derived(models.find((item) => item.slug === model)?.efforts || []);
@@ -117,7 +118,7 @@
       uploading ||
       (!draft.trim() && !attachments.length) ||
       !model ||
-      !data.account?.canUsePlan
+      !account?.canUsePlan
     )
       return;
     const message = draft.trim() || 'What is in this photo?';
@@ -136,8 +137,10 @@
       },
     ];
     status = 'Connecting to ChatGPT…';
-    await scrollChat();
     cancelRequest = new AbortController();
+    stopVoice?.();
+    listening = false;
+    await scrollChat();
     let completed = false;
     try {
       const response = await fetch('/api/chat', {
@@ -154,10 +157,7 @@
         }),
         signal: cancelRequest.signal,
       });
-      if (!response.ok) {
-        const value = await response.json();
-        throw new Error(value.error || value.message || 'Chat request failed.');
-      }
+      if (!response.ok) await responseJson(response);
       if (!response.body) throw new Error('No response stream.');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -203,7 +203,7 @@
               await scrollChat();
             }
           }
-          if (done) break;
+          if (done || completed) break;
         }
       } finally {
         await reader.cancel().catch(() => {});

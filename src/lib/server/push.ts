@@ -63,10 +63,7 @@ export function subscribePush(value: unknown) {
   });
 }
 export function unsubscribePush(endpoint: string) {
-  workspace((db) => {
-    db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(endpoint);
-    db.prepare('DELETE FROM push_deliveries WHERE endpoint=?').run(endpoint);
-  });
+  workspace((db) => db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(endpoint));
 }
 export function hasPush(endpoint: string) {
   return workspace(
@@ -83,6 +80,17 @@ export async function deliverPush() {
     for (const notification of listNotifications().filter(
       (item) => !item.read && Date.parse(item.dueAt) >= Date.parse(String(row.created_at)),
     )) {
+      // Delivery yields to user requests. Recheck the queued snapshot before each send.
+      if (!hasPush(endpoint)) break;
+      const pending = workspace((db) =>
+        db
+          .prepare(
+            `SELECT 1 FROM notifications n JOIN spaces s ON s.id=n.space_id
+         WHERE n.id=? AND n.is_read=0 AND s.archived=0 AND n.title=? AND n.body=? AND n.due_at=?`,
+          )
+          .get(notification.id, notification.title, notification.body, notification.dueAt),
+      );
+      if (!pending) continue;
       const fingerprint = createHash('sha256')
         .update(JSON.stringify([notification.title, notification.body, notification.dueAt]))
         .digest('hex');
@@ -114,9 +122,12 @@ export async function deliverPush() {
         workspace((db) =>
           db
             .prepare(
-              'INSERT INTO push_deliveries(endpoint,notification_id,fingerprint) VALUES(?,?,?) ON CONFLICT(endpoint,notification_id) DO UPDATE SET fingerprint=excluded.fingerprint',
+              `INSERT INTO push_deliveries(endpoint,notification_id,fingerprint)
+               SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint=?)
+               AND EXISTS (SELECT 1 FROM notifications WHERE id=?)
+               ON CONFLICT(endpoint,notification_id) DO UPDATE SET fingerprint=excluded.fingerprint`,
             )
-            .run(endpoint, notification.id, fingerprint),
+            .run(endpoint, notification.id, fingerprint, endpoint, notification.id),
         );
       } catch (e) {
         if ([404, 410].includes((e as { statusCode: number }).statusCode)) {

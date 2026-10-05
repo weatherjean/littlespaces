@@ -20,9 +20,14 @@ export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 function open(path: string) {
   const db = new DatabaseSync(path);
-  chmodSync(path, 0o600);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-  return db;
+  try {
+    chmodSync(path, 0o600);
+    db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;');
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 export function withApplet<T>(id: string, run: (db: DatabaseSync) => T, create = false): T {
@@ -61,6 +66,37 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
       CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, space_id TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, prompt TEXT NOT NULL, cron TEXT, timezone TEXT NOT NULL, model TEXT NOT NULL, next_run TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT, last_error TEXT, UNIQUE(space_id,key));
       CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, subscription TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS push_deliveries (endpoint TEXT NOT NULL, notification_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(endpoint,notification_id));`);
+    db.exec(
+      'CREATE TABLE IF NOT EXISTS build_drafts (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+    );
+    db.exec(photoSchema);
+    db.exec(`CREATE INDEX IF NOT EXISTS messages_thread_id ON messages(thread,id);
+      CREATE INDEX IF NOT EXISTS chats_space ON chats(space_id);
+      CREATE INDEX IF NOT EXISTS space_applets_space ON space_applets(space_id);
+      CREATE INDEX IF NOT EXISTS chat_tools_thread_message ON chat_tools(thread,message_id);
+      CREATE INDEX IF NOT EXISTS photos_owner ON photos(owner);`);
+    if (
+      !db
+        .prepare('PRAGMA table_info(schedules)')
+        .all()
+        .some((row) => row.name === 'revision')
+    )
+      db.exec('ALTER TABLE schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+    if (
+      !db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='notification_delete_deliveries'",
+        )
+        .get()
+    )
+      db.exec(`BEGIN;
+      DELETE FROM push_deliveries WHERE NOT EXISTS (SELECT 1 FROM notifications WHERE id=notification_id)
+        OR NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE push_subscriptions.endpoint=push_deliveries.endpoint);
+      CREATE TRIGGER notification_delete_deliveries AFTER DELETE ON notifications
+      BEGIN DELETE FROM push_deliveries WHERE notification_id=OLD.id; END;
+      CREATE TRIGGER IF NOT EXISTS subscription_delete_deliveries AFTER DELETE ON push_subscriptions
+      BEGIN DELETE FROM push_deliveries WHERE endpoint=OLD.endpoint; END;
+      COMMIT;`);
     if (
       !db
         .prepare('PRAGMA table_info(spaces)')
@@ -68,7 +104,6 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
         .some((row) => row.name === 'archived')
     )
       db.exec('ALTER TABLE spaces ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
-    db.exec(photoSchema);
     if (
       !db
         .prepare('PRAGMA table_info(chats)')

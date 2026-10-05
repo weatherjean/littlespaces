@@ -3,6 +3,7 @@ import { workspace, spaceApplets, revision, listSpaces } from './storage';
 import { notify } from './notifications';
 import { generate } from './inference';
 import { deliverPush } from './push';
+import { logEvent } from './diagnostics';
 
 let running = false;
 export async function runSchedule(job: Schedule, now = new Date(), turn = generate) {
@@ -12,7 +13,7 @@ export async function runSchedule(job: Schedule, now = new Date(), turn = genera
     (db) =>
       db
         .prepare(
-          'UPDATE schedules SET next_run=?,enabled=?,last_run=?,last_error=? WHERE id=? AND enabled=1 AND next_run=? AND EXISTS (SELECT 1 FROM spaces WHERE spaces.id=schedules.space_id AND spaces.archived=0)',
+          'UPDATE schedules SET next_run=?,enabled=?,last_run=?,last_error=? WHERE id=? AND revision=? AND enabled=1 AND next_run=? AND next_run<=? AND EXISTS (SELECT 1 FROM spaces WHERE spaces.id=schedules.space_id AND spaces.archived=0)',
         )
         .run(
           next,
@@ -20,20 +21,22 @@ export async function runSchedule(job: Schedule, now = new Date(), turn = genera
           now.toISOString(),
           'Turn interrupted before completion.',
           job.id,
+          job.revision,
           job.next_run,
+          now.toISOString(),
         ).changes,
   );
   if (!claimed) return;
   const notificationKey = `schedule:${job.id}`;
-  // A durable placeholder means even an interrupted turn leaves a visible notification.
-  notify(job.space_id, {
-    key: notificationKey,
-    title: job.title,
-    dueAt: new Date(Date.now() + 180000).toISOString(),
-    body: 'Scheduled check started. If this message remains, the server may have restarted before the check completed.',
-  });
   let failure: string | null = null;
   try {
+    // A durable placeholder means an interrupted turn leaves a visible notification.
+    notify(job.space_id, {
+      key: notificationKey,
+      title: job.title,
+      dueAt: new Date(Date.now() + 180000).toISOString(),
+      body: 'Scheduled check started. If this message remains, the server may have restarted before the check completed.',
+    });
     const id = spaceApplets(job.space_id)[0]?.id;
     const result = await turn(
       job.model,
@@ -53,18 +56,26 @@ export async function runSchedule(job: Schedule, now = new Date(), turn = genera
       title: job.title,
       body: result.message.slice(0, 2000),
     });
-  } catch {
+  } catch (error) {
+    logEvent('schedule.error', { scheduleId: job.id, error });
     failure =
       'Scheduled check failed. Check ChatGPT connection and model availability, then recreate the schedule if needed.';
-    notify(job.space_id, { key: notificationKey, title: job.title, body: failure });
+    try {
+      notify(job.space_id, { key: notificationKey, title: job.title, body: failure });
+    } catch (error) {
+      // A full inbox must not leave the job marked as interrupted or stop other jobs.
+      logEvent('schedule.notification_error', { scheduleId: job.id, error });
+      failure =
+        'Could not complete the scheduled check or save its notification. Check the app’s notification capacity and ChatGPT connection.';
+    }
   }
   workspace((db) =>
     db
-      .prepare('UPDATE schedules SET last_error=? WHERE id=? AND last_run=?')
-      .run(failure, job.id, now.toISOString()),
+      .prepare('UPDATE schedules SET last_error=? WHERE id=? AND revision=? AND last_run=?')
+      .run(failure, job.id, job.revision, now.toISOString()),
   );
 }
-export async function schedulerTick() {
+export async function schedulerTick(turn = generate) {
   if (running) return;
   running = true;
   try {
@@ -78,7 +89,11 @@ export async function schedulerTick() {
           Date.parse(job.next_run) <= Date.now(),
       )
       .slice(0, 10))
-      await runSchedule(job);
+      try {
+        await runSchedule(job, new Date(), turn);
+      } catch (error) {
+        logEvent('schedule.error', { scheduleId: job.id, error });
+      }
   } finally {
     running = false;
   }
@@ -97,14 +112,14 @@ let timer: ReturnType<typeof setInterval> | undefined;
 export function startScheduler() {
   if (timer) return;
   const tick = () => {
-    void schedulerTick().catch(() => {});
+    void schedulerTick().catch((error) => logEvent('scheduler.error', { error }));
   };
   timer = setInterval(tick, 30000);
   timer.unref();
   const pushTimer = setInterval(() => {
-    void pushTick().catch(() => {});
+    void pushTick().catch((error) => logEvent('push.error', { error }));
   }, 30000);
   pushTimer.unref();
-  void pushTick().catch(() => {});
+  void pushTick().catch((error) => logEvent('push.error', { error }));
   tick();
 }

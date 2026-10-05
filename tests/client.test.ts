@@ -27,3 +27,16 @@ test('host requests preserve successful bridge results and app-specific errors',
     /Invalid action input/,
   );
 });
+
+test('HTML proxy failures and malformed success responses produce useful errors', async (t) => {
+  const mock = t.mock.method(
+    globalThis,
+    'fetch',
+    async () => new Response('<h1>Bad gateway</h1>', { status: 502 }),
+  );
+  await assert.rejects(() => request('/api/models'), /Request failed \(502\)/);
+  mock.mock.mockImplementation(async () => new Response('<html>Not JSON</html>'));
+  await assert.rejects(() => request('/api/models'), /unreadable response/);
+  mock.mock.mockImplementation(async () => Response.json(null));
+  await assert.rejects(() => request('/api/models'), /unreadable response/);
+});

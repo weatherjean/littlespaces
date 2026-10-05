@@ -40,7 +40,7 @@ declare global {
           options?: { format?: 'text' | 'plant' },
         ): Promise<import('./lib/photo-types').PhotoAnalysis>;
       };
-      call<T = any>(action: string, input?: unknown): Promise<T>;
+      call<T = unknown>(action: string, input?: unknown): Promise<T>;
       list<T = unknown>(): Promise<Array<{ key: string; value: T }>>;
       set(key: string, value: unknown): Promise<void>;
       remove(key: string): Promise<void>;

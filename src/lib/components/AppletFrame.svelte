@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  import { request as hostRequest } from '$lib/client';
+  import { request as hostRequest, responseJson } from '$lib/client';
   import PhotoPicker from './PhotoPicker.svelte';
   import Icon from './Icon.svelte';
   import type { Photo } from '$lib/photo-types';
@@ -20,10 +20,9 @@
     let reply: object;
     try {
       const response = await fetch(`${photo.url}?data=1`);
-      const value = await response.json();
-      reply = response.ok ? { result: value } : { error: value.error || 'Could not load photo.' };
-    } catch {
-      reply = { error: 'Could not load photo. Please try again.' };
+      reply = { result: await responseJson(response) };
+    } catch (error) {
+      reply = { error: error instanceof Error ? error.message : 'Could not load photo.' };
     }
     if (photoRequest !== pending) return;
     photoRequest = null;
@@ -43,8 +42,7 @@
     document = '';
     fetch(`/api/applets/${currentId}`, { signal: controller.signal })
       .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
+        const data = await responseJson(response);
         owner = data.spaceId;
         document = data.document;
       })
@@ -141,8 +139,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ launch: request.params }),
           });
-          const value = await response.json();
-          if (!response.ok) throw new Error(value.error || 'Could not open chat.');
+          const value = await responseJson(response);
           await goto(`/spaces/${currentOwner}/chat/${value.chat.id}`, { invalidateAll: true });
           reply({ result: { id: value.chat.id } });
           return;
@@ -182,19 +179,15 @@
                 }
               : {},
           );
-          const value = await response.json();
-          reply(
-            response.ok
-              ? {
-                  result:
-                    method === 'photos.list'
-                      ? value.photos
-                      : method === 'photos.get'
-                        ? value
-                        : value.result,
-                }
-              : { error: value.error || 'Photo operation failed.' },
-          );
+          const value = await responseJson(response);
+          reply({
+            result:
+              method === 'photos.list'
+                ? value.photos
+                : method === 'photos.get'
+                  ? value
+                  : value.result,
+          });
           return;
         }
         const value = await hostRequest(

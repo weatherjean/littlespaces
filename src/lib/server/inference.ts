@@ -197,6 +197,8 @@ async function generateImpl(
               'remove_record',
               'notify',
               'cancel_notification',
+              'schedule_turn',
+              'cancel_schedule',
             ].includes(name.replace(/^app\./, ''))
           )
             invoked = true;

@@ -229,15 +229,6 @@
 .beta-dot {
   background: #9bc4d9;
 }
-.local-indicator {
-  color: #93a2b4;
-}
-.local-indicator > span {
-  box-shadow: none;
-}
-.launcher-footer {
-  color: #8795a8;
-}
 .app-grid {
   gap: 36px 24px;
 }
@@ -398,7 +389,6 @@
 .picker-new span {
   color: #95a5ba;
 }
-.conversation-switcher option,
 .model-controls option {
   background: #19212d;
 }

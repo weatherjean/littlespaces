@@ -21,17 +21,19 @@ export function revision(id: string, version?: number): Revision {
 export function listApplets(): Applet[] {
   return readdirSync(appletDir)
     .filter((name) => name.endsWith('.sqlite') && uuid.test(name.slice(0, -7)))
-    .flatMap((name) =>
-      withApplet(name.slice(0, -7), (db) => {
-        const row = db
-          .prepare(
-            'SELECT title, description, version, created_at AS updatedAt FROM revisions ORDER BY version DESC LIMIT 1',
-          )
-          .get();
-        return row ? [{ ...row, id: name.slice(0, -7) } as Applet] : [];
-      }),
-    )
+    .flatMap((name) => appletInfo(name.slice(0, -7)) ?? [])
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function appletInfo(id: string): Applet | undefined {
+  return withApplet(id, (db) => {
+    const row = db
+      .prepare(
+        'SELECT title, description, version, created_at AS updatedAt FROM revisions ORDER BY version DESC LIMIT 1',
+      )
+      .get();
+    return row ? ({ ...row, id } as Applet) : undefined;
+  });
 }
 
 export function saveApplet(
@@ -87,7 +89,7 @@ export function saveApplet(
     ).run(owner);
   });
   if (spaceId) movePhotosToApplet(spaceId, id);
-  const saved = listApplets().find((item) => item.id === id)!;
+  const saved = appletInfo(id)!;
   logEvent('app.published', {
     appletId: id,
     version: saved.version,
@@ -195,18 +197,33 @@ export function listSpaces(includeArchived = false): Space[] {
       FROM spaces s LEFT JOIN space_applets a ON a.space_id = s.id WHERE (? OR s.archived=0) GROUP BY s.id ORDER BY s.updated_at DESC`,
       )
       .all(includeArchived ? 1 : 0)
-      .map((row) => ({
-        id: String(row.id),
-        name: String(row.name),
-        archived: Boolean(row.archived),
-        icon: String(row.icon),
-        updatedAt: String(row.updatedAt),
-        appletCount: Number(row.appletCount),
-      }));
+      .map(spaceFromRow);
   });
 }
 
+function spaceFromRow(row: Record<string, unknown>): Space {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    archived: Boolean(row.archived),
+    icon: String(row.icon),
+    updatedAt: String(row.updatedAt),
+    appletCount: Number(row.appletCount),
+  };
+}
+
 export function getSpace(id: string): Space {
+  if (!uuid.test(id)) throw new Error('Space not found.');
+  const row = workspace((db) =>
+    db
+      .prepare(
+        `SELECT s.*,s.updated_at AS updatedAt,COUNT(a.applet_id) AS appletCount
+     FROM spaces s LEFT JOIN space_applets a ON a.space_id=s.id WHERE s.id=? GROUP BY s.id`,
+      )
+      .get(id),
+  );
+  if (row) return spaceFromRow(row);
+  // An older app database may not have a workspace entry yet.
   const space = listSpaces(true).find((item) => item.id === id);
   if (!space) throw new Error('Space not found.');
   return space;
@@ -240,25 +257,33 @@ export function spaceApplets(spaceId: string): Applet[] {
       .all(spaceId)
       .map((row) => String(row.applet_id)),
   );
-  return listApplets().filter((applet) => ids.includes(applet.id));
+  return ids.flatMap((id) => appletInfo(id) ?? []);
 }
 
 export function listChats(spaceId: string): Chat[] {
   getSpace(spaceId);
-  return workspace((db) =>
-    db
+  return workspace((db) => {
+    // Legacy per-space threads retain their IDs and messages as the first chat.
+    db.prepare(
+      `INSERT INTO chats(id,space_id,title) SELECT ?,?,'First chat'
+      WHERE NOT EXISTS (SELECT 1 FROM chats WHERE space_id=?)`,
+    ).run(spaceId, spaceId, spaceId);
+    return db
       .prepare(
         'SELECT id, space_id AS spaceId, title, launch, updated_at AS updatedAt FROM chats WHERE space_id = ? ORDER BY updated_at DESC, rowid DESC',
       )
       .all(spaceId)
-      .map((row) => ({
-        id: String(row.id),
-        spaceId: String(row.spaceId),
-        title: String(row.title),
-        updatedAt: String(row.updatedAt),
-        ...(JSON.parse(String(row.launch)).task ? { launch: JSON.parse(String(row.launch)) } : {}),
-      })),
-  );
+      .map((row) => {
+        const launch = JSON.parse(String(row.launch));
+        return {
+          id: String(row.id),
+          spaceId: String(row.spaceId),
+          title: String(row.title),
+          updatedAt: String(row.updatedAt),
+          ...(launch.task ? { launch } : {}),
+        };
+      });
+  });
 }
 
 export function getChat(spaceId: string, chatId: string): Chat {
@@ -268,7 +293,8 @@ export function getChat(spaceId: string, chatId: string): Chat {
 }
 
 export function createChat(spaceId: string, launch?: import('../types').ChatLaunch): Chat {
-  getSpace(spaceId);
+  // Materialize a legacy thread before adding a second conversation.
+  listChats(spaceId);
   const id = randomUUID();
   workspace((db) =>
     db
@@ -426,7 +452,12 @@ function photoDatabase<T>(spaceId: string, run: (db: DatabaseSync) => T): T {
   const row = workspace((db) =>
     db.prepare('SELECT applet_id FROM space_applets WHERE space_id = ?').get(spaceId),
   );
-  return row ? withApplet(String(row.applet_id), run) : workspace(run);
+  if (!row) return workspace(run);
+  const appletId = String(row.applet_id);
+  // Publication can stop after linking the app but before moving its photos.
+  // Copy-before-delete is idempotent, so the next photo access repairs either stage.
+  movePhotosToApplet(spaceId, appletId);
+  return withApplet(appletId, run);
 }
 function movePhotosToApplet(spaceId: string, appletId: string) {
   const pending = workspace((db) =>

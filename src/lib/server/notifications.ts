@@ -3,7 +3,7 @@ import { workspace, getSpace, launcherChatId } from './storage';
 import { logEvent } from './diagnostics';
 import type { Notification } from '../types';
 export function notify(spaceId: string, value: unknown) {
-  getSpace(spaceId);
+  const space = getSpace(spaceId);
   const v = value as Record<string, unknown>;
   if (
     !v ||
@@ -24,7 +24,7 @@ export function notify(spaceId: string, value: unknown) {
     throw Error('Invalid notification date.');
   const dueAt = v.dueAt ? new Date(String(v.dueAt)).toISOString() : new Date().toISOString();
   const id = randomUUID();
-  workspace((db) => {
+  const result = workspace((db) => {
     const old = db
       .prepare('SELECT id FROM notifications WHERE space_id=? AND key=?')
       .get(spaceId, v.key as string);
@@ -40,8 +40,13 @@ export function notify(spaceId: string, value: unknown) {
       ON CONFLICT(space_id,key) DO UPDATE SET title=excluded.title,body=excluded.body,due_at=excluded.due_at,
       is_read=CASE WHEN notifications.title=excluded.title AND notifications.body=excluded.body AND notifications.due_at=excluded.due_at THEN notifications.is_read ELSE 0 END`,
     ).run(id, spaceId, v.key as string, v.title as string, v.body as string, dueAt);
+    return notification({
+      ...db
+        .prepare('SELECT * FROM notifications WHERE space_id=? AND key=?')
+        .get(spaceId, v.key as string)!,
+      source: space.name,
+    });
   });
-  const result = listNotifications(spaceId, true).find((n) => n.key === v.key)!;
   logEvent('notification.saved', { notification: result });
   return result;
 }
@@ -53,18 +58,21 @@ export function listNotifications(spaceId?: string, includeFuture = false): Noti
         `SELECT n.*,s.name AS source FROM notifications n JOIN spaces s ON s.id=n.space_id WHERE s.archived=0 AND (? IS NULL OR n.space_id=?) AND (? OR n.due_at<=?) ORDER BY n.due_at DESC`,
       )
       .all(spaceId || null, spaceId || null, includeFuture ? 1 : 0, new Date().toISOString())
-      .map((row) => ({
-        id: String(row.id),
-        spaceId: String(row.space_id),
-        key: String(row.key),
-        title: String(row.title),
-        body: String(row.body),
-        dueAt: String(row.due_at),
-        read: !!row.is_read,
-        source: String(row.source),
-        href: row.space_id === launcherChatId ? '/chat' : `/spaces/${row.space_id}/applet`,
-      })),
+      .map(notification),
   );
+}
+function notification(row: Record<string, unknown>): Notification {
+  return {
+    id: String(row.id),
+    spaceId: String(row.space_id),
+    key: String(row.key),
+    title: String(row.title),
+    body: String(row.body),
+    dueAt: String(row.due_at),
+    read: !!row.is_read,
+    source: String(row.source),
+    href: row.space_id === launcherChatId ? '/chat' : `/spaces/${row.space_id}/applet`,
+  };
 }
 export function markNotificationsRead(id?: string) {
   workspace((db) =>

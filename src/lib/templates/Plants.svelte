@@ -41,7 +41,7 @@
     identification = $state<Identification | null>(null);
   let locked = $derived(busy || analyzing || picking);
   async function refresh() {
-    plants = await window.applet.call('listPlants', {});
+    plants = await window.applet.call<Array<{ key: string; value: Plant }>>('listPlants', {});
     for (const row of plants) {
       const id = row.value.photoId;
       if (id && !previews[id]) {

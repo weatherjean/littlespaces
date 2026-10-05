@@ -19,9 +19,6 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
   getChat(spaceId, chatId);
   function read(): Draft | undefined {
     return workspace((db) => {
-      db.exec(
-        'CREATE TABLE IF NOT EXISTS build_drafts (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL)',
-      );
       const row = db.prepare('SELECT data FROM build_drafts WHERE chat_id=?').get(chatId);
       return row ? JSON.parse(String(row.data)) : undefined;
     });

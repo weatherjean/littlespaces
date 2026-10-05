@@ -158,3 +158,46 @@ test('AI analysis uses inline images and never writes plant records', async () =
     /503/,
   );
 });
+
+test('photo access repairs interrupted publication before or after the copy completes', async () => {
+  const target = storage.createSpace('Interrupted publication');
+  const saved = await importPhoto(target.id, 'recover.jpg', source);
+  const pending = storage.workspace((db) =>
+    db.prepare('SELECT * FROM photos WHERE id=?').get(saved.id)!,
+  );
+  const app = storage.saveApplet(content, undefined, target.id);
+  for (const copied of [false, true]) {
+    // Reproduce a crash after linking the app, with workspace photos still pending.
+    storage.workspace((db) =>
+      db
+        .prepare(
+          'INSERT INTO photos(id,owner,name,mime,width,height,bytes,data,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          pending.id,
+          pending.owner,
+          pending.name,
+          pending.mime,
+          pending.width,
+          pending.height,
+          pending.bytes,
+          pending.data,
+          pending.created_at,
+        ),
+    );
+    if (!copied) {
+      const db = new DatabaseSync(join(directory, 'applets', `${app.id}.sqlite`));
+      db.prepare('DELETE FROM photos WHERE id=?').run(saved.id);
+      db.close();
+    }
+    assert.equal(storage.readPhoto(target.id, saved.id).name, 'recover.jpg');
+    assert.equal(storage.listPhotos(target.id).length, 1);
+    assert.equal(
+      storage.workspace(
+        (db) => db.prepare('SELECT COUNT(*) AS n FROM photos WHERE owner=?').get(target.id)!.n,
+      ),
+      0,
+    );
+    assert.throws(() => storage.readPhoto(other.id, saved.id), /not found/);
+  }
+});
