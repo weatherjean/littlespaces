@@ -9,7 +9,12 @@ const directory = mkdtempSync(join(tmpdir(), 'little-spaces-storage-'));
 process.env.APP_DATA_DIR = directory;
 const storage = await import('../src/lib/server/storage');
 after(() => rmSync(directory, { recursive: true, force: true }));
-const content = { title: 'Test', description: 'A test applet', source: '<p>test</p>', bundle: 'test' };
+const content = {
+  title: 'Test',
+  description: 'A test applet',
+  source: '<p>test</p>',
+  bundle: 'test',
+};
 
 test('each applet uses a real, separate SQLite file and the same record key stays isolated', () => {
   const a = storage.saveApplet(content);
@@ -21,7 +26,12 @@ test('each applet uses a real, separate SQLite file and the same record key stay
   const path = join(directory, 'applets', `${a.id}.sqlite`);
   assert.equal(readFileSync(path).subarray(0, 16).toString(), 'SQLite format 3\0');
   const reopened = new DatabaseSync(path);
-  assert.equal(JSON.parse(String(reopened.prepare('SELECT value FROM records WHERE key=?').get('plant')!.value)).name, 'Monstera');
+  assert.equal(
+    JSON.parse(
+      String(reopened.prepare('SELECT value FROM records WHERE key=?').get('plant')!.value),
+    ).name,
+    'Monstera',
+  );
   reopened.close();
 });
 
@@ -57,7 +67,10 @@ test('SQL-looking record keys are data; deletes stay in their applet', () => {
 test('host ID and thread history persist across database reopens', () => {
   assert.equal(storage.hostId(), storage.hostId());
   storage.saveExchange('one', 'hello', 'hi');
-  assert.deepEqual(storage.messages('one'), [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi' }]);
+  assert.deepEqual(storage.messages('one'), [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hi' },
+  ]);
   assert.deepEqual(storage.messages('two'), []);
 });
 
@@ -101,32 +114,58 @@ test('legacy applets migrate without losing records or conversation history', ()
 
 test('app chat guidance is versioned and survives omitted-field edits and restores', async () => {
   const { prepareApp } = await import('../src/lib/server/publish');
-  const a = storage.saveApplet({...content,chatInstructions:'Ask before saving.'});
+  const a = storage.saveApplet({ ...content, chatInstructions: 'Ask before saving.' });
   const first = storage.revision(a.id);
-  const next = await prepareApp({title:'Updated',description:'',source:'<p>New view</p>'},a.id);
-  assert.equal(next.chatInstructions,'Ask before saving.');
-  storage.saveApplet({...next,chatInstructions:'Ask one question at a time.'},a.id);
-  storage.saveApplet(first,a.id);
-  assert.equal(storage.revision(a.id).chatInstructions,'Ask before saving.');
-  await assert.rejects(()=>prepareApp({...content,chatInstructions:'x'.repeat(12001)}),/12,000/);
+  const next = await prepareApp(
+    { title: 'Updated', description: '', source: '<p>New view</p>' },
+    a.id,
+  );
+  assert.equal(next.chatInstructions, 'Ask before saving.');
+  storage.saveApplet({ ...next, chatInstructions: 'Ask one question at a time.' }, a.id);
+  storage.saveApplet(first, a.id);
+  assert.equal(storage.revision(a.id).chatInstructions, 'Ask before saving.');
+  await assert.rejects(
+    () => prepareApp({ ...content, chatInstructions: 'x'.repeat(12001) }),
+    /12,000/,
+  );
 });
 
 test('task chats persist scoped references, refresh records, and handle deleted selections', async () => {
-  const {validateChatLaunch,liveChatContext} = await import('../src/lib/server/chat-context');
-  const a=storage.saveApplet(content), b=storage.saveApplet(content);
-  storage.putRecord(a.id,'fern',{name:'Fern',interval:7});
-  storage.putRecord(b.id,'other',{name:'Private'});
-  const launch=validateChatLaunch(a.id,{task:'Help this plant',title:'Fern help',welcome:'Tell me what you have noticed.',recordKeys:['fern'],context:{screen:'journal'}});
-  const chat=storage.createChat(a.id,launch);
-  assert.deepEqual(storage.getChat(a.id,chat.id).launch,launch);
-  assert.deepEqual(storage.messages(chat.id),[]);
-  assert.throws(()=>validateChatLaunch(a.id,{task:'Help',welcome:'x'.repeat(2001)}),/welcome/);
-  storage.putRecord(a.id,'fern',{name:'Fern',interval:12});
-  assert.deepEqual(liveChatContext(a.id,launch)?.selectedRecords,[{key:'fern',value:{name:'Fern',interval:12}}]);
-  storage.removeRecord(a.id,'fern');
-  assert.deepEqual(liveChatContext(a.id,launch)?.selectedRecords,[{key:'fern',missing:true}]);
-  assert.throws(()=>validateChatLaunch(a.id,{task:'Help',recordKeys:['other']}),/not available/);
-  assert.throws(()=>validateChatLaunch(a.id,{task:'Help',photoIds:['invalid']}));
-  assert.throws(()=>validateChatLaunch(a.id,{task:'Help',context:'x'.repeat(8001)}),/too large/);
-  assert.throws(()=>storage.getChat(b.id,chat.id),/not found/);
+  const { validateChatLaunch, liveChatContext } = await import('../src/lib/server/chat-context');
+  const a = storage.saveApplet(content),
+    b = storage.saveApplet(content);
+  storage.putRecord(a.id, 'fern', { name: 'Fern', interval: 7 });
+  storage.putRecord(b.id, 'other', { name: 'Private' });
+  const launch = validateChatLaunch(a.id, {
+    task: 'Help this plant',
+    title: 'Fern help',
+    welcome: 'Tell me what you have noticed.',
+    recordKeys: ['fern'],
+    context: { screen: 'journal' },
+  });
+  const chat = storage.createChat(a.id, launch);
+  assert.deepEqual(storage.getChat(a.id, chat.id).launch, launch);
+  assert.deepEqual(storage.messages(chat.id), []);
+  assert.throws(
+    () => validateChatLaunch(a.id, { task: 'Help', welcome: 'x'.repeat(2001) }),
+    /welcome/,
+  );
+  storage.putRecord(a.id, 'fern', { name: 'Fern', interval: 12 });
+  assert.deepEqual(liveChatContext(a.id, launch)?.selectedRecords, [
+    { key: 'fern', value: { name: 'Fern', interval: 12 } },
+  ]);
+  storage.removeRecord(a.id, 'fern');
+  assert.deepEqual(liveChatContext(a.id, launch)?.selectedRecords, [
+    { key: 'fern', missing: true },
+  ]);
+  assert.throws(
+    () => validateChatLaunch(a.id, { task: 'Help', recordKeys: ['other'] }),
+    /not available/,
+  );
+  assert.throws(() => validateChatLaunch(a.id, { task: 'Help', photoIds: ['invalid'] }));
+  assert.throws(
+    () => validateChatLaunch(a.id, { task: 'Help', context: 'x'.repeat(8001) }),
+    /too large/,
+  );
+  assert.throws(() => storage.getChat(b.id, chat.id), /not found/);
 });

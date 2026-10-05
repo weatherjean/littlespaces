@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -17,7 +17,10 @@
     "deploy:local": "node scripts/deploy-local.mjs",
     "setup": "node scripts/setup.mjs",
     "owner:reset": "node scripts/setup.mjs --reset",
-    "test:http": "tsx --test tests/http/*.test.ts"
+    "test:http": "tsx --test tests/http/*.test.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "npm run format:check && npm run check && npm test && npm run build && npm run test:http"
   },
   "dependencies": {
     "@sveltejs/adapter-node": "^5.2.0",
@@ -28,9 +31,16 @@
     "sharp": "^0.35.5",
     "svelte": "^5.25.0"
   },
+  "overrides": {
+    "@sveltejs/kit": {
+      "cookie": "^0.7.2"
+    }
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@types/node": "^22.13.0",
+    "prettier": "3.9.9",
+    "prettier-plugin-svelte": "4.1.1",
     "svelte-check": "^4.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

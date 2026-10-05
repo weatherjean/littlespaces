@@ -27,6 +27,8 @@ npm run test:http
 npm start
 ```
 
+The Node.js minimum is 24, matching the isolated backend runtime. The lockfile includes a scoped `cookie` override for SvelteKit's older dependency range; keep it until SvelteKit supplies a patched version directly. Verify dependency changes with `npm audit` and the production HTTP tests.
+
 Keep the local server running while using the app. Browser installation support varies. The service worker caches static assets and shows an offline fallback when the server is unavailable; it does not move SQLite into the browser or make server-backed applets work without the server.
 
 ## What works
@@ -85,7 +87,13 @@ The integration follows the official [registration guide](https://developers.ope
 
 ## Checks
 
+Run `npm run verify` before committing: it checks formatting and types, runs the unit/integration tests, builds production, and runs the HTTP suite. Use `npm run format` to apply the shared Prettier rules (including Svelte and backend templates). Type checks reject unused locals and parameters. Generated output and local data are excluded from formatting.
+
+Database connection setup and schema compatibility live in `src/lib/server/database.ts`; application storage operations live in `storage.ts`. Backend process isolation and resource limits live in `backend-process.ts`, while `backend.ts` compiles, validates, and dispatches actions. The agent's host instructions live in `agent-instructions.ts`, separately from provider transport and tool execution in `inference.ts`.
+
 `npm run check` checks Svelte and TypeScript. `npm run test:http` verifies the production login boundary and real restart/lockout behavior after a build. `npm test` verifies owner setup, password hashes, sessions, email restrictions, lockouts, and space migration, conversation isolation, the single-applet constraint, actual SQLite separation, record persistence, rollback, path validation, streamed response errors, applet compilation, and import/CSP boundaries. It also verifies the isolated backend, shared UI/agent actions, tool-call replay, failed-publication behavior, and conflict handling. Photo tests also cover decoding, metadata removal, ownership, persistence, vision requests, and confirmation before saving. Live sign-in, native camera capture, and browser speech require a supported browser.
+
+The hardening regression suite also covers backend write bypasses, revision races, schema registry isolation, concurrent process limits, split UTF-8 output, oversized chunked requests, bounded provider streams, and connections that remain open after completion. Production HTTP tests exercise real app actions and photo uploads alongside setup and login. These checks do not replace browser testing, live-account verification, or running the isolation tests on each supported operating system.
 
 ## Development diagnostics
 

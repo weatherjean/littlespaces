@@ -13,7 +13,7 @@ export const actions = {
       type: 'object',
       properties: { text: { type: 'string', minLength: 1, maxLength: 1000 } },
       required: ['text'],
-      additionalProperties: false
+      additionalProperties: false,
     },
     run: ({ text }, { db, uuid, now }) => {
       if (!text?.trim()) throw Error('Enter some text.');
@@ -21,8 +21,8 @@ export const actions = {
       const value = { text: text.trim(), createdAt: now() };
       db.set(key, value);
       return { key, value };
-    }
-  }
+    },
+  },
 };
 
 export const tests = [
@@ -31,15 +31,15 @@ export const tests = [
     run: async ({ call, db, assert }) => {
       const result = await call('add', { text: 'Hello' });
       assert.equal(db.get(result.key).text, 'Hello');
-    }
+    },
   },
   {
     name: 'Blank entries fail without writes',
     run: async ({ call, db, assert }) => {
       await assert.rejects(() => call('add', { text: ' ' }));
       assert.deepEqual(db.list(), []);
-    }
-  }
+    },
+  },
 ];
 ```
 
@@ -49,11 +49,11 @@ export const tests = [
 
 TypeScript is compiled with esbuild and executed in a separate Node process inside Bubblewrap on Linux or a deny-by-default `sandbox-exec` profile on macOS. The macOS profile permits runtime files, system libraries, and Homebrew dynamic libraries to load; it blocks private file contents, host filesystem writes, subprocess creation, and networking. The child receives an empty environment and no credentials. Node permissions additionally restrict filesystem reads and process creation. The process has a 64 MB JavaScript heap limit, a five-second action timeout, and bounded input/output. Tests have ten seconds for the full suite. There is no fallback that evaluates generated backend code inside the server or runs without an OS sandbox. macOS currently depends on Apple's legacy `sandbox-exec` utility; if it is unavailable, backend execution fails explicitly. Other operating systems are not yet supported for app backends.
 
-Actions receive a snapshot of their app's records. Successful write actions commit the result atomically to that app's SQLite database. A data or revision change during execution rejects the commit rather than losing someone else's update. Read-only actions cannot commit writes. A failed action commits nothing. App data is limited to 4 MB per backend invocation and existing record limits still apply.
+Actions receive a snapshot of their app's records. Successful write actions commit the result atomically to that app's SQLite database. A data or revision change during execution rejects the commit rather than losing someone else's update. Action schemas and execution use the same revision. Read-only actions cannot commit writes. A failed action commits nothing. App data is limited to 4 MB of UTF-8 JSON per backend invocation and existing record limits still apply. At most four backend processes (actions, inspections, or tests) run at once; additional requests receive a retryable busy error.
 
 Before publishing, both the UI compilation and every backend test must pass. Agents use `app.read_draft`, `app.write_draft`, `app.edit_draft`, `app.test_draft`, and `app.publish_draft`. Drafts persist per chat in the workspace SQLite database. Writes accept partial fields and edits replace one unique text block; both require the current draft revision and invalidate earlier test results. Publishing uses the exact compiled artifact from a successful test, without regenerating source in the final reply. Repeating publication of the same draft revision is idempotent. A newer live app revision blocks a stale draft from overwriting it. Each operation appears in expert mode with inputs and results. Final model replies contain only a message; they cannot implicitly publish app source. Compilation or test failures leave the active revision intact. Versions include UI and backend together; restoring code preserves current user records. Test runs never receive production records. Agent tool calls are capped per turn. New apps require a backend with tests. Backend tests and compilation do not constitute a browser or visual test. Individual successful publications and app actions remain saved if a later model reply fails or the user stops the turn; chat reports that possibility.
 
-Existing apps retain their prior UI, data, and storage SDK. Their scoped agent can list/set/remove records until a backend is added. New apps should put behavior into named backend actions so the UI and chat share validation and business logic.
+Existing apps retain their prior UI, data, and storage SDK. Their scoped agent can list/set/remove records until a backend is added. Once an app has a backend, direct record writes are rejected in the storage layer, including HTTP requests and tools created before an upgrade. Its UI must use named backend actions for writes; record reads remain available. New apps should put behavior into named backend actions so the UI and chat share validation and business logic.
 
 ## Current scope
 
@@ -68,9 +68,9 @@ const photo = await window.applet.photos.pick(); // Native picker modal; PhotoDa
 const photos = await window.applet.photos.list(); // Metadata for this app only
 const image = await window.applet.photos.get(photo.id); // Metadata plus dataUrl
 const analysis = await window.applet.photos.analyze([photo.id], 'Describe this image.');
-const identification = await window.applet.photos.analyze(
-  [photo.id], 'Identify this plant.', { format: 'plant' }
-); // { text, plant: validated identification and care suggestion }
+const identification = await window.applet.photos.analyze([photo.id], 'Identify this plant.', {
+  format: 'plant',
+}); // { text, plant: validated identification and care suggestion }
 ```
 
 Call `pick` from a user action. It offers file selection and native camera capture where supported. Render `dataUrl` in an image element and save `photo.id` in records. The host binds every operation to the app's owning space. Photo blobs live in that app's SQLite database, outside backend record snapshots. Photos uploaded before an app is created move from workspace storage into its database; built-in Chat photos remain in workspace storage.
@@ -78,7 +78,6 @@ Call `pick` from a user action. It offers file selection and native camera captu
 Analysis sends selected images through the connected ChatGPT account using the host's selected model. It requires sign-in and has no separately billed API fallback. Display uncertain identifications honestly, let users edit suggestions, and require confirmation before saving plant details. Backend actions remain isolated from the network; the UI requests analysis and passes confirmed data to a backend action. Scoped chat can also list and inspect saved photos.
 
 GPT speech, arbitrary network access, package dependencies, and background jobs are not implemented. Browser voice remains available where supported.
-
 
 ## App-defined conversations
 
@@ -93,7 +92,7 @@ await window.applet.chat.open({
   welcome: 'What have you noticed? Your plant’s details are already available here.',
   recordKeys: [plant.key],
   photoIds: plant.value.photoId ? [plant.value.photoId] : [],
-  context: { screen: 'plant detail', unsavedLocation: location }
+  context: { screen: 'plant detail', unsavedLocation: location },
 });
 ```
 
@@ -116,7 +115,7 @@ await window.applet.notifications.send({
   key: `water:${plant.key}`,
   title: `Check ${plant.value.name}'s soil`,
   body: 'Water only if the soil needs it.',
-  dueAt: nextCheck.toISOString()
+  dueAt: nextCheck.toISOString(),
 });
 const reminders = await window.applet.notifications.list();
 await window.applet.notifications.cancel(`water:${plant.key}`);

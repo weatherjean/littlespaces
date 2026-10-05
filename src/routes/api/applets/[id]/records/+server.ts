@@ -4,8 +4,11 @@ import { body } from '$lib/server/security';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = ({ params }) => {
-  try { return json({ result: records(params.id) }); }
-  catch { return json({ error: 'Applet not found.' }, { status: 404 }); }
+  try {
+    return json({ result: records(params.id) });
+  } catch {
+    return json({ error: 'Applet not found.' }, { status: 404 });
+  }
 };
 
 export const POST: RequestHandler = async (event) => {
@@ -16,5 +19,10 @@ export const POST: RequestHandler = async (event) => {
     else if (input.method === 'remove') removeRecord(event.params.id, input.key);
     else return json({ error: 'Unsupported storage action.' }, { status: 400 });
     return json({ result: null });
-  } catch (error) { return json({ error: error instanceof Error ? error.message : 'Storage operation failed.' }, { status: 400 }); }
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Storage operation failed.' },
+      { status: 400 },
+    );
+  }
 };
