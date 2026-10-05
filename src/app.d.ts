@@ -1,4 +1,5 @@
 declare global {
+  namespace App { interface Locals { owner: {email:string} | null } }
   interface Window {
     applet: {
       notifications: {send(input:{key:string;title:string;body:string;dueAt?:string}):Promise<import('./lib/types').Notification>;list():Promise<import('./lib/types').Notification[]>;cancel(key:string):Promise<{cancelled:boolean}>};

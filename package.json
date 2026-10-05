@@ -7,14 +7,17 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vite dev --host 127.0.0.1 --port 5173 --strictPort",
+    "dev": "node scripts/dev.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "preview": "node scripts/start.mjs",
     "start": "node scripts/start.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "tsx --test tests/*.test.ts",
     "logs": "node scripts/logs.mjs",
-    "deploy:local": "node scripts/deploy-local.mjs"
+    "deploy:local": "node scripts/deploy-local.mjs",
+    "setup": "node scripts/setup.mjs",
+    "owner:reset": "node scripts/setup.mjs --reset",
+    "test:http": "tsx --test tests/http/*.test.ts"
   },
   "dependencies": {
     "@sveltejs/adapter-node": "^5.2.0",

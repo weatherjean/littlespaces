@@ -1,4 +1,4 @@
-// Runs only inside the Bubblewrap child. The host never evaluates applet code.
+// Runs only inside the OS-sandboxed child. The host never evaluates applet code.
 export const runtimeSource = String.raw`
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
@@ -8,7 +8,7 @@ process.stdin.on('data', chunk => { raw += chunk; if (raw.length > 5000000) proc
 process.stdin.on('end', async () => {
   try {
     const request = JSON.parse(raw);
-    const app = require('/app/backend.cjs');
+    const app = require('./backend.cjs');
     const actions = app.actions;
     if (!actions || typeof actions !== 'object' || Array.isArray(actions)) throw Error('Export an actions object.');
     const names = Object.keys(actions);

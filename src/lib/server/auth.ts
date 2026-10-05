@@ -2,14 +2,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { dataDir, issuer, origin, resource } from './config';
+import { dataDir, issuer, origin, resource, localOAuth } from './config';
+import { ownerStore } from './owner';
+import { normalizeEmail } from '../../../scripts/owner-store.mjs';
 import { hostId } from './storage';
 import type { Account } from '../types';
 
 type Credentials = {
   clientId: string; subject: string; name: string; email: string;
   accessToken: string; refreshToken?: string; idToken: string;
-  scopes: string[]; expiresAt: number;
+  scopes: string[]; expiresAt: number; emailVerified: boolean;
 };
 type Attempt = { verifier: string; nonce: string; expiresAt: number; previous: Credentials | null; epoch: number };
 type Tokens = { access_token?: string; refresh_token?: string; id_token?: string; scope?: string; expires_in?: number };
@@ -21,7 +23,9 @@ let refreshing: Promise<string> | undefined;
 let credentialEpoch = 0;
 
 function credentials(): Credentials | null {
-  return existsSync(credentialPath) ? JSON.parse(readFileSync(credentialPath, 'utf8')) : null;
+  const value: Credentials | null = existsSync(credentialPath) ? JSON.parse(readFileSync(credentialPath, 'utf8')) : null;
+  const owner = ownerStore().get();
+  return value && owner && value.emailVerified === true && normalizeEmail(value.email) === owner.email ? value : null;
 }
 
 function save(value: Credentials) {
@@ -36,6 +40,8 @@ export function account(): Account | null {
 }
 
 export function startSignIn() {
+  ownerStore().requireOwner();
+  if (!localOAuth) throw new Error('Connect ChatGPT locally, then transfer its protected credentials to this server. See the self-hosting guide.');
   for (const [key, attempt] of pending) if (attempt.expiresAt < Date.now()) pending.delete(key);
   if (pending.size >= 20) throw new Error('Too many sign-in attempts. Wait a few minutes.');
   const state = random();
@@ -82,13 +88,14 @@ export async function finishSignIn(query: URLSearchParams, cookieState: string |
     issuer, audience: clientId, requiredClaims: ['sub', 'exp', 'iat'], clockTolerance: 5
   });
   if (payload.nonce !== attempt.nonce || !payload.sub) throw new Error('ChatGPT identity validation failed.');
+  if (typeof payload.email !== 'string' || payload.email_verified !== true || normalizeEmail(payload.email) !== ownerStore().requireOwner().email) throw new Error('This ChatGPT account is not allowed for this installation.');
   if (attempt.previous && payload.sub !== attempt.previous.subject) throw new Error('Sign out before choosing a different ChatGPT account.');
   const scopes = (tokens.scope || '').split(' ').filter(Boolean);
   if (scopes.includes('chatgpt.tokens.use.direct') && !tokens.access_token) throw new Error('ChatGPT did not return a plan access token.');
   if (attempt.epoch !== credentialEpoch) throw new Error('The active sign-in changed. Please start again.');
   credentialEpoch++;
   save({ clientId, subject: payload.sub, name: typeof payload.name === 'string' ? payload.name : 'Your account',
-    email: typeof payload.email === 'string' ? payload.email : '', accessToken: tokens.access_token || '',
+    email: normalizeEmail(payload.email), emailVerified: true, accessToken: tokens.access_token || '',
     refreshToken: tokens.refresh_token, idToken: tokens.id_token, scopes,
     expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000 });
 }

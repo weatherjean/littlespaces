@@ -1,6 +1,9 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import { backendSandbox } from '../src/lib/server/backend-sandbox';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const directory = mkdtempSync(join(tmpdir(), 'little-backend-test-'));
@@ -51,6 +54,38 @@ test('imports, filesystem reads and process spawning cannot escape the runtime',
   for (const code of ["require('node:fs').readFileSync('/etc/passwd')", "require('node:child_process').execSync('echo escaped')", "Function('return process')()"] ) {
     const bundle = `exports.actions={probe:{description:'Probe',readOnly:true,parameters:{type:'object'},run:()=>${code}}};`;
     await assert.rejects(() => runBackend(bundle,{mode:'call',action:'probe',input:{},records:[]}), /Access|permission|Code generation|not allowed|denied/i);
+  }
+});
+
+test('OS sandbox independently blocks private files, host writes, child processes and network', async () => {
+  const appDirectory = mkdtempSync(join(tmpdir(), 'little-sandbox-probe-'));
+  const secret = join(directory, 'private.txt');
+  writeFileSync(secret, 'private host data');
+  const server = createServer(socket => socket.destroy());
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address() as { port: number };
+    const sandbox = backendSandbox(appDirectory);
+    // Intentionally omit Node permissions: these checks exercise the OS boundary.
+    const args = sandbox.args.slice(0, sandbox.args.indexOf('--max-old-space-size=64'));
+    const probe = `
+      const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      assert.throws(() => fs.readFileSync(${JSON.stringify(secret)}));
+      assert.throws(() => fs.writeFileSync(${JSON.stringify(join(directory, 'escape.txt'))}, 'escaped'));
+      const child = require('node:child_process').spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+      assert.notEqual(child.status, 0);
+      const socket = require('node:net').connect(${address.port}, '127.0.0.1');
+      socket.on('connect', () => process.exit(1));
+      socket.on('error', () => process.exit(0));
+      setTimeout(() => process.exit(2), 1500);
+    `;
+    const result = spawnSync(sandbox.command, [...args, '--openssl-config=/dev/null', '-e', probe],
+      { cwd: appDirectory, env: {}, encoding: 'utf8', timeout: 3000 });
+    assert.equal(result.status, 0, `OS sandbox probe failed: ${result.stderr}; ${result.error || result.signal || ''}`);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(appDirectory, {recursive:true,force:true});
   }
 });
 

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { build } from 'esbuild';
 import Ajv from 'ajv';
 import { runtimeSource } from './backend-runtime';
+import { backendSandbox } from './backend-sandbox';
 import { revision, records, commitRecords } from './storage';
 import type { RecordEntry } from '../types';
 
@@ -26,16 +27,14 @@ export async function runBackend(bundle: string, request: object, timeout = 5000
   try {
     await writeFile(join(directory, 'backend.cjs'), bundle, { mode: 0o600 });
     await writeFile(join(directory, 'runner.cjs'), runtimeSource, { mode: 0o600 });
+    const sandbox = backendSandbox(directory);
     return await new Promise((resolve, reject) => {
-      const child = spawn('bwrap', ['--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
-        '--ro-bind', '/usr/lib', '/usr/lib', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib', '/lib64',
-        '--ro-bind', process.execPath, '/node', '--ro-bind', directory, '/app', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--chdir', '/app',
-        '/node', '--max-old-space-size=64', '--disallow-code-generation-from-strings', '--permission', '--allow-fs-read=/app', '/app/runner.cjs'], { env: {}, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(sandbox.command, sandbox.args, { cwd: directory, env: {}, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '', stderr = '', failure = '';
       const timer = setTimeout(() => { failure = 'Backend execution timed out.'; child.kill('SIGKILL'); }, timeout);
       child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 5_000_000) { failure = 'Backend output is too large.'; child.kill('SIGKILL'); } });
       child.stderr.on('data', chunk => { if (stderr.length < 2000) stderr += chunk; });
-      child.on('error', () => { clearTimeout(timer); reject(new Error('The isolated backend runtime requires Bubblewrap (bwrap).')); });
+      child.on('error', () => { clearTimeout(timer); reject(new Error(sandbox.requirement)); });
       child.on('close', code => {
         clearTimeout(timer);
         if (failure) return reject(new Error(failure));

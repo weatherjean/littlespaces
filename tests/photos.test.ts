@@ -7,6 +7,8 @@ import {DatabaseSync} from 'node:sqlite';
 import sharp from 'sharp';
 const directory=mkdtempSync(join(tmpdir(),'little-photos-'));
 process.env.APP_DATA_DIR=directory;
+const { ownerStore } = await import('../src/lib/server/owner');
+ownerStore().configure('test@example.com','test-only-owner-password');
 const storage=await import('../src/lib/server/storage');
 const {importPhoto}=await import('../src/lib/server/photos');
 const {imageHistory,analyzePhotos,parsePlantIdentification}=await import('../src/lib/server/vision');
@@ -64,7 +66,7 @@ test('image history bounds retained images and tools cannot read other spaces',a
 });
 
 test('AI analysis uses inline images and never writes plant records',async()=>{
-  writeFileSync(join(directory,'credentials.json'),JSON.stringify({accessToken:'fake-test-token',scopes:['chatgpt.tokens.use.direct'],expiresAt:Date.now()+3_600_000}));
+  writeFileSync(join(directory,'credentials.json'),JSON.stringify({email:'test@example.com',emailVerified:true,accessToken:'fake-test-token',scopes:['chatgpt.tokens.use.direct'],expiresAt:Date.now()+3_600_000}));
   const plant={identified:true,name:'Fern',scientificName:'Test species',confidence:'medium',explanation:'Tentative identification',alternatives:['Another fern'],needsAnotherPhoto:false,intervalDays:7,wateringAdvice:'Check soil moisture first.'};
   globalThis.fetch=async(_url,init)=>{
     const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);

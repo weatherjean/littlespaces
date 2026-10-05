@@ -31,10 +31,10 @@
 </script>
 <svelte:head><title>Little Spaces</title></svelte:head>
 <main class="launcher">
-  <header class="launcher-header"><a class="wordmark" href="/" aria-label="Little Spaces home"><span class="brand-symbol"><Icon name="grid" size={20} /></span> little spaces<span class="beta-dot"></span></a><span class="local-indicator"><span></span> On this computer</span></header>
   {#if data.authError}<p class="error" role="alert">{data.authError}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <section class="launcher-content" aria-label="Your apps">
+    <header class="launcher-header"><a class="wordmark" href="/" aria-label="Little Spaces home"><span class="brand-symbol"><Icon name="grid" size={20} /></span> little spaces<span class="beta-dot"></span></a></header>
     <div class="launcher-intro"><h1>Your apps.</h1><p>Small tools. Built around you.</p></div>
     <div class="app-grid">
       <a class="app-tile" href="/chat"><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span><span>Chat</span></a>
@@ -47,4 +47,26 @@
   </section>
 </main>
 
-<style>.add-app{background:transparent;color:inherit;padding:10px 6px}</style>
+<style>
+  .launcher{max-width:960px;align-items:center;padding:clamp(48px,8vh,88px) 24px 48px}
+  .launcher-content{flex:initial;max-width:760px;padding:0;text-align:center}
+  .launcher-header{justify-content:center;margin-bottom:32px}
+  .launcher-intro{margin-bottom:40px}
+  .launcher-intro h1{font-size:clamp(30px,3vw,40px)}
+  .app-grid{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:28px 24px;width:100%;margin:0 auto}
+  .app-tile{flex:0 0 120px}
+  .add-app{background:transparent;color:inherit;padding:10px 6px}
+  .launcher-hint{max-width:420px;margin:32px auto 0}
+  .launcher>.error{width:100%;max-width:640px}
+  .launcher-content :global(.home-notifications){max-width:640px;margin:48px auto 0}
+  .launcher-content :global(.home-notifications>header){justify-content:center;flex-wrap:wrap;gap:16px}
+  .launcher-content :global(.home-notifications h2){margin-top:0}
+  @media(max-width:700px){
+    .launcher{padding:40px 20px}
+    .launcher-header{margin-bottom:28px}
+    .launcher-intro{margin-bottom:28px}
+    .app-grid{gap:24px 12px}
+    .app-tile{flex-basis:calc((100% - 24px)/3);max-width:120px}
+    .launcher-content :global(.home-notifications){margin-top:36px}
+  }
+</style>

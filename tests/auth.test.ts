@@ -8,12 +8,15 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 
 const directory = mkdtempSync(join(tmpdir(), 'little-spaces-auth-'));
 process.env.APP_DATA_DIR = directory;
+const { ownerStore } = await import('../src/lib/server/owner');
+ownerStore().configure('test@example.com', 'test-only-owner-password');
 const auth = await import('../src/lib/server/auth');
 const originalFetch = globalThis.fetch;
 const { publicKey, privateKey } = await generateKeyPair('RS256');
 const jwk = { ...await exportJWK(publicKey), kid: 'test-key', alg: 'RS256', use: 'sig' };
 let nonce = '', audience = 'oaiapp_test', grantedScopes = 'openid chatgpt.tokens.use.direct offline_access';
 let expiresIn = 3600;
+let email: string | undefined = 'test@example.com', emailVerified: boolean | undefined = true;
 let exchangeBody: URLSearchParams;
 let refreshed = 0;
 
@@ -26,7 +29,7 @@ globalThis.fetch = async (input, init) => {
       refreshed++;
       return Response.json({ access_token: 'renewed-access', refresh_token: 'rotated-refresh', scope: grantedScopes, expires_in: 3600 });
     }
-    const idToken = await new SignJWT({ nonce, name: 'Test User', email: 'test@example.com' })
+    const idToken = await new SignJWT({ nonce, name: 'Test User', email, email_verified: emailVerified })
       .setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer('https://auth.openai.com')
       .setAudience(audience).setSubject('test-subject').setIssuedAt().setExpirationTime('1h').sign(privateKey);
     return Response.json({ id_token: idToken, access_token: 'test-access', refresh_token: 'test-refresh', scope: grantedScopes, expires_in: expiresIn });
@@ -94,4 +97,14 @@ test('concurrent renewal rotates credentials exactly once', async () => {
   assert.equal(returning.params.has('agent_name_hint'), false);
   auth.signOut();
   assert.equal(auth.account(), null);
+});
+
+ test('ChatGPT connection rejects wrong, missing, or unverified email without saving credentials', async () => {
+  for (const [address, verified] of [['other@example.com',true],['test@example.com',false],[undefined,true],['test@example.com',undefined]] as const) {
+    email = address; emailVerified = verified;
+    const a = attempt();
+    await assert.rejects(() => auth.finishSignIn(a.callback,a.state), /not allowed/);
+    assert.equal(auth.account(),null);
+  }
+  email='test@example.com'; emailVerified=true;
 });
