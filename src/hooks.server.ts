@@ -1,3 +1,4 @@
+import { startScheduler } from '$lib/server/scheduler';
 import { building } from '$app/environment';
 import { isHttpError, isRedirect, type Handle, type HandleServerError } from '@sveltejs/kit';
 import { guard, privateHeaders } from '$lib/server/access-control';
@@ -5,7 +6,10 @@ import { initializeOwnerSetup } from '$lib/server/setup';
 import { logEvent } from '$lib/server/diagnostics';
 
 export function init() {
-  if (!building) initializeOwnerSetup();
+  if (!building) {
+    initializeOwnerSetup();
+    startScheduler();
+  }
 }
 export const handle: Handle = async ({ event, resolve }) => {
   try {

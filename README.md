@@ -1,6 +1,6 @@
 # Little Spaces
 
-A private, single-owner app launcher built with SvelteKit and TypeScript. Chat builds personal apps; each app has a scoped chat agent, an optional tested TypeScript backend, and its own SQLite database.
+A private, single-owner app launcher built with SvelteKit and TypeScript. Knowledge chat answers questions using your apps; Build mode creates personal apps; each app has a scoped chat agent, an optional tested TypeScript backend, and its own SQLite database.
 
 ## Run
 
@@ -11,9 +11,9 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173** (use that exact address, not `localhost`). On first startup, copy the private setup link from the server terminal and open it to create your owner email and password. The link expires after 30 minutes and registration closes once the owner exists. Visitors without the link see only “Setup required.” After setup, sign in with your owner email and password. Home contains **Chat**, **Settings**, and your app icons. Connect ChatGPT in Settings, then describe an app in Chat. New apps appear on Home. Opening an app shows its UI directly, with **Home** and **Chat** in the bottom bar. The app's chat opens in a modal: use it to change the app or interact with its data. Each app supports multiple separate conversations.
+Open **http://127.0.0.1:5173** (use that exact address, not `localhost`). On first startup, copy the private setup link from the server terminal and open it to create your owner email and password. The link expires after 30 minutes and registration closes once the owner exists. Visitors without the link see only “Setup required.” After setup, sign in with your owner email and password. Home contains **Chat**, **Settings**, and your app icons. Connect ChatGPT in Settings, then select Build in Chat and describe an app. Knowledge is the default for questions and reading your apps’ data. New apps appear on Home. Opening an app shows its UI directly, with **Home** and **Chat** in the bottom bar. The app's chat opens in a modal: use it to change the app or interact with its data. Each app supports multiple separate conversations.
 
-Settings also offers a plant tracker demo that runs without connecting ChatGPT. Its UI and agent share tested backend actions. Manual tracking works without connecting ChatGPT; photo identification uses your connected ChatGPT account.
+Settings lets you archive apps and restore them later. Archiving hides an app from Home and Knowledge chat and pauses its reminders and scheduled checks, while preserving its records, photos, and conversations. Restoring resumes its schedules, with missed recurrences coalesced into one check.
 
 Every server restart requires a fresh browser login. Three failed email/password attempts lock login for five minutes, including across restarts. Use `npm run owner:reset` in the terminal for recovery. See [installation, VPS/tunnel hosting, ChatGPT connection, and update planning](docs/self-hosting.md).
 
@@ -50,6 +50,7 @@ Keep the local server running while using the app. Browser installation support 
 ```text
 .data/
   owner.sqlite             # Owner password hash and persistent login lockout
+  secrets.key              # Encryption key for the Settings secret vault; include in backups
   credentials.json          # Local OAuth credentials; owner-only permissions
   workspace.sqlite         # Spaces, conversations, chat history, and stable host identifier
   applets/
@@ -79,7 +80,7 @@ The integration follows the official [registration guide](https://developers.ope
 ## Prototype limits
 
 - Single-owner, single-process server. Public installations require HTTPS through a trusted reverse proxy or tunnel; keep the Node port private. See the self-hosting guide. The Vite development server is local only.
-- No background push reminders or cross-device sync. Applets request image analysis through the host SDK; scoped chat can read and change data through the app action API.
+- No cross-device sync. Background reminders and scheduled read-only ChatGPT checks require the server to remain running. Web Push requires an enabled, supported device. Applets request image analysis through the host SDK; scoped chat can read and change data through the app action API.
 - Photos accept still JPEG, PNG, or WebP up to 8 MiB and 40 million pixels. The host rotates and resizes them to at most 2048 pixels per side, strips metadata, and stores JPEGs locally. Each space allows 500 photos or 200 MB. Chat accepts four attachments per message and includes up to eight recent images in model context; the agent can retrieve older images. Removing a draft attachment does not delete its local photo.
 - One app per home icon; no external applet dependencies. Build errors leave existing code and records intact and are shown in chat.
 - Up to 2,000 records per applet; 100 KB JSON per record; 80 KB each for UI and backend source; 4 MB data snapshots per backend execution. The agent receives up to 30 prior messages and current source; it can read the selected app’s data through tools.
@@ -98,6 +99,8 @@ The hardening regression suite also covers backend write bypasses, revision race
 ## Development diagnostics
 
 Detailed local traces are enabled in `.data/logs`: prompts, model responses, tools, tests, publications, record changes, timings, and errors. Credentials and image bytes are excluded; conversation text and app data are included. Use `npm run logs -- --event chat --limit 20` to find a trace. See [diagnostics](docs/diagnostics.md) for filtering, retention, and limits.
+
+Settings includes encrypted secrets (metadata only for the model), scheduled-check management, PWA installation guidance, and per-device Web Push controls. Chat defaults to Knowledge; select Build to create or change app code. See the backend contract for scheduler and notification APIs.
 
 The host uses a soft dark shell with colorful emoji app icons and subtle blue accents. Home and the app bottom bar share a notification inbox for app updates and scheduled in-app reminders. Applets can use the notification SDK described in the backend contract. Settings also offers Expert mode, which shows and persists new tool calls directly in chat.
 

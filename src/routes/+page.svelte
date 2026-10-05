@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ConnectChatGPT from '$lib/components/ConnectChatGPT.svelte';
   import { appEmoji } from '$lib/app-emoji';
   import Notifications from '$lib/components/Notifications.svelte';
   import { onMount } from 'svelte';
@@ -9,20 +10,28 @@
   let { data }: { data: PageData } = $props();
   let creating = $state(false),
     error = $state('');
-  async function addApp() {
+  async function openChat(build = false) {
+    if (!data.account?.canUsePlan) {
+      await goto('/chat');
+      return;
+    }
     if (creating) return;
     creating = true;
     error = '';
     try {
       const { chat } = await request(`/api/spaces/${data.chatSpaceId}/chats`, {
-        launch: {
-          title: 'Create an app',
-          task: 'New app creation from the home launcher. Help the user shape and build a personal app from their own description.',
-          welcome:
-            'What would you like to make? Describe what you want to track, organize, or get done. We’ll shape it together, and your new app will appear on Home.',
-        },
+        ...(build
+          ? {
+              launch: {
+                title: 'Create an app',
+                task: 'New app creation from the home launcher. Help the user shape and build a personal app from their own description.',
+                welcome:
+                  'What would you like to make? Describe what you want to track, organize, or get done. We’ll shape it together, and your new app will appear on Home.',
+              },
+            }
+          : {}),
       });
-      await goto(`/chat/${chat.id}`, { invalidateAll: true });
+      await goto(`/chat/${chat.id}${build ? '?mode=build' : ''}`, { invalidateAll: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not open a new chat.';
     } finally {
@@ -54,10 +63,11 @@
       <h1>Your apps.</h1>
       <p>Small tools. Built around you.</p>
     </div>
+    {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
     <div class="app-grid">
-      <a class="app-tile" href="/chat"
+      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat()}
         ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span
-        ><span>Chat</span></a
+        ><span>Chat</span></button
       >
       {#each data.spaces as space, i (space.id)}<a
           class="app-tile"
@@ -67,7 +77,7 @@
             ></span
           ><span>{space.name}</span>{#if !space.appletCount}<small>In progress</small>{/if}</a
         >{/each}
-      <button class="app-tile add-app" disabled={creating} onclick={addApp}
+      <button class="app-tile add-app" disabled={creating} onclick={() => openChat(true)}
         ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">✨</span></span
         ><span>{creating ? 'Opening…' : 'Add new'}</span></button
       >
@@ -77,7 +87,7 @@
         ><span>Settings</span></a
       >
     </div>
-    {#if !data.spaces.length}<p class="launcher-hint">
+    {#if data.account?.canUsePlan && !data.spaces.length}<p class="launcher-hint">
         Choose Add new and describe an app. It will find a home here.
       </p>{/if}
     <Notifications home />
@@ -118,7 +128,8 @@
   .app-tile {
     flex: 0 0 120px;
   }
-  .add-app {
+  .add-app,
+  .chat-tile {
     background: transparent;
     color: inherit;
     padding: 10px 6px;

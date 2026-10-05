@@ -50,7 +50,7 @@ export function listNotifications(spaceId?: string, includeFuture = false): Noti
   return workspace((db) =>
     db
       .prepare(
-        `SELECT n.*,s.name AS source FROM notifications n JOIN spaces s ON s.id=n.space_id WHERE (? IS NULL OR n.space_id=?) AND (? OR n.due_at<=?) ORDER BY n.due_at DESC`,
+        `SELECT n.*,s.name AS source FROM notifications n JOIN spaces s ON s.id=n.space_id WHERE s.archived=0 AND (? IS NULL OR n.space_id=?) AND (? OR n.due_at<=?) ORDER BY n.due_at DESC`,
       )
       .all(spaceId || null, spaceId || null, includeFuture ? 1 : 0, new Date().toISOString())
       .map((row) => ({

@@ -18,6 +18,7 @@ export const load: PageServerLoad = ({ params, depends }) => {
   } catch {
     error(404, 'App not found.');
   }
+  if (space.archived) redirect(303, '/settings#apps');
   const chats = listChats(space.id);
   const applet = spaceApplets(space.id)[0] || null;
   if (!params.view) redirect(307, `/spaces/${space.id}/applet`);

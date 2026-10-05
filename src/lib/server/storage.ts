@@ -153,7 +153,7 @@ function requireLegacyWrites(db: DatabaseSync) {
 
 export const spaceIcons = ['grid', 'leaf', 'book', 'check', 'home', 'spark'];
 
-export function listSpaces(): Space[] {
+export function listSpaces(includeArchived = false): Space[] {
   // Import previous applets as spaces with the same IDs, retaining their chat threads.
   const legacy = listApplets();
   return workspace((db) => {
@@ -191,13 +191,14 @@ export function listSpaces(): Space[] {
     }
     return db
       .prepare(
-        `SELECT s.id, s.name, s.icon, s.updated_at AS updatedAt, COUNT(a.applet_id) AS appletCount
-      FROM spaces s LEFT JOIN space_applets a ON a.space_id = s.id GROUP BY s.id ORDER BY s.updated_at DESC`,
+        `SELECT s.id, s.name, s.icon, s.archived, s.updated_at AS updatedAt, COUNT(a.applet_id) AS appletCount
+      FROM spaces s LEFT JOIN space_applets a ON a.space_id = s.id WHERE (? OR s.archived=0) GROUP BY s.id ORDER BY s.updated_at DESC`,
       )
-      .all()
+      .all(includeArchived ? 1 : 0)
       .map((row) => ({
         id: String(row.id),
         name: String(row.name),
+        archived: Boolean(row.archived),
         icon: String(row.icon),
         updatedAt: String(row.updatedAt),
         appletCount: Number(row.appletCount),
@@ -206,9 +207,18 @@ export function listSpaces(): Space[] {
 }
 
 export function getSpace(id: string): Space {
-  const space = listSpaces().find((item) => item.id === id);
+  const space = listSpaces(true).find((item) => item.id === id);
   if (!space) throw new Error('Space not found.');
   return space;
+}
+
+export function setSpaceArchived(id: string, archived: boolean): Space {
+  if (id === launcherChatId) throw new Error('The built-in Chat cannot be archived.');
+  getSpace(id);
+  workspace((db) =>
+    db.prepare('UPDATE spaces SET archived=? WHERE id=?').run(archived ? 1 : 0, id),
+  );
+  return getSpace(id);
 }
 
 export function createSpace(name: string, icon = 'grid'): Space {

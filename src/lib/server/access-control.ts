@@ -5,12 +5,30 @@ import { ownerStore } from './owner';
 
 const publicAssets = new Set([
   '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-180.png',
   '/manifest.webmanifest',
   '/offline.html',
   '/service-worker.js',
   '/service-worker.mjs',
 ]);
 export function guard(event: RequestEvent) {
+  // adapter-node uses the configured ORIGIN for event.url, even when the browser
+  // requested a loopback alias. Redirect safe requests before rendering any forms.
+  const configuredOrigin = new URL(origin);
+  if (
+    configuredOrigin.protocol === 'http:' &&
+    ['127.0.0.1', 'localhost', '[::1]'].includes(configuredOrigin.hostname) &&
+    ['GET', 'HEAD'].includes(event.request.method)
+  ) {
+    const suffix = configuredOrigin.port ? `:${configuredOrigin.port}` : '';
+    const host = event.request.headers.get('host')?.toLowerCase();
+    const aliases = ['127.0.0.1', 'localhost', '[::1]'].map((name) => name + suffix);
+    if (host && host !== configuredOrigin.host && aliases.includes(host))
+      redirect(307, origin + event.url.pathname + event.url.search);
+  }
+
   if (event.url.origin !== origin) error(403, 'Unexpected app origin.');
   requireSameOrigin(event);
   const path = event.url.pathname;

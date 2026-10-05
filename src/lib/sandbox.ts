@@ -16,6 +16,7 @@ export function appletDocument(bundle: string, nonce: string): string {
       event.data.error ? item.reject(new Error(event.data.error)) : item.resolve(event.data.result);
     });
     window.applet = Object.freeze({
+      schedules: Object.freeze({save:(input)=>call('schedules.save',input),list:()=>call('schedules.list',{}),cancel:(key)=>call('schedules.cancel',{key})}),
       notifications: Object.freeze({send: (input)=>call('notifications.send',input),list:()=>call('notifications.list',{}),cancel:(key)=>call('notifications.cancel',{key})}),
       chat: Object.freeze({ open: (options) => call('chat.open', options) }),
       photos: Object.freeze({

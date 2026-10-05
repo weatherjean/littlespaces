@@ -8,6 +8,7 @@ worker.addEventListener('install', (event) => {
   event.waitUntil(caches.open(cacheName).then((cache) => cache.addAll(assets)));
 });
 worker.addEventListener('activate', (event) => {
+  event.waitUntil(worker.clients.claim());
   event.waitUntil(
     caches
       .keys()
@@ -42,4 +43,45 @@ worker.addEventListener('fetch', (event) => {
       ),
     );
   }
+});
+
+worker.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') void worker.skipWaiting();
+});
+worker.addEventListener('push', (event) => {
+  let value: { title?: string; body?: string; href?: string; id?: string } = {};
+  try {
+    value = event.data?.json() || {};
+  } catch {
+    /* Show a generic notification. */
+  }
+  const href =
+    typeof value.href === 'string' && /^\/(chat|spaces\/)/.test(value.href) ? value.href : '/';
+  event.waitUntil(
+    worker.registration.showNotification(value.title || 'Little Spaces', {
+      body: value.body || 'You have a new notification.',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: value.id,
+      data: { href },
+    }),
+  );
+});
+worker.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.href || '/', worker.location.origin);
+  if (url.origin !== worker.location.origin) return;
+  event.waitUntil(
+    (async () => {
+      const clients = await worker.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        if (new URL(client.url).origin === url.origin) {
+          await client.navigate(url.href);
+          await client.focus();
+          return;
+        }
+      }
+      await worker.clients.openWindow(url.href);
+    })(),
+  );
 });

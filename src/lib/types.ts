@@ -11,6 +11,7 @@ export type Space = {
   icon: string;
   updatedAt: string;
   appletCount: number;
+  archived: boolean;
 };
 export type ChatLaunch = {
   task: string;

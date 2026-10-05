@@ -57,6 +57,17 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));`);
     db.exec(`CREATE TABLE IF NOT EXISTS chat_tools (id TEXT PRIMARY KEY, thread TEXT NOT NULL, message_id INTEGER, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, space_id TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, due_at TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, UNIQUE(space_id,key));`);
+    db.exec(`CREATE TABLE IF NOT EXISTS secrets (name TEXT PRIMARY KEY, description TEXT NOT NULL, ciphertext TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, space_id TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, prompt TEXT NOT NULL, cron TEXT, timezone TEXT NOT NULL, model TEXT NOT NULL, next_run TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run TEXT, last_error TEXT, UNIQUE(space_id,key));
+      CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, subscription TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS push_deliveries (endpoint TEXT NOT NULL, notification_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(endpoint,notification_id));`);
+    if (
+      !db
+        .prepare('PRAGMA table_info(spaces)')
+        .all()
+        .some((row) => row.name === 'archived')
+    )
+      db.exec('ALTER TABLE spaces ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
     db.exec(photoSchema);
     if (
       !db

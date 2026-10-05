@@ -1,9 +1,12 @@
 <script lang="ts">
+  import AppSettings from '$lib/components/AppSettings.svelte';
+  import DeviceSettings from '$lib/components/DeviceSettings.svelte';
+  import AutomationSettings from '$lib/components/AutomationSettings.svelte';
   import { expertMode } from '$lib/preferences';
   import Notifications from '$lib/components/Notifications.svelte';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
-  import { goto, invalidateAll } from '$app/navigation';
+  import { invalidateAll } from '$app/navigation';
   import type { PageData } from './$types';
   import Icon from '$lib/components/Icon.svelte';
   import { request } from '$lib/client';
@@ -39,19 +42,6 @@
       await invalidateAll();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Sign-out failed.';
-    } finally {
-      busy = false;
-    }
-  }
-  async function demo() {
-    busy = true;
-    error = '';
-    try {
-      const { space } = await request('/api/spaces', { name: 'Plants', icon: 'leaf' });
-      await request('/api/applets', { template: 'plants', spaceId: space.id });
-      await goto(`/spaces/${space.id}/applet`, { invalidateAll: true });
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Could not create demo.';
     } finally {
       busy = false;
     }
@@ -123,14 +113,11 @@
         }}
       />
     </section>
-    <section class="setting-card">
-      <div class="setting-icon"><Icon name="leaf" size={24} /></div>
-      <div>
-        <h3>Try a little app</h3>
-        <p>A plant journal with a tested TypeScript backend.</p>
-      </div>
-      <button class="secondary-button" disabled={busy} onclick={demo}>Add plant tracker</button>
-    </section>
+    <AppSettings apps={data.apps} />
+    <DeviceSettings />
+    <AutomationSettings
+      archivedSpaceIds={data.apps.filter((app) => app.archived).map((app) => app.id)}
+    />
     <p class="settings-footnote">
       Your apps and their data stay on this server. AI requests are sent through your connected
       ChatGPT account.

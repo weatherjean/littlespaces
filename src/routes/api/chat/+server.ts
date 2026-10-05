@@ -129,6 +129,7 @@ export const POST: RequestHandler = async (event) => {
             },
             abort.signal,
             {
+              mode: input.mode === 'build' ? 'build' : 'knowledge',
               spaceId,
               chatId: thread,
               appletId: id,

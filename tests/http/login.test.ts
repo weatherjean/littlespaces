@@ -84,10 +84,32 @@ test('production HTTP login protects data, locks after three failures, and inval
       '/api/applets',
       '/api/spaces',
       '/api/notifications',
+      '/api/settings/secrets',
+      '/api/settings/schedules',
+      '/api/settings/push',
+      '/api/spaces/private/schedules',
       '/api/spaces/private/photos/private',
       '/auth/callback?state=forged',
     ])
       assert.equal((await request(path)).status, 401, path);
+    for (const path of ['/icon-192.png', '/icon-512.png', '/icon-180.png', '/manifest.webmanifest'])
+      assert.equal((await request(path)).status, 200);
+    const aliasLogin = await fetch(`http://localhost:${port}/login?from=settings`, {
+      redirect: 'manual',
+    });
+    assert.equal(aliasLogin.status, 307);
+    assert.equal(aliasLogin.headers.get('location'), `${origin}/login?from=settings`);
+    const aliasPost = await fetch(`http://localhost:${port}/login`, {
+      redirect: 'manual',
+      method: 'POST',
+      headers: {
+        host: `localhost:${port}`,
+        origin: `http://localhost:${port}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'email=unused&password=unused',
+    });
+    assert.equal(aliasPost.status, 403, 'cross-origin writes remain blocked, never redirected');
     const loginPage = await request('/login');
     const html = await loginPage.text();
     assert.ok(html.includes('Welcome home.'));
@@ -128,8 +150,50 @@ test('production HTTP login protects data, locks after three failures, and inval
     assert.ok(first);
     assert.match(accepted.headers.getSetCookie().join(';'), /HttpOnly/i);
     assert.equal((await request('/settings', { headers: { cookie: first } })).status, 200);
+    const homeHtml = await (await request('/', { headers: { cookie: first } })).text();
+    assert.match(homeHtml, /ChatGPT connection required/);
+    const chatRedirect = await request('/chat', { headers: { cookie: first } });
+    const disconnectedChat = await (
+      await request(chatRedirect.headers.get('location')!, { headers: { cookie: first } })
+    ).text();
+    assert.match(disconnectedChat, /Connect ChatGPT/);
+    assert.ok(!disconnectedChat.includes('aria-label="Message"'));
+    assert.ok(!disconnectedChat.includes('What’s on your mind?'));
+    assert.ok(!disconnectedChat.includes('Choose conversation:'));
     assert.equal((await request('/api/spaces', { headers: { cookie: first } })).status, 200);
     const headers = { origin, cookie: first, 'content-type': 'application/json' };
+    const savedSecret = await request('/api/settings/secrets', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: 'HTTP_KEY',
+        description: 'A test credential',
+        value: 'never-return-this-value',
+      }),
+    });
+    assert.equal(savedSecret.status, 200);
+    assert.ok(!(await savedSecret.text()).includes('never-return-this-value'));
+    const secretList = await request('/api/settings/secrets', { headers });
+    const secretText = await secretList.text();
+    assert.ok(secretText.includes('HTTP_KEY'));
+    assert.ok(!secretText.includes('never-return-this-value'));
+    const csrfSecret = await request('/api/settings/secrets', {
+      method: 'POST',
+      headers: { ...headers, origin: 'https://evil.example' },
+      body: JSON.stringify({ name: 'HTTP_KEY', value: 'bad', description: '' }),
+    });
+    assert.equal(csrfSecret.status, 403);
+    const unsafePush = await request('/api/settings/push', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        subscription: {
+          endpoint: 'https://127.0.0.1/internal',
+          keys: { p256dh: 'A'.repeat(87), auth: 'A'.repeat(22) },
+        },
+      }),
+    });
+    assert.equal(unsafePush.status, 400);
     const created = await request('/api/applets', {
       method: 'POST',
       headers,
@@ -137,6 +201,38 @@ test('production HTTP login protects data, locks after three failures, and inval
     });
     assert.equal(created.status, 200, await created.clone().text());
     const { applet } = await created.json();
+    const scheduled = await request(`/api/spaces/${applet.id}/schedules`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        key: 'check',
+        title: 'Check plants',
+        prompt: 'Inspect current plants',
+        model: 'test-model',
+        timezone: 'UTC',
+        dueAt: '2099-01-01T00:00:00Z',
+      }),
+    });
+    assert.equal(scheduled.status, 200, await scheduled.clone().text());
+    const settingsHtml = await (await request('/settings', { headers })).text();
+    assert.ok(!settingsHtml.includes('Add plant tracker'));
+    const archive = await request('/api/settings/apps', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: applet.id, archived: true }),
+    });
+    assert.equal(archive.status, 200);
+    assert.equal((await archive.json()).space.archived, true);
+    const activeSpaces = await (await request('/api/spaces', { headers })).json();
+    assert.ok(!activeSpaces.spaces.some((space: { id: string }) => space.id === applet.id));
+    const archivedPage = await request(`/spaces/${applet.id}/applet`, { headers });
+    assert.equal(archivedPage.headers.get('location'), '/settings#apps');
+    const restore = await request('/api/settings/apps', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: applet.id, archived: false }),
+    });
+    assert.equal(restore.status, 200);
     const action = await request(`/api/applets/${applet.id}/actions`, {
       method: 'POST',
       headers,
@@ -211,6 +307,10 @@ test('production HTTP login protects data, locks after three failures, and inval
     owner.configure('owner@example.com', password, true);
     const third = cookie(await login());
     assert.ok(third);
+    const persisted = await request('/api/settings/schedules', { headers: { cookie: third } });
+    assert.equal((await persisted.json()).schedules[0].key, 'check');
+    const persistedSecret = await request('/api/settings/secrets', { headers: { cookie: third } });
+    assert.equal((await persistedSecret.json()).secrets[0].name, 'HTTP_KEY');
     owner.configure('owner@example.com', 'new temporary http password', true);
     assert.equal(
       (await request('/api/spaces', { headers: { cookie: third } })).status,

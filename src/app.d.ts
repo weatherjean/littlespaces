@@ -6,6 +6,19 @@ declare global {
   }
   interface Window {
     applet: {
+      schedules: {
+        save(input: {
+          key: string;
+          title: string;
+          prompt: string;
+          model: string;
+          timezone: string;
+          cron?: string;
+          dueAt?: string;
+        }): Promise<unknown>;
+        list(): Promise<unknown[]>;
+        cancel(key: string): Promise<{ cancelled: boolean }>;
+      };
       notifications: {
         send(input: {
           key: string;

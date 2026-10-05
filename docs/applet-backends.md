@@ -77,7 +77,7 @@ Call `pick` from a user action. It offers file selection and native camera captu
 
 Analysis sends selected images through the connected ChatGPT account using the host's selected model. It requires sign-in and has no separately billed API fallback. Display uncertain identifications honestly, let users edit suggestions, and require confirmation before saving plant details. Backend actions remain isolated from the network; the UI requests analysis and passes confirmed data to a backend action. Scoped chat can also list and inspect saved photos.
 
-GPT speech, arbitrary network access, package dependencies, and background jobs are not implemented. Browser voice remains available where supported.
+GPT speech, arbitrary network access, and package dependencies are not implemented. Background work uses the host’s scheduled read-only agent turns described below. Browser voice remains available where supported.
 
 ## App-defined conversations
 
@@ -123,4 +123,34 @@ await window.applet.notifications.cancel(`water:${plant.key}`);
 
 The host binds these operations to the frame's space. Stable keys deduplicate notifications within an app, and an identical update with the same due date preserves read state. Rescheduling or changing contents makes it unread again. Supply a stable due date when synchronizing from stored data, rather than generating a new date every render. Apps have a limit of 500 stored notifications each. The agent has equivalent `notify`, `list_notifications`, and `cancel_notification` tools for user-requested reminders. Cancel/reschedule reminders when their associated record changes or is removed.
 
-Due items appear in a persistent inbox on Home and through the bottom-bar Inbox button; selecting an item opens its originating app. Read state is shared across these views. The host checks every 30 seconds and when the window regains focus. These are in-app notifications, including future scheduled items; OS push, background applet execution, and delivery while the local server is stopped are not implemented. Existing applets can adopt the SDK through their scoped chat. Build completions automatically create a notification.
+Due items appear in a persistent inbox on Home and through the bottom-bar Inbox button; selecting an item opens its originating app. Read state is shared across these views. The host checks every 30 seconds and when the window regains focus. Due reminders also reach devices that enabled Web Push in Settings. Arbitrary background applet execution and delivery while the local server is stopped are not supported. Existing applets can adopt the SDK through their scoped chat. Build completions automatically create a notification.
+
+## Knowledge chat, secrets, and background checks
+
+Chat opens in **Knowledge** mode. Home Chat can list apps and read paginated records across them; it cannot write another app's records. App-scoped chat keeps its normal data actions. Select **Build** to expose the draft/test/publish tools for creating or changing code.
+
+Settings stores named secrets encrypted with AES-256-GCM. Names and descriptions are available through the agent's `list_secrets` tool; values are write-only from the UI and never enter model context or applet code. Adding the same name rotates its value. This is a vault and discovery mechanism; external API calls using these secrets are not yet supported. Keep values out of descriptions, chat, and app records.
+
+For a fixed reminder, use `window.applet.notifications.send({key,title,body,dueAt})`. The server makes it visible when due and sends Web Push to enabled devices, without requiring an open browser tab. Cancel or reschedule obsolete reminders when the underlying record changes.
+
+For a check requiring fresh reasoning, ask the app's chat to use `schedule_turn`, or use the scoped bridge:
+
+```ts
+await window.applet.schedules.save({
+  key: 'daily-plant-check',
+  title: 'Plant care',
+  prompt:
+    'Read the current plants and watering dates. Tell me which plants need a soil check today.',
+  model: 'a-model-id-available-to-the-connected-account',
+  cron: '0 9 * * *',
+  timezone: 'Europe/Ljubljana',
+});
+await window.applet.schedules.list();
+await window.applet.schedules.cancel('daily-plant-check');
+```
+
+Use `dueAt` (an ISO timestamp) instead of `cron` for a one-time agent turn. Cron expressions have five fields and use an explicit IANA timezone, including daylight-saving changes. Ask before choosing an ambiguous timezone. Only create schedules following the user's request. Prefer chat to configure them with the selected account model.
+
+The single-process server checks due work every 30 seconds. Schedules persist across restarts. Missed recurring runs coalesce into one check; runs are claimed before inference to avoid replaying a claimed turn after restart. An interrupted run leaves a delayed failure/status notification rather than automatically charging for a retry. Each turn has a two-minute inference budget, can only read app data, and updates its own inbox notification with the result or failure. Recurring results reuse one inbox entry per schedule. Settings lists next runs, errors, and removal controls. Scheduled turns cannot build, mutate app records, create further schedules, or send arbitrary notifications.
+
+Device push is optional, enabled separately on each device in Settings. Inbox reminders work without push permission. Push delivery is retried on transient errors; expired subscriptions are removed. Delivery is best-effort and the server must stay running. Push-provider acceptance is not a guarantee the OS displayed the notification. Delivery may duplicate if the server stops after sending but before recording its acknowledgement. Old inbox items are not pushed when a device first subscribes.

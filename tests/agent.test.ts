@@ -255,3 +255,25 @@ test('legacy source in a final reply cannot bypass builder tools', async () => {
   );
   assert.equal(storage.listApplets().length, before);
 });
+
+test('scheduled turns refuse writable backend actions at the current revision', async () => {
+  const { appTools } = await import('../src/lib/server/app-tools');
+  const tools = await appTools(app.id, undefined, undefined, 'scheduled');
+  const before = storage.records(app.id);
+  await assert.rejects(
+    tools.execute('invoke', {
+      action: 'addPlant',
+      inputJSON: JSON.stringify({ name: 'Must not exist', interval: 7 }),
+    }),
+    /only read/,
+  );
+  const { callApp } = await import('../src/lib/server/backend');
+  await assert.rejects(
+    callApp(app.id, 'addPlant', { name: 'Still forbidden', interval: 7 }, true),
+    /only read/,
+  );
+  assert.deepEqual(storage.records(app.id), before);
+  assert.ok(
+    Array.isArray(await tools.execute('invoke', { action: 'listPlants', inputJSON: '{}' })),
+  );
+});

@@ -74,6 +74,9 @@
           'photos.analyze',
           'chat.open',
           'diagnostics.report',
+          'schedules.save',
+          'schedules.list',
+          'schedules.cancel',
           'notifications.send',
           'notifications.list',
           'notifications.cancel',
@@ -93,7 +96,19 @@
       }
       inFlight++;
       try {
-        if (request.method.startsWith('notifications.')) {
+        if (request.method.startsWith('schedules.')) {
+          const response = await hostRequest(
+            `/api/spaces/${currentOwner}/schedules`,
+            request.method === 'schedules.list'
+              ? undefined
+              : {
+                  ...request.params,
+                  action: request.method === 'schedules.cancel' ? 'cancel' : 'save',
+                },
+          );
+          reply(response);
+          return;
+        } else if (request.method.startsWith('notifications.')) {
           const value = await hostRequest(
             `/api/spaces/${currentOwner}/notifications`,
             request.method === 'notifications.list'

@@ -67,7 +67,7 @@ async function actionsForRevision(id: string, current: Revision): Promise<Action
   return catalog;
 }
 
-export async function callApp(id: string, name: string, input: unknown) {
+export async function callApp(id: string, name: string, input: unknown, readOnlyOnly = false) {
   return trace('action', { appletId: id, action: name }, async () => {
     logEvent('action.input', { input });
     const current = revision(id);
@@ -76,6 +76,7 @@ export async function callApp(id: string, name: string, input: unknown) {
       throw new Error('The app changed during this action. Please retry.');
     const action = actions.find((action) => action.name === name);
     if (!action) throw new Error('Unknown app action.');
+    if (readOnlyOnly && !action.readOnly) throw new Error('This turn can only read app data.');
     const ajv = schemaValidator();
     const validate = ajv.compile(action.parameters);
     if (!validate(input))

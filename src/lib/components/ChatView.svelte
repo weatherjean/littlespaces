@@ -65,6 +65,11 @@
     model = $state('');
   let models = $state<Model[]>([]);
   let effort = $state('default');
+  let mode = $state<'knowledge' | 'build'>(
+    untrack(() =>
+      launcher && page.url.searchParams.get('mode') === 'build' ? 'build' : 'knowledge',
+    ),
+  );
   let efforts = $derived(models.find((item) => item.slug === model)?.efforts || []);
   let createdApp = $state<string | null>(null);
   let busy = $state(false),
@@ -140,6 +145,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          mode,
           photos: sentPhotos.map((photo) => photo.id),
           model,
           effort,
@@ -249,18 +255,20 @@
     {#if !chat.length}<div class="chat-welcome">
         <span class="card-icon"><Icon name="spark" size={28} /></span>
         <h2>
-          {activeChat.launch?.title ||
-            (launcher
-              ? 'An idea is all you need.'
-              : applet
-                ? 'What can we do for you?'
-                : 'What would you like to build?')}
+          {launcher
+            ? mode === 'build'
+              ? 'What would you like to build?'
+              : 'What’s on your mind?'
+            : activeChat.launch?.title ||
+              (applet ? 'What can we do for you?' : 'What would you like to build?')}
         </h2>
         <p>
-          {activeChat.launch?.welcome ||
-            (launcher
-              ? 'Ask anything, or describe an app you wish existed.'
-              : applet
+          {launcher
+            ? mode === 'build'
+              ? 'Describe an app you wish existed.'
+              : 'Ask a question, explore your apps’ data, or connect the dots.'
+            : activeChat.launch?.welcome ||
+              (applet
                 ? 'Ask about your data, get something done, or change how this app works.'
                 : 'Describe your app. We’ll build it here, just for you.')}
         </p>
@@ -286,7 +294,7 @@
       >{/if}
     {#if busy}<p class="status">{status}</p>{/if}
   </div>
-  {#if activeChat.launch}<details class="chat-context">
+  {#if activeChat.launch && (!launcher || mode === 'build')}<details class="chat-context">
       <summary>{activeChat.launch.title || 'App task'} · App context</summary>
       <p>{activeChat.launch.task}</p>
       {#if activeChat.launch.recordKeys?.length}<p>
@@ -363,6 +371,9 @@
         }}></textarea>
       <div class="composer-controls">
         <div class="model-controls">
+          <select aria-label="Chat mode" bind:value={mode} disabled={busy}>
+            <option value="knowledge">Knowledge</option><option value="build">Build</option>
+          </select>
           <select
             aria-label="Model"
             bind:value={model}
@@ -417,7 +428,9 @@
     </form>
     <p class="composer-note">
       {launcher
-        ? 'Your next app starts with a conversation.'
+        ? mode === 'build'
+          ? 'Create a new app with a conversation.'
+          : 'Answers with context from your apps.'
         : 'Connected to this app’s data and actions.'}
     </p>
   </div>
