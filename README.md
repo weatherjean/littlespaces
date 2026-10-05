@@ -1,5 +1,7 @@
 # LittleSpaces
 
+> **Work in progress.** Expect bugs and breaking changes. Back up your data; this isn't ready for critical use.
+
 ![LittleSpaces — Make your own apps. Just ask.](docs/assets/readme-banner.gif)
 
 **Make your own apps. Just ask.**
