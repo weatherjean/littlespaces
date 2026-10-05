@@ -10,14 +10,9 @@ A plant journal, a reading tracker, that oddly specific tool you've always wante
 
 ## Get started
 
-Requires Node.js 24+, npm, and macOS or Linux. On Linux, install Bubblewrap (`bwrap`) too.
+**[Copy the setup prompt into Codex →](docs/get-started.md)** It will install LittleSpaces on your computer or VPS and guide you through setup.
 
-```sh
-npm ci
-npm run dev
-```
-
-Open the private setup link printed in the terminal to create your account. Then connect ChatGPT in **Settings**, choose **Add new**, and describe your app. For local access, use `http://127.0.0.1:5173`.
+You'll need an eligible ChatGPT account with subscription usage or available credits to build apps and use AI chat. LittleSpaces connects through ChatGPT sign-in; separate API keys aren't currently supported.
 
 ## Docs
 
