@@ -1,0 +1,4 @@
+# Replace with the hostname whose DNS points to the VPS.
+spaces.example.com {
+    reverse_proxy 127.0.0.1:5173
+}

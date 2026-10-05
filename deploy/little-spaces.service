@@ -1,0 +1,20 @@
+[Unit]
+Description=LittleSpaces
+After=network.target
+
+[Service]
+Type=simple
+User=little-spaces
+Group=little-spaces
+WorkingDirectory=/srv/little-spaces
+# Use a system-wide Node.js 24+ installation; adjust this path if necessary.
+ExecStart=/usr/bin/node /srv/little-spaces/scripts/start.mjs
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

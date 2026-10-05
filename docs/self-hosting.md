@@ -51,6 +51,82 @@ The hostname is an example, not an application requirement. Use a valid certific
 
 Run one Node server process per installation. Login sessions are intentionally not shared between replicas. SQLite serializes login attempts and persists the lockout. Use a service manager for automatic restart, with its working directory set to the checkout so `.env` is loaded. `npm run deploy:local` installs the existing launchd/systemd user service after a build.
 
+## Codex VPS runbook
+
+Use this runbook when deploying for an owner. Codex performs the server commands over SSH and adapts paths and the domain to that installation. The only deployment files are [a systemd unit](../deploy/little-spaces.service) and [a Caddyfile](../deploy/Caddyfile); no deployment framework is required.
+
+Each installation serves one owner. Deploy separate processes, data directories, ports, and domains for separate owners; do not give multiple users access to one workspace expecting tenant isolation.
+
+### Inputs and server preparation
+
+Before deployment, obtain SSH access with sudo, the desired domain, and whether this is an empty workspace or a migration. The owner completes password setup and ChatGPT consent themselves. A reasonable initial planning budget is 2 GB RAM and 20 GB disk for one owner, subject to measuring builds, photo storage, and optional speech on the actual VPS. This is not a tested minimum. Add swap if build-time memory needs it; leave Piper optional on very small machines.
+
+1. Inspect the Linux distribution, CPU architecture, available memory/disk, existing services, and firewall before changing anything. Install a system-wide Node.js 24 LTS with npm, Git, Bubblewrap, and Caddy using their supported installation instructions. Check `node --version`, `command -v node`, and `bwrap --version`. Avoid a Node binary inside an administrator's private home directory.
+2. Point the domain's DNS A record at the VPS; add AAAA only if IPv6 reaches it. Allow inbound TCP 80/443 for Caddy and retain SSH access in both the Scaleway security group and host firewall. Keep 5173 private. Preserve the current SSH session while changing firewall rules.
+3. Create a dedicated unprivileged `little-spaces` service account, a checkout at `/srv/little-spaces`, and a private data directory at `/srv/little-spaces-data` (mode 0700). Give the service account ownership of the checkout and data directory. Run npm and the app as that account, not root.
+4. Check out the selected commit. Do not transfer laptop `node_modules`, `build`, `.tools`, or `.data/runtime`. For a migration, stop the source app and copy its complete data directory, excluding runtime releases/logs, over SSH. Preserve `secrets.key` and restrict destination ownership/permissions. See the ChatGPT section below for a fresh installation's credential transfer.
+
+Create `/srv/little-spaces/.env`, owned by the service account with mode 0600:
+
+```dotenv
+APP_ORIGIN=https://spaces.example.com
+APP_DATA_DIR=/srv/little-spaces-data
+HOST=127.0.0.1
+PORT=5173
+APP_DIAGNOSTICS=off
+VAPID_SUBJECT=mailto:owner@example.com
+```
+
+Replace both example addresses. Caddy owns the domain and TLS; `APP_ORIGIN` tells the app its exact public URL. The startup script loads `.env` from the working directory.
+
+### Build and start
+
+As the service account, from `/srv/little-spaces`, run:
+
+```sh
+npm ci
+npm run verify
+```
+
+The tests must pass on Linux, including real isolated backend execution. Installing Bubblewrap alone does not prove sandboxing works: kernel/user-namespace and AppArmor policies can block it. Investigate the installed distribution's policy if tests fail; do not bypass app isolation or disable AppArmor globally to get a green deployment. Do not add systemd namespace restrictions without rechecking backend execution under that unit.
+
+As the SSH administrator, adjust the unit's `ExecStart` to the installed Node path if it differs, then install it:
+
+```sh
+sudo install -m 0644 deploy/little-spaces.service /etc/systemd/system/little-spaces.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now little-spaces
+sudo systemctl status little-spaces --no-pager
+```
+
+Replace `spaces.example.com` in `deploy/Caddyfile` with the actual domain. On a fresh server, install it as `/etc/caddy/Caddyfile`; if Caddy already serves other domains, merge this site block into its existing configuration. Validate before reloading:
+
+```sh
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl enable --now caddy
+sudo systemctl reload caddy
+```
+
+Caddy issues and renews the domain's certificate and redirects HTTP to HTTPS. The domain must resolve to the server and the challenge ports must be reachable. See [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https) and [reverse proxy configuration](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
+
+Read the private setup link with `sudo journalctl -u little-spaces -n 50 --no-pager` and give it only to the owner. Do not include it in deployment reports or shared logs. The system service starts at boot without an interactive login; do not also run `deploy:local` on this installation.
+
+### Verify and hand off
+
+- Confirm the public HTTPS login/setup page works and HTTP redirects to HTTPS. Check `ss -ltnp` to ensure Node listens only on loopback.
+- Have the owner complete setup, sign in, and connect ChatGPT using the remote-server procedure below. Verify a real AI response; deployment is not fully validated by seeing a login page.
+- Create a small app with a backend action and confirm it saves and reloads data through the running service. This checks Bubblewrap in the actual service environment. Test photo upload and streamed chat through Caddy; test speech/push only if enabled.
+- Restart the service and confirm records persist and a fresh login is required. During the initial deployment, reboot once and verify both services return automatically.
+- Record the domain, deployed commit, service name, paths, and backup destination. Report any untested owner-dependent steps explicitly.
+
+### Updates, backups, and rollback
+
+Brief downtime is acceptable for this single-owner service. Before updating, record the current commit and stop `little-spaces`. Make a permission-restricted backup of the entire data directory to a location outside the checkout/data directory. Download a protected copy off the VPS and check that the archive can be read. A stopped-service backup includes consistent SQLite files, credentials, photos, and the encryption key. Agree on a recurring backup destination and retention with the owner before relying on the installation for important data.
+
+Check out the selected new commit, run `npm ci` and `npm run verify` as the service account, then start the service and repeat the smoke checks. If checks fail, keep it stopped while restoring the previous commit, dependencies/build, and matching data backup, then restart. Restoring a backup discards writes made after that backup. Do not build over the files of a running server or assume rolling back code also rolls back database changes.
+
+For diagnosis use `systemctl status little-spaces` and `journalctl -u little-spaces`; restart with `sudo systemctl restart little-spaces`. Keep application diagnostics off by default on user installations, enabling them temporarily only when needed. Optional Piper setup and additional service hardening can follow after the basic deployment works.
+
 ## Failed login and recovery
 
 Three consecutive failed email/password pairs lock new login attempts for five minutes. Unknown emails count too. Correct credentials cannot bypass an active lock, requests during the lock do not extend it, and restarting the server does not clear it. Successful login resets the failed-attempt count. Existing authenticated sessions are not logged out by failed login attempts.
