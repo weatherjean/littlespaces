@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { chatViewport } from '$lib/chat-viewport';
   import { readBrowserValue, writeBrowserValue } from '$lib/browser-storage';
   import { expertMode } from '$lib/preferences';
   import ToolCalls from './ToolCalls.svelte';
@@ -664,7 +665,8 @@
     {/if}
   </div>
   <dialog
-    class="chat-options-dialog"
+    class="chat-options-dialog phone-chat-sheet"
+    use:chatViewport
     bind:this={optionsDialog}
     aria-labelledby={`${optionsId}-title`}
     oncancel={(event) => {

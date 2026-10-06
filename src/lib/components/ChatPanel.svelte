@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { chatViewport } from '$lib/chat-viewport';
   import Notifications from './Notifications.svelte';
   import ConnectChatGPT from './ConnectChatGPT.svelte';
   import { goto } from '$app/navigation';
@@ -151,7 +152,8 @@
   </div>
 
   <dialog
-    class="conversation-picker"
+    class="conversation-picker phone-chat-sheet"
+    use:chatViewport
     bind:this={picker}
     aria-labelledby={`${pickerId}-title`}
     tabindex="-1"

@@ -252,6 +252,18 @@ test('visible viewport fallback keeps the composer above a simulated keyboard wi
   expect((await shell.boundingBox())!.y).toBe(40);
   const send = await page.getByRole('button', { name: 'Send message', exact: true }).boundingBox();
   expect(send!.y + send!.height).toBeLessThanOrEqual(360);
+  await page.locator('.conversation-picker-trigger').click();
+  const picker = page.getByRole('dialog', { name: 'Conversations', exact: true });
+  await expect(picker).toBeVisible();
+  const pickerBounds = await picker.boundingBox();
+  expect(pickerBounds!.y).toBeGreaterThanOrEqual(40);
+  expect(pickerBounds!.y + pickerBounds!.height).toBeLessThanOrEqual(360);
+  const searchBounds = await page
+    .getByRole('searchbox', { name: 'Search conversations' })
+    .boundingBox();
+  expect(searchBounds!.y + searchBounds!.height).toBeLessThanOrEqual(360);
+  await page.getByRole('button', { name: 'Close conversation picker' }).click();
+
   await page.evaluate(() => {
     Object.assign(window.visualViewport!, { scale: 2 });
     window.visualViewport!.dispatchEvent(new Event('resize'));

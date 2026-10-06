@@ -560,3 +560,16 @@ summary {
 .chat-view .composer textarea:focus-visible {
   outline: none;
 }
+
+@media (max-width: 700px) {
+  .phone-chat-sheet {
+    position: fixed;
+    top: var(--chat-viewport-top, 0px);
+    bottom: calc(100dvh - var(--chat-viewport-height, 100dvh) - var(--chat-viewport-top, 0px));
+    max-height: calc(var(--chat-viewport-height, 100dvh) - 16px);
+    margin: auto 0 0;
+  }
+  .chat-options-dialog {
+    overflow: auto;
+  }
+}
