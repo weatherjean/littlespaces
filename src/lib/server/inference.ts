@@ -2,6 +2,8 @@ import { instructions } from './agent-instructions';
 import { randomUUID } from 'node:crypto';
 import type { ToolCall } from '../types';
 import { logEvent, trace, diagnosticValue } from './diagnostics';
+import { usesCodex } from './connection';
+import { codexModels, codexTurn } from './codex';
 import { accessToken } from './auth';
 import { resource } from './config';
 import { consumeTurn, parseGeneration } from '../response-stream';
@@ -12,6 +14,7 @@ import { citeWebReply } from '../web-citations';
 import type { Applet, Message, Model } from '../types';
 
 export async function models(): Promise<Model[]> {
+  if (usesCodex) return codexModels();
   const response = await fetch(`${resource}/models`, {
     headers: { Authorization: `Bearer ${await accessToken()}` },
     signal: AbortSignal.timeout(30_000),
@@ -104,7 +107,89 @@ async function generateImpl(
   let invoked = false,
     callCount = 0;
   let published: Applet | undefined;
+  async function executeTool(
+    name: string,
+    args: Record<string, unknown>,
+    namespace = 'app',
+    callId: string = randomUUID(),
+  ) {
+    if (signal.aborted) throw new Error('Stopped.');
+    if (++callCount > 40) throw new Error('Too many tool calls. Try a smaller request.');
+
+    options.onActivity?.(`Running ${name.replace(/^app\./, '')}…`);
+    const toolStart = Date.now();
+    const tool: ToolCall = {
+      id: randomUUID(),
+      name,
+      input: diagnosticValue(args),
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    };
+    options.onTool?.(tool);
+    let output: unknown;
+    try {
+      if (namespace && namespace !== 'app') throw new Error('Unknown tool namespace.');
+
+      if (!args || typeof args !== 'object' || Array.isArray(args))
+        throw new Error('Invalid tool arguments.');
+      logEvent('tool.call', { name, args, callId: callId });
+      output = await available.execute(name, args);
+      if (
+        name.replace(/^app\./, '') === 'publish_draft' &&
+        output &&
+        typeof output === 'object' &&
+        'applet' in output
+      )
+        published = (output as { applet: Applet }).applet;
+      if (
+        [
+          'publish_draft',
+          'invoke',
+          'set_record',
+          'remove_record',
+          'notify',
+          'cancel_notification',
+          'schedule_turn',
+          'cancel_schedule',
+        ].includes(name.replace(/^app\./, ''))
+      )
+        invoked = true;
+    } catch (error) {
+      output = { error: error instanceof Error ? error.message : 'Tool failed.' };
+    }
+    options.onTool?.({
+      ...tool,
+      status: output && typeof output === 'object' && 'error' in output ? 'error' : 'complete',
+      output: diagnosticValue(output),
+      durationMs: Date.now() - toolStart,
+    });
+    logEvent('tool.result', { name, callId: callId, output });
+
+    return output;
+  }
   try {
+    if (usesCodex) {
+      const text = await codexTurn({
+        model,
+        instructions: turnInstructions,
+        input,
+        definitions: available.definitions,
+        effort: options.effort,
+        signal,
+        onDelta,
+        onActivity: options.onActivity,
+        execute: executeTool,
+        outputSchema: {
+          type: 'object',
+          properties: { message: { type: 'string' } },
+          required: ['message'],
+          additionalProperties: false,
+        },
+      });
+      const result = parseGeneration(text);
+      if (result.applet) throw new Error('App code must be published through the builder tools.');
+      return { message: result.message, published };
+    }
     for (let round = 0; round < 20; round++) {
       logEvent('model.request', {
         round,
@@ -167,58 +252,13 @@ async function generateImpl(
       }
       input.push(...turn.output);
       for (const call of calls) {
-        if (signal.aborted) throw new Error('Stopped.');
-        if (++callCount > 40) throw new Error('Too many tool calls. Try a smaller request.');
         const name = String(call.name);
-        options.onActivity?.(`Running ${name.replace(/^app\./, '')}…`);
-        const toolStart = Date.now();
-        const tool: ToolCall = {
-          id: randomUUID(),
+        const output = await executeTool(
           name,
-          input: diagnosticValue(call.arguments),
-          status: 'running',
-          startedAt: new Date().toISOString(),
-        };
-        options.onTool?.(tool);
-        let output: unknown;
-        try {
-          if (call.namespace && call.namespace !== 'app')
-            throw new Error('Unknown tool namespace.');
-          const args = JSON.parse(String(call.arguments));
-          if (!args || typeof args !== 'object' || Array.isArray(args))
-            throw new Error('Invalid tool arguments.');
-          logEvent('tool.call', { name, args, callId: call.call_id });
-          output = await available.execute(name, args);
-          if (
-            name.replace(/^app\./, '') === 'publish_draft' &&
-            output &&
-            typeof output === 'object' &&
-            'applet' in output
-          )
-            published = (output as { applet: Applet }).applet;
-          if (
-            [
-              'publish_draft',
-              'invoke',
-              'set_record',
-              'remove_record',
-              'notify',
-              'cancel_notification',
-              'schedule_turn',
-              'cancel_schedule',
-            ].includes(name.replace(/^app\./, ''))
-          )
-            invoked = true;
-        } catch (error) {
-          output = { error: error instanceof Error ? error.message : 'Tool failed.' };
-        }
-        options.onTool?.({
-          ...tool,
-          status: output && typeof output === 'object' && 'error' in output ? 'error' : 'complete',
-          output: diagnosticValue(output),
-          durationMs: Date.now() - toolStart,
-        });
-        logEvent('tool.result', { name, callId: call.call_id, output });
+          JSON.parse(String(call.arguments)),
+          String(call.namespace || 'app'),
+          String(call.call_id),
+        );
         if (
           name.replace(/^app\./, '') === 'read_photo' &&
           output &&

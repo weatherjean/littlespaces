@@ -3,7 +3,7 @@ import type { ToolCall } from '$lib/types';
 import { liveChatContext } from '$lib/server/chat-context';
 import { json } from '@sveltejs/kit';
 import { body } from '$lib/server/security';
-import { account } from '$lib/server/auth';
+import { connectedAccount } from '$lib/server/connection';
 import {
   getChat,
   messages,
@@ -49,7 +49,7 @@ export const POST: RequestHandler = async (event) => {
   ) {
     return json({ error: 'Enter a message and choose a model.' }, { status: 400 });
   }
-  if (!account()?.canUsePlan)
+  if (!(await connectedAccount())?.canUsePlan)
     return json(
       { error: 'Connect ChatGPT with plan access before sending a message.' },
       { status: 401 },

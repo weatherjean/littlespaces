@@ -6,7 +6,7 @@
   import AutomationSettings from '$lib/components/AutomationSettings.svelte';
   import { expertMode } from '$lib/preferences';
   import Notifications from '$lib/components/Notifications.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/state';
   import { invalidateAll } from '$app/navigation';
   import type { PageData } from './$types';
@@ -16,6 +16,35 @@
   let busy = $state(false),
     error = $state(''),
     readReplies = $state(false);
+  let device = $state<{ verificationUrl: string; userCode: string } | null>(null);
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollEpoch = 0;
+  onDestroy(() => {
+    pollEpoch++;
+    clearTimeout(pollTimer);
+  });
+  async function pollConnection(epoch: number) {
+    try {
+      const value = await request('/auth/status');
+      if (epoch !== pollEpoch) return;
+      if (value.status === 'complete') {
+        device = null;
+        busy = false;
+        await invalidateAll();
+      } else if (value.status === 'pending') {
+        pollTimer = setTimeout(() => void pollConnection(epoch), 2000);
+      } else {
+        device = null;
+        busy = false;
+        error = value.error || 'Code expired. Try again.';
+      }
+    } catch (e) {
+      if (epoch !== pollEpoch) return;
+      busy = false;
+      device = null;
+      error = e instanceof Error ? e.message : 'Could not check sign-in. Try again.';
+    }
+  }
   onMount(() => (readReplies = readBrowserValue('little-spaces-read-replies') === 'true'));
   function savePreference(key: string, value: boolean) {
     error = writeBrowserValue(key, String(value))
@@ -32,7 +61,11 @@
         'session',
       );
       const value = await request('/auth/start', {});
-      window.location.assign(value.url);
+      if (value.verificationUrl && value.userCode) {
+        device = { verificationUrl: value.verificationUrl, userCode: value.userCode };
+        const epoch = ++pollEpoch;
+        pollTimer = setTimeout(() => void pollConnection(epoch), 2000);
+      } else window.location.assign(value.url);
     } catch (e) {
       error = e instanceof Error ? e.message : 'Sign-in failed.';
       busy = false;
@@ -80,9 +113,23 @@
           class="secondary-button"
           disabled={busy}
           onclick={signOut}>Disconnect</button
-        >{:else if data.localOAuth}<button class="primary-button" disabled={busy} onclick={signIn}
+        >{:else if !device}<button class="primary-button" disabled={busy} onclick={signIn}
           >Continue with ChatGPT</button
-        >{:else}<p class="muted">For server setup, follow the self-hosting guide.</p>{/if}
+        >{/if}
+      {#if device}
+        <div class="device-login" aria-live="polite">
+          <p>Enter this code on OpenAI:</p>
+          <strong class="device-code">{device.userCode}</strong>
+          <a
+            class="primary-button"
+            href={device.verificationUrl}
+            target="_blank"
+            rel="noopener noreferrer">Open ChatGPT</a
+          >
+          <p class="muted">Waiting for sign-in…</p>
+          <small>If prompted, enable device-code login in ChatGPT Settings → Security.</small>
+        </div>
+      {/if}
     </section>
     <section class="setting-card">
       <div class="setting-icon"><Icon name="mic" size={24} /></div>

@@ -1,12 +1,12 @@
 import { json } from '@sveltejs/kit';
 import { body } from '$lib/server/security';
-import { account } from '$lib/server/auth';
+import { connectedAccount } from '$lib/server/connection';
 import { models } from '$lib/server/inference';
 import { analyzePhotos } from '$lib/server/vision';
 import type { RequestHandler } from './$types';
 const active = new Set<string>();
 export const POST: RequestHandler = async (event) => {
-  if (!account()?.canUsePlan)
+  if (!(await connectedAccount())?.canUsePlan)
     return json({ error: 'Connect ChatGPT in Settings to identify photos.' }, { status: 401 });
   const input = await body(event);
   if (

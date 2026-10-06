@@ -64,7 +64,7 @@ Before deployment, obtain SSH access with sudo, the desired domain, and whether 
 1. Inspect the Linux distribution, CPU architecture, available memory/disk, existing services, and firewall before changing anything. Install a system-wide Node.js 24 LTS with npm, Git, Bubblewrap, and Caddy using their supported installation instructions. Check `node --version`, `command -v node`, and `bwrap --version`. Avoid a Node binary inside an administrator's private home directory.
 2. Point the domain's DNS A record at the VPS; add AAAA only if IPv6 reaches it. Allow inbound TCP 80/443 for Caddy and retain SSH access in both the Scaleway security group and host firewall. Keep 5173 private. Preserve the current SSH session while changing firewall rules.
 3. Create a dedicated unprivileged `little-spaces` service account, a checkout at `/srv/little-spaces`, and a private data directory at `/srv/little-spaces-data` (mode 0700). Give the service account ownership of the checkout and data directory. Run npm and the app as that account, not root.
-4. Check out the selected commit. Do not transfer laptop `node_modules`, `build`, `.tools`, or `.data/runtime`. For a migration, stop the source app and copy its complete data directory, excluding runtime releases/logs, over SSH. Preserve `secrets.key` and restrict destination ownership/permissions. See the ChatGPT section below for a fresh installation's credential transfer.
+4. Check out the selected commit. Do not transfer laptop `node_modules`, `build`, `.tools`, or `.data/runtime`. For a migration, stop the source app and copy its complete data directory, excluding runtime releases/logs, over SSH. Preserve `secrets.key` and restrict destination ownership/permissions. The owner connects ChatGPT through Settings after setup.
 
 Create `/srv/little-spaces/.env`, owned by the service account with mode 0600:
 
@@ -147,18 +147,15 @@ The app's **Log out** button revokes the current browser session. **Disconnect C
 
 ## Connecting ChatGPT on a remote server
 
-OpenAI's open-source dynamic registration uses an HTTP `127.0.0.1` callback. It does not accept arbitrary VPS or tunnel callbacks. The app therefore offers in-browser connection only when using that loopback origin. A ChatGPT connection is accepted only after ID-token signature, issuer, audience, nonce, verified email, and the configured owner email are checked. Existing credential files without the verified-email marker need to be reconnected with this version.
+In Settings, select **Continue with ChatGPT**, open the OpenAI link, and enter the displayed code. Sign in with the same email used for the LittleSpaces owner. Return to LittleSpaces; it detects completion automatically. This works in a desktop or phone browser without local software, SSH forwarding, or transferring another installation's credentials.
 
-For a VPS, use OpenAI's documented local authorization and protected credential transfer procedure:
+Public HTTPS installations use the pinned `@openai/codex` dependency's app-server for both authentication and AI requests. Codex manages its own OAuth tokens and refreshes in the private `APP_DATA_DIR/codex` directory. The server talks to it over stdio, never a public socket. Each install has a separate profile. Local loopback installations retain the existing direct ChatGPT-plan OAuth flow.
 
-1. Start the VPS installation once so it creates its own stable host ID and workspace. Keep this database on the VPS.
-2. Run a local copy of this app, configure the same owner email, and sign into it at `http://127.0.0.1:5173`. Connect the approved ChatGPT account in Settings.
-3. Stop the local copy to avoid simultaneous refresh-token rotation. Transfer only its `.data/credentials.json` to the VPS's configured data directory over SSH, with mode `0600` and ownership assigned to the app service account. Stop the VPS app while replacing the file.
-4. Start the VPS app. It uses that connection and owns subsequent refreshes. Do not overwrite the VPS workspace database or host ID with the laptop's copy.
+Device-code login is currently beta and may need enabling in ChatGPT Settings → Security or by a workspace administrator. A denied or expired attempt can be retried in Settings. Model availability and limits follow the connected account's Codex access; a real AI response is required to verify it.
 
-These credentials belong in protected server storage, never browser localStorage. They authorize AI requests; they do not grant browser access to the app. Real provider sign-in and transferred-plan access must be verified with your account.
+AI threads are ephemeral and use no environment access, no shell tool, no subagents, and no app connectors. App changes still pass through LittleSpaces' scoped, validated builder and app-action tools. Unexpected permission requests are rejected. Include the Codex profile in protected backups; never publish or copy it into another user's installation.
 
-Sources: [OpenAI registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [self-hosted VMs](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms).
+Sources: [Codex app-server device-code login](https://learn.chatgpt.com/docs/app-server), [headless authentication](https://learn.chatgpt.com/docs/auth).
 
 ## Updates
 

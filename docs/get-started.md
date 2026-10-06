@@ -21,7 +21,7 @@ Give me the private owner-setup link and guide me through connecting
 my ChatGPT account. Let me enter my password and complete consent myself.
 I need eligible ChatGPT subscription usage or available credits for AI
 features; this app does not support a separate API key. For a VPS, follow
-the documented local sign-in and protected credential-transfer procedure.
+the browser-based device-code login in Settings. The owner approves access on OpenAI; do not copy credentials from another installation.
 
 Verify the running installation, help me create my first app, and give
 me the URL plus brief instructions for restarting, updating, and backups.
