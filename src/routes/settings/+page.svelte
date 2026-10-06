@@ -52,6 +52,9 @@
       : 'Browser storage is unavailable. This preference could not be saved.';
   }
   async function signIn() {
+    if (busy) return;
+    const epoch = ++pollEpoch;
+    clearTimeout(pollTimer);
     busy = true;
     error = '';
     try {
@@ -61,12 +64,15 @@
         'session',
       );
       const value = await request('/auth/start', {});
+      if (epoch !== pollEpoch) return;
       if (value.verificationUrl && value.userCode) {
         device = { verificationUrl: value.verificationUrl, userCode: value.userCode };
-        const epoch = ++pollEpoch;
+        busy = false;
         pollTimer = setTimeout(() => void pollConnection(epoch), 2000);
       } else window.location.assign(value.url);
     } catch (e) {
+      if (epoch !== pollEpoch) return;
+      device = null;
       error = e instanceof Error ? e.message : 'Sign-in failed.';
       busy = false;
     }
@@ -100,7 +106,7 @@
   </header>
   <div class="settings-content">
     {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <section class="setting-card">
+    <section class="setting-card chatgpt-card">
       <div class="setting-icon"><Icon name="spark" size={24} /></div>
       <div>
         <h3>ChatGPT</h3>
@@ -118,15 +124,22 @@
         >{/if}
       {#if device}
         <div class="device-login" aria-live="polite">
-          <p>Enter this code on OpenAI:</p>
-          <strong class="device-code">{device.userCode}</strong>
-          <a
-            class="primary-button"
-            href={device.verificationUrl}
-            target="_blank"
-            rel="noopener noreferrer">Open ChatGPT</a
-          >
-          <p class="muted">Waiting for sign-in…</p>
+          <p>Enter this code on OpenAI</p>
+          <div class="device-code-box" aria-busy={busy}>
+            {#if busy}<span>Generating code…</span>{:else}<strong class="device-code"
+                >{device.userCode}</strong
+              >{/if}
+          </div>
+          <div class="device-actions">
+            {#if !busy}<a
+                class="primary-button"
+                href={device.verificationUrl}
+                target="_blank"
+                rel="noopener noreferrer">Open ChatGPT</a
+              >{/if}
+            <button class="secondary-button" disabled={busy} onclick={signIn}>Refresh code</button>
+          </div>
+          <p class="muted" role="status">{busy ? 'Getting a new code…' : 'Waiting for sign-in…'}</p>
           <small>If prompted, enable device-code login in ChatGPT Settings → Security.</small>
         </div>
       {/if}
@@ -169,3 +182,51 @@
     <AppearanceSettings />
   </div>
 </main>
+
+<style>
+  .chatgpt-card {
+    flex-wrap: wrap;
+  }
+  .chatgpt-card > .device-login {
+    flex: 0 0 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding-top: 1.5rem;
+    margin-top: 0.5rem;
+    border-top: 1px solid var(--line);
+    text-align: center;
+  }
+  .device-login p {
+    margin: 0;
+  }
+  .device-code-box {
+    display: grid;
+    place-items: center;
+    width: min(100%, 20rem);
+    min-height: 5rem;
+    padding: 1rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg);
+  }
+  .device-code {
+    font-family: monospace;
+    font-size: clamp(1.5rem, 6vw, 2rem);
+    letter-spacing: 0.12em;
+    user-select: all;
+  }
+  .device-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+  .device-login small {
+    max-width: 26rem;
+    line-height: 1.5;
+    opacity: 0.65;
+  }
+</style>
