@@ -97,6 +97,9 @@ export class OwnerStore {
       throw error;
     }
   }
+  revokeSessions() {
+    this.db.prepare('UPDATE owner SET version=? WHERE id=1').run(randomUUID());
+  }
   close() {
     this.db.close();
   }

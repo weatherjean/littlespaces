@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { ownerStore } from '$lib/server/owner';
-import { sessions } from '$lib/server/sessions';
+import { sessions, REMEMBER_SECONDS } from '$lib/server/sessions';
 import { boundedText, cookieOptions, sessionCookie } from '$lib/server/security';
 import type { Actions } from './$types';
 export const actions: Actions = {
@@ -20,8 +20,12 @@ export const actions: Actions = {
       return fail(400, { message: 'The email or password is incorrect.' });
     }
     sessions.delete(cookies.get(sessionCookie));
-    const token = sessions.create(result.email, result.version);
-    cookies.set(sessionCookie, token, cookieOptions);
+    const remember = fields.get('remember') === 'on';
+    const token = sessions.create(result.email, result.version, Date.now(), remember);
+    cookies.set(sessionCookie, token, {
+      ...cookieOptions,
+      ...(remember ? { maxAge: REMEMBER_SECONDS } : {}),
+    });
     redirect(303, '/');
   },
 };

@@ -1,6 +1,6 @@
 import { error, type RequestEvent } from '@sveltejs/kit';
 import { origin, secureCookies } from './config';
-import { sessions, SESSION_SECONDS } from './sessions';
+import { sessions } from './sessions';
 import { ownerStore } from './owner';
 
 export const sessionCookie = secureCookies
@@ -11,7 +11,6 @@ export const cookieOptions = {
   httpOnly: true,
   sameSite: 'lax' as const,
   secure: secureCookies,
-  maxAge: SESSION_SECONDS,
 };
 export function authenticated(event: Pick<RequestEvent, 'cookies'>) {
   return sessions.get(event.cookies.get(sessionCookie), ownerStore().get()?.version);

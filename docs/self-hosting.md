@@ -22,7 +22,7 @@ If you prefer terminal setup, `npm run setup` still asks for the owner email, pa
 
 For unattended provisioning, use `npm run setup -- --email=owner@example.com --password-stdin`, with the password supplied by a secret manager through stdin. Never put passwords in command arguments, source control, or `.env`. This input mode accepts one password and an optional trailing newline.
 
-For development, run `npm run dev`; an unconfigured installation prints its setup link automatically. Normal startup never prompts for a password. Browser sessions are held only in server memory: every server restart, update restart, or reboot requires a fresh browser login. Sessions also expire after 12 hours. Closing and reopening a tab alone does not force another login.
+For development, run `npm run dev`; an unconfigured installation prints its setup link automatically. Normal startup never prompts for a password. Select **Remember me for 30 days** to stay signed in across browser and server restarts. This has a fixed 30-day expiry from login. Without it, the browser receives a session cookie and the server session expires after 12 hours or a server restart. Remembered session tokens are stored only as hashes in private `sessions.sqlite`.
 
 ## Public VPS or tunnel
 
@@ -49,7 +49,7 @@ The hostname is an example, not an application requirement. Use a valid certific
 
 `npm start` explicitly supplies SvelteKit's origin instead of trusting arbitrary forwarded-host headers. Cookies are HttpOnly and SameSite=Lax; HTTPS uses Secure cookies with a `__Host-` prefix. Private responses are not cached. All application pages, page-data responses, APIs, photos, generated app code, and ChatGPT authorization routes require an owner session. The login screen, setup screen, and generic public assets contain no workspace data.
 
-Run one Node server process per installation. Login sessions are intentionally not shared between replicas. SQLite serializes login attempts and persists the lockout. Use a service manager for automatic restart, with its working directory set to the checkout so `.env` is loaded. `npm run deploy:local` installs the existing launchd/systemd user service after a build.
+Run one Node server process per installation. Regular login sessions remain in memory; remembered sessions persist in SQLite. Multiple replicas are not supported. SQLite serializes login attempts and persists the lockout. Use a service manager for automatic restart, with its working directory set to the checkout so `.env` is loaded. `npm run deploy:local` installs the existing launchd/systemd user service after a build.
 
 ## Codex VPS runbook
 
@@ -143,7 +143,7 @@ This asks for the owner email and a new password, clears the lockout, and invali
 
 Emergency file-based recovery is also possible: **stop the server first**, back up the data directory, and remove only `owner.sqlite` from the configured `APP_DATA_DIR` (plus `owner.sqlite-journal`, `owner.sqlite-wal`, and `owner.sqlite-shm` if present). Restart and use the newly printed private setup link. Never delete the workspace or applet databases. This removes the owner credentials and lockout history; terminal reset is the preferred recovery method. Do not remove the owner database while the server is running.
 
-The app's **Log out** button revokes the current browser session. **Disconnect ChatGPT** is separate: it removes the local provider credentials without logging out of the app. Password login does not depend on OpenAI availability.
+The app's **Log out** button revokes the current browser session, including a remembered login. **Sign out everywhere** in Settings revokes all browser sessions, including the current device; it does not change the password or disconnect ChatGPT. **Disconnect ChatGPT** is separate: it removes the local provider credentials without logging out of the app. Password login does not depend on OpenAI availability.
 
 ## Connecting ChatGPT on a remote server
 
@@ -159,7 +159,7 @@ Sources: [Codex app-server device-code login](https://learn.chatgpt.com/docs/app
 
 ## Updates
 
-This change does not add an update endpoint or remote shell execution through the web UI. Updates currently remain an operator action on the server. Stop the server and back up the complete data directory before changing versions; keep a copy of the previous application and lockfile, install the selected release with `npm ci`, run checks/tests, build, and restart. A restart logs browsers out. If a release changes the database schema, rolling back code alone may not be safe: use the matching data backup with the previous release. Keep backups outside the public web root and protect them like live credentials.
+This change does not add an update endpoint or remote shell execution through the web UI. Updates currently remain an operator action on the server. Stop the server and back up the complete data directory before changing versions; keep a copy of the previous application and lockfile, install the selected release with `npm ci`, run checks/tests, build, and restart. A restart logs out regular sessions; remembered sessions remain valid until expiry or revocation. If a release changes the database schema, rolling back code alone may not be safe: use the matching data backup with the previous release. Keep backups outside the public web root and protect them like live credentials.
 
 A future Settings update flow should use published versioned releases, not arbitrary branches, URLs, or commands. It should show the target version, release notes, and migration requirements; require fresh owner-password confirmation; create and verify a data backup; stage and test an immutable release; serialize update jobs; switch and restart through a narrowly scoped supervisor; and verify health before declaring success. Define recovery for both code and database migrations before enabling **Update now**. The web server should not require root privileges. Release authenticity and the supported release channel still need to be designed before implementing web updates.
 
@@ -169,7 +169,7 @@ Production builds include install icons, an offline fallback, an update/reload c
 
 VAPID keys are generated once and stored in the private workspace database. Set `VAPID_SUBJECT=mailto:you@example.com` to provide the push service with your operational contact. Supported push providers are Google's FCM, Mozilla, and Apple's Web Push service. Keep outbound HTTPS available to these providers and to ChatGPT. Push contains notification title, body, and app navigation target, encrypted for the subscribed device. Device subscriptions persist across browser logout and server restarts; disable notifications in Settings before relinquishing a device.
 
-Backups must include `workspace.sqlite` and `secrets.key`, in addition to applet databases and credentials. Secret values are encrypted in the workspace database, with a separate owner-readable key file. A backup without this key cannot recover secrets. Encryption protects a database copy alone, not an attacker who can read the entire server data directory. Never commit or share the data directory or key. The single-process scheduler is unsuitable for multiple replicas sharing the same files.
+Backups must include `workspace.sqlite`, `sessions.sqlite` (if present), and `secrets.key`, in addition to applet databases and credentials. Secret values are encrypted in the workspace database, with a separate owner-readable key file. A backup without this key cannot recover secrets. Encryption protects a database copy alone, not an attacker who can read the entire server data directory. Never commit or share the data directory or key. The single-process scheduler is unsuitable for multiple replicas sharing the same files.
 
 ## Local speech for Voice
 

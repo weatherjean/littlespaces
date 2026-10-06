@@ -180,6 +180,15 @@
       archivedSpaceIds={data.apps.filter((app) => app.archived).map((app) => app.id)}
     />
     <AppearanceSettings />
+    <section class="setting-card">
+      <div>
+        <h3>Sessions</h3>
+        <p>Includes this device.</p>
+      </div>
+      <form method="POST" action="/logout/all">
+        <button class="secondary-button">Sign out everywhere</button>
+      </form>
+    </section>
   </div>
 </main>
 

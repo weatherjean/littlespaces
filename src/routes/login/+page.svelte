@@ -32,6 +32,9 @@
         maxlength="256"
         required
       />
+      <label class="remember"
+        ><input type="checkbox" name="remember" />Remember me for 30 days</label
+      >
       {#if form?.message}<p class="error" role="alert">{form.message}</p>{/if}
       <button class="primary-button" type="submit">Sign in</button>
     </form>
@@ -82,6 +85,21 @@
     border-radius: calc(var(--radius) * 0.833);
     padding: 13px;
     margin-bottom: 20px;
+  }
+  .remember {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 14px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .remember input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--accent);
   }
   button {
     width: 100%;

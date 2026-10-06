@@ -15,7 +15,7 @@ Open **http://127.0.0.1:5173** (use that exact address, not `localhost`). On fir
 
 Settings lets you archive apps and restore them later. Archiving hides an app from Home and Knowledge chat and pauses its reminders and scheduled checks, while preserving its records, photos, and conversations. Restoring resumes its schedules, with missed recurrences coalesced into one check.
 
-Every server restart requires a fresh browser login. Three failed email/password attempts lock login for five minutes, including across restarts. Use `npm run owner:reset` in the terminal for recovery. See [installation, VPS/tunnel hosting, ChatGPT connection, and update planning](self-hosting.md).
+**Remember me for 30 days** keeps a browser signed in across server restarts, with a fixed 30-day expiry. Regular sessions expire after 12 hours or a restart. Settings → **Sign out everywhere** revokes all sessions. Three failed email/password attempts lock login for five minutes, including across restarts. Use `npm run owner:reset` in the terminal for recovery. See [installation, VPS/tunnel hosting, ChatGPT connection, and update planning](self-hosting.md).
 
 For Codex-assisted VPS deployment, follow the [VPS runbook](self-hosting.md#codex-vps-runbook). It uses one Node process, systemd, and Caddy, with example configuration in `deploy/`.
 
@@ -87,7 +87,7 @@ The integration follows the official [registration guide](https://developers.ope
 - Photos accept still JPEG, PNG, or WebP up to 8 MiB and 40 million pixels. The host rotates and resizes them to at most 2048 pixels per side, strips metadata, and stores JPEGs locally. Each space allows 500 photos or 200 MB. Chat accepts four attachments per message and includes up to eight recent images in model context; the agent can retrieve older images. Removing a draft attachment does not delete its local photo.
 - One app per home icon; no external applet dependencies. Build errors leave existing code and records intact and are shown in chat.
 - Up to 2,000 records per applet; 100 KB JSON per record; 80 KB each for UI and backend source; 4 MB data snapshots per backend execution. The agent receives up to 30 prior messages and current source; it can read the selected app’s data through tools.
-- OAuth pending attempts and owner browser sessions are in memory; restart the sign-in flow after restarting the server. Credentials, login lockout state, and applets persist.
+- OAuth pending attempts and regular browser sessions are in memory. Remembered browser sessions persist as token hashes in private SQLite storage for up to 30 days. Credentials, login lockout state, and applets persist.
 
 ## Checks
 

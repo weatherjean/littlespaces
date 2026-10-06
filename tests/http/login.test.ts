@@ -61,11 +61,11 @@ test('production HTTP login protects data, locks after three failures, and inval
   }
   const request = (path: string, options: RequestInit = {}) =>
     fetch(origin + path, { redirect: 'manual', ...options });
-  const login = (email = 'owner@example.com', pass = password) =>
+  const login = (email = 'owner@example.com', pass = password, remember = false) =>
     request('/login', {
       method: 'POST',
       headers: { origin, accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ email, password: pass }),
+      body: new URLSearchParams({ email, password: pass, ...(remember ? { remember: 'on' } : {}) }),
     });
   const cookie = (response: Response) =>
     response.headers
@@ -389,12 +389,57 @@ test('production HTTP login protects data, locks after three failures, and inval
     const second = cookie(await login());
     assert.ok(second);
     assert.notEqual(first, second);
+    const rememberedResponse = await login('owner@example.com', password, true);
+    const remembered = cookie(rememberedResponse);
+    assert.match(rememberedResponse.headers.get('set-cookie') || '', /Max-Age=2592000/i);
+    assert.match(rememberedResponse.headers.get('set-cookie') || '', /HttpOnly/i);
     await stop();
     await start();
+    assert.equal(
+      (await request('/api/spaces', { headers: { cookie: remembered } })).status,
+      200,
+      'remembered login survives restart',
+    );
     assert.equal(
       (await request('/api/spaces', { headers: { cookie: second } })).status,
       401,
       'restart must revoke sessions',
+    );
+    const currentResponse = await login();
+    assert.doesNotMatch(currentResponse.headers.get('set-cookie') || '', /Max-Age=/i);
+    const current = cookie(currentResponse);
+    assert.equal(
+      (
+        await request('/logout/all', {
+          method: 'POST',
+          headers: { cookie: current, origin: 'https://other.example' },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await request('/logout/all', { method: 'POST', headers: { cookie: current, origin } }))
+        .status,
+      303,
+    );
+    for (const revoked of [current, remembered])
+      assert.equal((await request('/api/spaces', { headers: { cookie: revoked } })).status, 401);
+    await stop();
+    await start();
+    assert.equal(
+      (await request('/api/spaces', { headers: { cookie: remembered } })).status,
+      401,
+      'global revocation survives restart',
+    );
+    const rememberedLogout = cookie(await login('owner@example.com', password, true));
+    assert.equal(
+      (await request('/logout', { method: 'POST', headers: { cookie: rememberedLogout, origin } }))
+        .status,
+      303,
+    );
+    assert.equal(
+      (await request('/api/spaces', { headers: { cookie: rememberedLogout } })).status,
+      401,
     );
     assert.equal((await login('owner@example.com', 'wrong')).status, 400);
     assert.equal((await login('unknown@example.com', password)).status, 400);
@@ -405,7 +450,7 @@ test('production HTTP login protects data, locks after three failures, and inval
     await start();
     assert.equal((await login()).status, 429, 'restart must preserve lockout');
     owner.configure('owner@example.com', password, true);
-    const third = cookie(await login());
+    const third = cookie(await login('owner@example.com', password, true));
     assert.ok(third);
     const persisted = await request('/api/settings/schedules', { headers: { cookie: third } });
     assert.equal((await persisted.json()).schedules[0].key, 'check');

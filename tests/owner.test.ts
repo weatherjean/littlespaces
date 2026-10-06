@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OwnerStore, LOCK_MS } from '../scripts/owner-store.mjs';
-import { Sessions, SESSION_SECONDS } from '../src/lib/server/sessions';
+import { Sessions, SESSION_SECONDS, REMEMBER_SECONDS } from '../src/lib/server/sessions';
 import { serverConfig } from '../scripts/server-config.mjs';
 const password = 'correct horse battery staple';
 
@@ -94,6 +94,43 @@ test('sessions are distinct, revoked on logout/reset, expire, and never survive 
     assert.equal(store.requireOwner().locked_until, 0);
     assert.equal(store.authenticate(owner.email, password).ok, false);
     assert.equal(store.authenticate(owner.email, 'a different long password').ok, true);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('remembered sessions persist as hashes, expire after 30 days, and respect logout and global revocation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'little-remember-'));
+  const store = new OwnerStore(dir);
+  const path = join(dir, 'sessions.sqlite');
+  try {
+    store.configure('owner@example.com', password);
+    const owner = store.requireOwner();
+    const sessions = new Sessions(path),
+      now = 1000;
+    const remembered = sessions.create(owner.email, owner.version, now, true);
+    const other = sessions.create(owner.email, owner.version, now, true);
+    const temporary = sessions.create(owner.email, owner.version, now);
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(readFileSync(path).includes(Buffer.from(remembered)), false);
+    const reopened = new Sessions(path);
+    assert.ok(reopened.get(remembered, owner.version, now + 20 * 86400_000));
+    assert.equal(reopened.get(temporary, owner.version, now), null);
+    reopened.delete(other);
+    assert.equal(sessions.get(other, owner.version, now), null);
+    assert.equal(reopened.get(remembered, owner.version, now + REMEMBER_SECONDS * 1000), null);
+    const a = sessions.create(owner.email, owner.version, now, true);
+    const b = sessions.create(owner.email, owner.version, now);
+    store.revokeSessions();
+    const version = store.requireOwner().version;
+    assert.notEqual(version, owner.version);
+    assert.equal(new Sessions(path).get(a, version, now), null);
+    assert.equal(sessions.get(b, version, now), null);
+    assert.equal(store.authenticate(owner.email, password).ok, true);
+    const after = sessions.create(owner.email, version, now, true);
+    store.configure(owner.email, 'another sufficiently long password', true);
+    assert.equal(new Sessions(path).get(after, store.requireOwner().version, now), null);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
