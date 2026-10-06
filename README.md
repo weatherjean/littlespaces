@@ -23,3 +23,18 @@ You'll need an eligible ChatGPT account with subscription usage or available cre
 - [App backend API](docs/applet-backends.md) · [Diagnostics](docs/diagnostics.md)
 
 [MIT License](LICENSE) © 2026 weatherjean
+
+## Browser tests
+
+Install the test browsers once with `npx playwright install chromium webkit`, then run
+`npm run test:e2e`. The suite builds the app and checks iPhone (WebKit), Android,
+320px phones, and desktop layouts. Each worker starts a private local server with a
+temporary database, synthetic login, and mock model provider; it never uses your
+workspace or ChatGPT account. Temporary data is removed when the worker exits.
+
+Use `npm run test:e2e:ui` for Playwright's interactive runner, or
+`npx playwright show-report` to inspect the latest results. Screenshots are attached
+for each reviewed screen; failures also include traces. These are behavioral and
+layout checks, not pixel-baseline comparisons. Device emulation does not reproduce
+the iOS software keyboard or installed-PWA safe areas, so those still need a real
+phone check before release.

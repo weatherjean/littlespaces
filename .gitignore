@@ -7,3 +7,5 @@ build/
 .env.*
 !.env.example
 *.sqlite*
+playwright-report/
+test-results/

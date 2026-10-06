@@ -11,6 +11,8 @@
   import '$lib/theme.css';
   import '$lib/style.css';
   import '$lib/polish.css';
+  import '$lib/mobile.css';
+  import PrimaryNav from '$lib/components/PrimaryNav.svelte';
   afterNavigate(() => applyAppearance(readAppearance()));
   onMount(() => {
     applyAppearance(readAppearance());
@@ -43,3 +45,6 @@
 </script>
 
 <div class="shell">{@render children()}</div>
+{#if page.data.owner && (page.url.pathname === '/' || page.url.pathname === '/settings')}
+  <PrimaryNav />
+{/if}

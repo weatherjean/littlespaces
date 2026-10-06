@@ -7,8 +7,13 @@
   import { goto } from '$app/navigation';
   import type { PageData } from './$types';
   import { request } from '$lib/client';
+  import Icon from '$lib/components/Icon.svelte';
   import BrandMark from '$lib/components/BrandMark.svelte';
   let { data }: { data: PageData } = $props();
+  let search = $state('');
+  let visibleSpaces = $derived(
+    data.spaces.filter((space) => space.name.toLowerCase().includes(search.trim().toLowerCase())),
+  );
   let creating = $state(false),
     error = $state('');
   async function openChat(voice = false) {
@@ -40,7 +45,7 @@
 </script>
 
 <svelte:head><title>LittleSpaces</title></svelte:head>
-<main class="launcher">
+<main class="launcher" class:has-apps={data.spaces.length > 0}>
   {#if data.authError}<p class="error" role="alert">{data.authError}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <section class="launcher-content" aria-label="Your apps">
@@ -50,35 +55,67 @@
       >
     </header>
     <div class="launcher-intro">
-      <h1>Your apps</h1>
+      <p class="eyebrow">YOUR LITTLE CORNER</p>
+      <h1>Made for your everyday.</h1>
+      <p>Your apps, ideas, and a little help. All in one place.</p>
     </div>
     {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
+    <div class="quick-actions">
+      <button class="quick-action voice-action" disabled={creating} onclick={() => openChat(true)}>
+        <span class="action-icon"><Icon name="mic" size={24} /></span>
+        <span><strong>Let’s talk</strong><small>Start with your voice</small></span>
+        <Icon name="plus" />
+      </button>
+      <button class="quick-action" disabled={creating} onclick={() => openChat()}>
+        <span class="action-icon"><Icon name="chat" size={24} /></span>
+        <span><strong>Start a chat</strong><small>Ask, plan, or create an app</small></span>
+        <Icon name="plus" />
+      </button>
+    </div>
+    <div class="apps-heading">
+      <h2>Your apps</h2>
+      <span>{data.spaces.length}</span>
+    </div>
+    {#if data.spaces.length > 6}
+      <label class="app-search"
+        ><Icon name="search" /><input
+          aria-label="Find an app"
+          type="search"
+          placeholder="Find an app"
+          bind:value={search}
+        /></label
+      >
+    {/if}
     <div class="app-grid">
-      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat(true)}
-        ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">🎙️</span></span
-        ><span>Voice</span></button
-      >
-      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat()}
-        ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">💬</span></span
-        ><span>Chat</span></button
-      >
-      {#each data.spaces as space, i (space.id)}<a
-          class="app-tile"
-          href={`/spaces/${space.id}/applet`}
-          ><span class={`app-icon icon-tone-${i % 4}`}
+      {#each visibleSpaces as space, i (space.id)}
+        <a class="app-tile" href={`/spaces/${space.id}/applet`}>
+          <span class={`app-icon icon-tone-${i % 4}`}
             ><span class="app-emoji" aria-hidden="true">{appEmoji(space.name, space.icon)}</span
             ></span
-          ><span>{space.name}</span>{#if !space.appletCount}<small>In progress</small>{/if}</a
-        >{/each}
-
-      <a class="app-tile" href="/settings"
-        ><span class="app-icon icon-settings"
-          ><span class="app-emoji" aria-hidden="true">⚙️</span></span
-        ><span>Settings</span></a
-      >
+          >
+          <span>{space.name}</span>{#if !space.appletCount}<small>In progress</small>{/if}
+        </a>
+      {/each}
+      {#if data.spaces.length}
+        <button class="app-tile create-tile" disabled={creating} onclick={() => openChat()}
+          ><span class="app-icon"><Icon name="plus" size={28} /></span><span>Create an app</span
+          ></button
+        >
+      {/if}
     </div>
-    {#if data.account?.canUsePlan && !data.spaces.length}<p class="launcher-hint">
-        Open Chat to create your first app.
+    {#if !data.spaces.length}
+      <div class="launcher-empty">
+        <span class="empty-symbol"><Icon name="grid" size={28} /></span>
+        <h3>A home for your own apps</h3>
+        <p>
+          A plant tracker, a meal planner, a place for your ideas. What would make your day easier?
+        </p>
+        <button class="primary-button" disabled={creating} onclick={() => openChat()}
+          ><Icon name="plus" size={18} />Create your first app</button
+        >
+      </div>
+    {:else if !visibleSpaces.length}<p class="launcher-hint" role="status">
+        No apps match “{search}”.
       </p>{/if}
     <Notifications home />
   </section>
@@ -87,81 +124,231 @@
 <style>
   .launcher {
     max-width: 960px;
-    align-items: center;
-    padding: clamp(48px, 8vh, 88px) 24px 48px;
+    padding: max(24px, env(safe-area-inset-top)) 20px calc(112px + env(safe-area-inset-bottom));
   }
   .launcher-content {
-    flex: initial;
+    width: 100%;
     max-width: 760px;
     padding: 0;
-    text-align: center;
   }
   .launcher-header {
-    justify-content: center;
-    margin-bottom: 32px;
-  }
-  .launcher-intro {
     margin-bottom: 40px;
   }
+  .launcher-header .wordmark {
+    font-size: 21px;
+  }
+  .launcher-intro {
+    margin-bottom: 28px;
+  }
+  .launcher-intro .eyebrow {
+    font-size: 10px;
+    margin-bottom: 14px;
+  }
   .launcher-intro h1 {
-    font-size: clamp(30px, 3vw, 40px);
+    max-width: 340px;
+    font-size: clamp(32px, 7vw, 44px);
+    line-height: 1.12;
+    letter-spacing: -1.3px;
+    margin-bottom: 14px;
+  }
+  .launcher-intro > p:last-child {
+    max-width: 290px;
+    font-size: 14px;
+  }
+  .quick-actions {
+    display: grid;
+    gap: 12px;
+    margin: 28px 0 36px;
+  }
+  .quick-action {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 18px;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 1.5);
+    background: var(--panel);
+    color: var(--ink);
+    text-align: left;
+  }
+  .voice-action {
+    background: var(--accent-soft);
+  }
+  .action-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .quick-action > span:nth-child(2) {
+    flex: 1;
+  }
+  .quick-action strong,
+  .quick-action small {
+    display: block;
+  }
+  .quick-action strong {
+    font-size: 16px;
+    font-weight: 550;
+  }
+  .quick-action small {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 5px;
+  }
+  .apps-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .apps-heading h2 {
+    font-size: 20px;
+    font-weight: 550;
+    letter-spacing: -0.4px;
+  }
+  .apps-heading > span {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--hover);
+    padding: 4px 9px;
+    border-radius: 20px;
   }
   .app-grid {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: flex-start;
-    gap: 28px 24px;
-    width: 100%;
-    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px 8px;
   }
   .app-tile {
-    flex: 0 0 120px;
+    padding: 8px 2px;
+    gap: 10px;
   }
-  .chat-tile {
+  .app-tile > span:not(.app-icon) {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .app-tile small {
+    display: block;
+  }
+  .create-tile {
     background: transparent;
-    color: inherit;
-    padding: 10px 6px;
+    color: var(--muted);
+  }
+  .create-tile .app-icon {
+    border-style: dashed;
+    box-shadow: none;
+    background: var(--hover);
+  }
+  .app-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: var(--border-width) solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 0 14px;
+    margin-bottom: 20px;
+    color: var(--muted);
+  }
+  .app-search input {
+    width: 100%;
+    min-width: 0;
+    min-height: 48px;
+    background: transparent;
+    border: 0;
+    color: var(--ink);
+    font-size: 16px;
+  }
+  .launcher-empty {
+    padding: 28px 20px;
+    text-align: center;
+    border: var(--border-width) dashed var(--line);
+    border-radius: calc(var(--radius) * 1.5);
+  }
+  .empty-symbol {
+    color: var(--accent);
+  }
+  .launcher-empty h3 {
+    font-size: 17px;
+    font-weight: 550;
+    margin: 16px 0 8px;
+  }
+  .launcher-empty p {
+    max-width: 350px;
+    margin: 0 auto 20px;
+    font-size: 14px;
+    color: var(--muted);
   }
   .launcher-hint {
-    max-width: 420px;
-    margin: 32px auto 0;
-  }
-  .launcher > .error {
-    width: 100%;
-    max-width: 640px;
+    margin-top: 20px;
+    font-size: 14px;
   }
   .launcher-content :global(.home-notifications) {
-    max-width: 640px;
-    margin: 48px auto 0;
-  }
-  .launcher-content :global(.home-notifications > header) {
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-  .launcher-content :global(.home-notifications h2) {
-    margin-top: 0;
+    margin-top: 36px;
+    text-align: left;
   }
   @media (max-width: 700px) {
+    .has-apps .launcher-header {
+      margin-bottom: 24px;
+    }
+    .has-apps .launcher-intro .eyebrow {
+      display: none;
+    }
+    .has-apps .launcher-intro h1 {
+      font-size: 28px;
+      max-width: none;
+    }
+    .has-apps .launcher-intro > p:last-child {
+      display: none;
+    }
+    .has-apps .quick-actions {
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 20px 0 28px;
+    }
+    .has-apps .quick-action {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px;
+    }
+    .has-apps .quick-action :global(> svg) {
+      display: none;
+    }
+    .has-apps .quick-action strong {
+      font-size: 14px;
+    }
+    .has-apps .quick-action small {
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .has-apps .action-icon {
+      width: 36px;
+      height: 36px;
+    }
+  }
+  @media (min-width: 701px) {
     .launcher {
-      padding: 40px 20px;
+      padding: 48px 32px 120px;
     }
     .launcher-header {
-      margin-bottom: 28px;
+      margin-bottom: 56px;
     }
-    .launcher-intro {
-      margin-bottom: 28px;
+    .launcher-intro h1,
+    .launcher-intro > p:last-child {
+      max-width: none;
+    }
+    .quick-actions {
+      grid-template-columns: 1fr 1fr;
     }
     .app-grid {
-      gap: 24px 12px;
-    }
-    .app-tile {
-      flex-basis: calc((100% - 24px) / 3);
-      max-width: 120px;
-    }
-    .launcher-content :global(.home-notifications) {
-      margin-top: 36px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 24px;
     }
   }
 </style>

@@ -549,7 +549,12 @@
           placeholder={launcher ? 'What’s on your mind?' : 'Ask your app anything…'}
           disabled={busy}
           onkeydown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.isComposing &&
+              (!window.matchMedia('(pointer: coarse)').matches || event.ctrlKey || event.metaKey)
+            ) {
               event.preventDefault();
               void send();
             }

@@ -4,3 +4,5 @@ build/
 .data/
 .tools/
 package-lock.json
+playwright-report/
+test-results/
