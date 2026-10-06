@@ -129,3 +129,164 @@ test('notifications and voice remain usable on a phone', async ({ page }, info) 
   await fitsViewport(page);
   await capture(page, info, 'voice');
 });
+
+test('Chat and Voice entries start fresh while saved history and reloads retain their chat', async ({
+  page,
+}, info) => {
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Chat', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+  const savedURL = page.url();
+  const note = `Remember this note from ${info.project.name}`;
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill(note);
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.locator('.message:not(.from-user)')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeEnabled();
+  await page.reload();
+  expect(page.url()).toBe(savedURL);
+  await expect(page.locator('.message.from-user')).toContainText(note);
+  await page.getByRole('link', { name: 'Back to Home', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Chat', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/chat\/[0-9a-f-]+$/);
+  const freshURL = page.url();
+  expect(freshURL).not.toBe(savedURL);
+  await expect(page.locator('.message')).toHaveCount(0);
+  await page.locator('.conversation-picker-trigger').click();
+  await page
+    .getByRole('dialog', { name: 'Conversations', exact: true })
+    .getByRole('button', { name: new RegExp(note) })
+    .click();
+  await expect(page).toHaveURL(savedURL);
+  await expect(page.locator('.message.from-user')).toContainText(note);
+  await page.getByRole('link', { name: 'Back to Home', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Voice', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/voice\/[0-9a-f-]+$/);
+  const firstVoiceURL = page.url();
+  expect(firstVoiceURL.split('/').pop()).not.toBe(savedURL.split('/').pop());
+  await expect(page.locator('.message')).toHaveCount(0);
+  await page.getByRole('link', { name: 'Back to Home', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Voice', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/voice\/[0-9a-f-]+$/);
+  expect(page.url()).not.toBe(firstVoiceURL);
+  await expect(page.locator('.message')).toHaveCount(0);
+});
+
+test('compact composer grows, retains drafts through options, and fits a shorter viewport', async ({
+  page,
+  isMobile,
+}, info) => {
+  await page.getByRole('button', { name: 'Start a chat' }).click();
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  await expect(message).toBeVisible();
+  const small = await message.boundingBox();
+  const draft = 'First line\nSecond line\nThird line\nFourth line';
+  await message.fill(draft);
+  await expect
+    .poll(async () => (await message.boundingBox())!.height)
+    .toBeGreaterThan(small!.height);
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  const options = page.getByRole('dialog', { name: 'Chat options', exact: true });
+  await expect(options).toBeVisible();
+  await expect(options.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(
+    'test-model',
+  );
+  await page.getByRole('button', { name: 'Close chat options' }).click();
+  await expect(message).toHaveValue(draft);
+  await expect(page.getByRole('button', { name: 'Chat options', exact: true })).toBeFocused();
+  if (isMobile) {
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 360 });
+    await fitsViewport(page);
+    const send = page.getByRole('button', { name: 'Send message', exact: true });
+    await expect
+      .poll(async () => {
+        const bounds = await send.boundingBox();
+        return bounds!.y + bounds!.height;
+      })
+      .toBeLessThanOrEqual(360);
+    const header = await page.locator('.chat-header').boundingBox();
+    expect(header!.y).toBeGreaterThanOrEqual(0);
+    await capture(page, info, 'short-chat');
+  }
+});
+
+test('visible viewport fallback keeps the composer above a simulated keyboard without disabling zoom', async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, 'Keyboard fallback is mobile-specific');
+  await page.addInitScript(() => {
+    const viewport = Object.assign(new EventTarget(), {
+      height: window.innerHeight,
+      offsetTop: 0,
+      scale: 1,
+    });
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+  });
+  await page.goto('/chat');
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator('.mobile-chat')
+        .evaluate((node) => (node as HTMLElement).style.getPropertyValue('--chat-viewport-height')),
+    )
+    .not.toBe('');
+  await page.evaluate(() => {
+    Object.assign(window.visualViewport!, { height: 320, offsetTop: 40 });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  const shell = page.locator('.mobile-chat');
+  await expect.poll(async () => (await shell.boundingBox())!.height).toBe(320);
+  expect((await shell.boundingBox())!.y).toBe(40);
+  const send = await page.getByRole('button', { name: 'Send message', exact: true }).boundingBox();
+  expect(send!.y + send!.height).toBeLessThanOrEqual(360);
+  await page.evaluate(() => {
+    Object.assign(window.visualViewport!, { scale: 2 });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  await expect
+    .poll(() =>
+      shell.evaluate((node) =>
+        (node as HTMLElement).style.getPropertyValue('--chat-viewport-height'),
+      ),
+    )
+    .toBe('');
+});
+
+test('reading earlier messages survives viewport changes and Latest returns to the bottom', async ({
+  page,
+}, info) => {
+  await page.getByRole('button', { name: 'Start a chat' }).click();
+  const message = page.getByRole('textbox', { name: 'Message', exact: true });
+  await message.fill('An earlier line of conversation to read.\n'.repeat(80));
+  await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect(page.locator('.message:not(.from-user)')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeEnabled();
+  const transcript = page.locator('.transcript');
+  await transcript.evaluate((node) => node.scrollTo({ top: 0, behavior: 'instant' }));
+  const latest = page.getByRole('button', { name: 'Latest messages', exact: true });
+  await expect(latest).toBeVisible();
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 480 });
+  await expect.poll(() => transcript.evaluate((node) => node.scrollTop)).toBe(0);
+  await capture(page, info, 'reading-history');
+  await latest.click();
+  await expect(latest).not.toBeVisible();
+  await expect
+    .poll(() =>
+      transcript.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight),
+    )
+    .toBeLessThan(2);
+});

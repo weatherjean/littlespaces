@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { chatViewport } from '$lib/chat-viewport';
   import { appEmoji } from '$lib/app-emoji';
   import Notifications from '$lib/components/Notifications.svelte';
   import { goto, invalidateAll } from '$app/navigation';
@@ -81,6 +82,7 @@
 </main>
 <dialog
   class="app-chat-modal"
+  use:chatViewport
   bind:this={dialog}
   oncancel={(event) => {
     event.preventDefault();

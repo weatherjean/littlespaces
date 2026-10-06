@@ -159,14 +159,34 @@
       }
     }
   }
+  let messageInput = $state<HTMLTextAreaElement>();
+  let optionsDialog = $state<HTMLDialogElement>();
+  let optionsTrigger = $state<HTMLButtonElement>();
+  const optionsId = $props.id();
+  function closeOptions() {
+    optionsDialog?.close();
+    optionsTrigger?.focus();
+  }
+  function resizeMessage() {
+    if (!messageInput) return;
+    messageInput.style.height = 'auto';
+    const available = window.visualViewport?.height || window.innerHeight;
+    messageInput.style.height = `${Math.min(messageInput.scrollHeight, Math.max(44, Math.min(144, available * 0.25)))}px`;
+  }
+  $effect(() => {
+    draft;
+    if (messageInput) void tick().then(resizeMessage);
+  });
+  let following = $state(true);
   let transcript: HTMLDivElement;
-  async function scrollChat() {
+  let transcriptContent: HTMLDivElement;
+  async function scrollChat(force = false) {
+    if (!force && !following) return;
+    if (force) following = true;
     await tick();
     transcript?.scrollTo({
       top: transcript.scrollHeight,
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'instant'
-        : 'smooth',
+      behavior: 'instant',
     });
   }
   beforeNavigate((navigation) => {
@@ -206,8 +226,15 @@
         })
         .catch(() => {});
     if (account?.canUsePlan) void loadModels();
-    void scrollChat();
+    void scrollChat(true);
+    const observer = new ResizeObserver(() => {
+      resizeMessage();
+      if (following) void scrollChat();
+    });
+    observer.observe(transcript);
+    observer.observe(transcriptContent);
     return () => {
+      observer.disconnect();
       window.removeEventListener('pagehide', discardEmptyChat);
       window.removeEventListener('pageshow', restoreChat);
       void discardEmptyChat();
@@ -247,7 +274,7 @@
     cancelRequest = new AbortController();
     stopVoice?.();
     listening = false;
-    await scrollChat();
+    await scrollChat(true);
     let completed = false;
     try {
       const response = await fetch('/api/chat', {
@@ -370,66 +397,81 @@
 </script>
 
 <section class="chat-view" aria-label="Conversation">
-  <div class="transcript" bind:this={transcript} aria-live="polite">
-    {#if !chat.length}<div class="chat-welcome">
-        <span class="card-icon"><Icon name={voiceMode ? 'mic' : 'spark'} size={28} /></span>
-        <h2>
-          {voiceMode
-            ? 'What would you like to do?'
-            : launcher
-              ? 'What’s on your mind?'
-              : activeChat.launch?.title ||
-                (applet ? 'How can I help?' : 'What would you like to build?')}
-        </h2>
-        <p>
-          {voiceMode
-            ? 'Talk about your apps. Confirm changes before they’re saved.'
-            : launcher
-              ? 'Ask a question or describe an app you want.'
-              : activeChat.launch?.welcome ||
-                (applet
-                  ? 'Ask a question or change this app.'
-                  : 'Describe the app you want to make.')}
-        </p>
-      </div>{/if}
-    {#each chat as message}{#if $expertMode && message.toolCalls?.length}<ToolCalls
-          calls={message.toolCalls}
-        />{/if}
-      <article class:from-user={message.role === 'user'} class="message">
-        <span class="message-label">{message.role === 'user' ? 'You' : 'ChatGPT'}</span>
-        <p><MessageText text={message.content} /></p>
-        {#if message.photos?.length}<div class="message-photos">
-            {#each message.photos as photoId}<a
-                href={`/api/spaces/${space.id}/photos/${photoId}`}
-                target="_blank"
-                rel="noreferrer"
-                ><img src={`/api/spaces/${space.id}/photos/${photoId}`} alt="Attachment" /></a
-              >{/each}
+  <div class="transcript-wrap">
+    <div
+      class="transcript"
+      bind:this={transcript}
+      aria-live="polite"
+      aria-relevant="additions text"
+      onscroll={() => {
+        following = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
+      }}
+    >
+      <div bind:this={transcriptContent}>
+        {#if !chat.length}<div class="chat-welcome">
+            <span class="card-icon"><Icon name={voiceMode ? 'mic' : 'spark'} size={28} /></span>
+            <h2>
+              {voiceMode
+                ? 'What would you like to do?'
+                : launcher
+                  ? 'What’s on your mind?'
+                  : activeChat.launch?.title ||
+                    (applet ? 'How can I help?' : 'What would you like to build?')}
+            </h2>
+            <p>
+              {voiceMode
+                ? 'Talk about your apps. Confirm changes before they’re saved.'
+                : launcher
+                  ? 'Ask a question or describe an app you want.'
+                  : activeChat.launch?.welcome ||
+                    (applet
+                      ? 'Ask a question or change this app.'
+                      : 'Describe the app you want to make.')}
+            </p>
           </div>{/if}
-      </article>{/each}
-    {#if $expertMode && calls.length}<ToolCalls {calls} />{/if}
-    {#if busy}<p class="status">{status}</p>{/if}
-    {#if !voiceMode}<BuildPlanCard
-        spaceId={space.id}
-        chatId={activeChat.id}
-        refreshKey={voiceRefresh}
-        disabled={busy ||
-          uploading ||
-          listening ||
-          !model ||
-          !!draft.trim() ||
-          !!attachments.length}
-        onapprove={(plan) => void send(plan)}
-      />{/if}
-    {#if voiceMode}<VoiceActions
-        chatId={activeChat.id}
-        refreshKey={voiceRefresh}
-        disabled={busy || listening}
-        ondone={(text) => {
-          void speakReply(text);
-          void scrollChat();
-        }}
-      />{/if}
+        {#each chat as message}{#if $expertMode && message.toolCalls?.length}<ToolCalls
+              calls={message.toolCalls}
+            />{/if}
+          <article class:from-user={message.role === 'user'} class="message">
+            <span class="message-label">{message.role === 'user' ? 'You' : 'ChatGPT'}</span>
+            <p><MessageText text={message.content} /></p>
+            {#if message.photos?.length}<div class="message-photos">
+                {#each message.photos as photoId}<a
+                    href={`/api/spaces/${space.id}/photos/${photoId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    ><img src={`/api/spaces/${space.id}/photos/${photoId}`} alt="Attachment" /></a
+                  >{/each}
+              </div>{/if}
+          </article>{/each}
+        {#if $expertMode && calls.length}<ToolCalls {calls} />{/if}
+        {#if busy}<p class="status">{status}</p>{/if}
+        {#if !voiceMode}<BuildPlanCard
+            spaceId={space.id}
+            chatId={activeChat.id}
+            refreshKey={voiceRefresh}
+            disabled={busy ||
+              uploading ||
+              listening ||
+              !model ||
+              !!draft.trim() ||
+              !!attachments.length}
+            onapprove={(plan) => void send(plan)}
+          />{/if}
+        {#if voiceMode}<VoiceActions
+            chatId={activeChat.id}
+            refreshKey={voiceRefresh}
+            disabled={busy || listening}
+            ondone={(text) => {
+              void speakReply(text);
+              void scrollChat();
+            }}
+          />{/if}
+      </div>
+    </div>
+    {#if !following}<button type="button" class="jump-latest" onclick={() => void scrollChat(true)}
+        ><Icon name="chevron" size={18} />Latest messages</button
+      >{/if}
   </div>
   {#if activeChat.launch}<details class="chat-context">
       <summary>{activeChat.launch.title || 'App task'} · App context</summary>
@@ -463,6 +505,17 @@
         > to grant plan access.
       </p>{/if}
     {#if voiceMode}<div class="voice-controls">
+        <button
+          type="button"
+          class="composer-options"
+          bind:this={optionsTrigger}
+          aria-label="Chat options"
+          aria-haspopup="dialog"
+          onclick={() => optionsDialog?.showModal()}
+          ><Icon name="settings" size={18} /><span
+            >{models.find((item) => item.slug === model)?.display_name || 'Options'}</span
+          ></button
+        >
         <button
           class="voice-talk"
           class:listening
@@ -530,6 +583,8 @@
           {/if}
         </div>
         <textarea
+          bind:this={messageInput}
+          rows="1"
           onpaste={(event) => {
             const files = Array.from(event.clipboardData?.files || []);
             if (files.some((file) => file.type.startsWith('image/'))) {
@@ -560,31 +615,18 @@
             }
           }}></textarea>
         <div class="composer-controls">
-          <div class="model-controls">
-            <select
-              aria-label="Model"
-              bind:value={model}
-              onchange={(event) => {
-                model = event.currentTarget.value;
-                writeBrowserValue('little-spaces-model', model);
-                restoreEffort();
-              }}
-              disabled={busy || !models.length}
-              >{#if !models.length}<option value="">ChatGPT</option
-                >{/if}{#each models as item}<option value={item.slug}>{item.display_name}</option
-                >{/each}</select
-            ><select
-              class="effort-select"
-              aria-label="Reasoning effort"
-              bind:value={effort}
-              onchange={(event) =>
-                writeBrowserValue(`little-spaces-effort:${model}`, event.currentTarget.value)}
-              disabled={busy || !efforts.length}
-              ><option value="default">Effort: Default</option>{#each efforts as level}<option
-                  value={level}>Effort: {level}</option
-                >{/each}</select
+          <button
+            type="button"
+            class="composer-options"
+            bind:this={optionsTrigger}
+            aria-label="Chat options"
+            aria-haspopup="dialog"
+            onclick={() => optionsDialog?.showModal()}
+          >
+            <Icon name="settings" size={18} /><span
+              >{models.find((item) => item.slug === model)?.display_name || 'Options'}</span
             >
-          </div>
+          </button>
           <div>
             <button
               type="button"
@@ -608,6 +650,9 @@
               >{:else}<button
                 class="send-button"
                 aria-label="Send message"
+                onpointerdown={(event) => {
+                  if (event.pointerType === 'touch') event.preventDefault();
+                }}
                 disabled={uploading ||
                   (!draft.trim() && !attachments.length) ||
                   !model ||
@@ -618,6 +663,58 @@
       </form>
     {/if}
   </div>
+  <dialog
+    class="chat-options-dialog"
+    bind:this={optionsDialog}
+    aria-labelledby={`${optionsId}-title`}
+    oncancel={(event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeOptions();
+    }}
+  >
+    <header class="picker-header">
+      <div>
+        <h2 id={`${optionsId}-title`}>Chat options</h2>
+        <p>Used for your next message.</p>
+      </div>
+      <button
+        type="button"
+        class="icon-button"
+        aria-label="Close chat options"
+        onclick={closeOptions}><Icon name="close" /></button
+      >
+    </header>
+    <div class="chat-options-body">
+      <label
+        >Model<select
+          aria-label="Model"
+          bind:value={model}
+          onchange={(event) => {
+            model = event.currentTarget.value;
+            writeBrowserValue('little-spaces-model', model);
+            restoreEffort();
+          }}
+          disabled={busy || !models.length}
+          >{#if !models.length}<option value="">ChatGPT</option>{/if}{#each models as item}<option
+              value={item.slug}>{item.display_name}</option
+            >{/each}</select
+        ></label
+      ><label
+        >Reasoning effort<select
+          class="effort-select"
+          aria-label="Reasoning effort"
+          bind:value={effort}
+          onchange={(event) =>
+            writeBrowserValue(`little-spaces-effort:${model}`, event.currentTarget.value)}
+          disabled={busy || !efforts.length}
+          ><option value="default">Effort: Default</option>{#each efforts as level}<option
+              value={level}>Effort: {level}</option
+            >{/each}</select
+        ></label
+      >
+    </div>
+  </dialog>
 </section>
 
 <style>

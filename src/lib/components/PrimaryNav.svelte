@@ -11,7 +11,11 @@
 
 <nav class="primary-nav" aria-label="Main navigation">
   {#each links as link}
-    <a href={link.href} aria-current={page.url.pathname === link.href ? 'page' : undefined}>
+    <a
+      data-sveltekit-preload-data="off"
+      href={link.href}
+      aria-current={page.url.pathname === link.href ? 'page' : undefined}
+    >
       <Icon name={link.icon} size={22} /><span>{link.label}</span>
     </a>
   {/each}

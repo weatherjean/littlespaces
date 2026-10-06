@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Notifications from './Notifications.svelte';
   import ConnectChatGPT from './ConnectChatGPT.svelte';
   import { goto } from '$app/navigation';
   import ChatView from './ChatView.svelte';
@@ -15,6 +16,7 @@
     applet,
     base,
     voiceMode = false,
+    standalone = false,
     onupdated = () => {},
   }: {
     space: Space;
@@ -26,6 +28,7 @@
     applet: Applet | null;
     base: string;
     voiceMode?: boolean;
+    standalone?: boolean;
     onupdated?: () => void;
   } = $props();
   const pickerId = $props.id();
@@ -45,7 +48,8 @@
     query = '';
     error = '';
     picker?.showModal();
-    searchInput?.focus();
+    // A touch user can choose a chat without immediately summoning the keyboard.
+    if (!window.matchMedia('(pointer: coarse)').matches) searchInput?.focus();
   }
   function closePicker() {
     picker?.close();
@@ -79,29 +83,58 @@
   }
 </script>
 
+{#if standalone}
+  <header class="chat-header">
+    <a class="back-link" href="/" aria-label="Back to Home"><Icon name="back" /></a>
+    <div class="chat-header-copy">
+      <h1>{voiceMode ? 'Voice' : 'Chat'}</h1>
+      {#if account?.canUsePlan}
+        <button
+          class="conversation-picker-trigger"
+          bind:this={trigger}
+          aria-label={`Choose conversation: ${activeChat.title}`}
+          aria-haspopup="dialog"
+          disabled={busy || chatBusy}
+          onclick={openPicker}
+        >
+          <span>{activeChat.title}</span><Icon name="chevron" size={14} />
+        </button>
+      {/if}
+    </div>
+    <button
+      class="icon-button"
+      aria-label="New chat"
+      disabled={busy || chatBusy || !account?.canUsePlan}
+      onclick={newChat}><Icon name="plus" /></button
+    >
+    <Notifications />
+  </header>
+{/if}
 {#if !account?.canUsePlan}
   <ConnectChatGPT reconnect={!!account} />
 {:else}
   <div class="chat-panel">
-    <div class="conversation-switcher">
-      <button
-        class="conversation-picker-trigger"
-        bind:this={trigger}
-        aria-label={`Choose conversation: ${activeChat.title}`}
-        aria-haspopup="dialog"
-        disabled={busy || chatBusy}
-        onclick={openPicker}
-        ><Icon name="chat" size={16} /><span>{activeChat.title}</span><Icon
-          name="chevron"
-          size={15}
-        /></button
-      ><button
-        class="icon-button"
-        aria-label="New chat"
-        disabled={busy || chatBusy}
-        onclick={newChat}><Icon name="plus" size={18} /></button
-      >
-    </div>
+    {#if !standalone}
+      <div class="conversation-switcher">
+        <button
+          class="conversation-picker-trigger"
+          bind:this={trigger}
+          aria-label={`Choose conversation: ${activeChat.title}`}
+          aria-haspopup="dialog"
+          disabled={busy || chatBusy}
+          onclick={openPicker}
+          ><Icon name="chat" size={16} /><span>{activeChat.title}</span><Icon
+            name="chevron"
+            size={15}
+          /></button
+        ><button
+          class="icon-button"
+          aria-label="New chat"
+          disabled={busy || chatBusy}
+          onclick={newChat}><Icon name="plus" size={18} /></button
+        >
+      </div>
+    {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#key activeChat.id}<ChatView
         {space}
@@ -121,6 +154,7 @@
     class="conversation-picker"
     bind:this={picker}
     aria-labelledby={`${pickerId}-title`}
+    tabindex="-1"
     oncancel={(event) => {
       event.preventDefault();
       event.stopPropagation();
