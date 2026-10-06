@@ -125,7 +125,7 @@ export async function appTools(
   tools.push(
     tool(
       'list_secrets',
-      'List configured secret names and descriptions. Values are never available to chat or applets.',
+      'List configured secret names, descriptions, and allowed API origins. Backend HTTP requests can reference these names; raw values are never returned.',
       {},
     ),
   );

@@ -69,6 +69,13 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
     db.exec(
       'CREATE TABLE IF NOT EXISTS build_drafts (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL)',
     );
+    if (
+      !db
+        .prepare('PRAGMA table_info(secrets)')
+        .all()
+        .some((row) => row.name === 'origins')
+    )
+      db.exec("ALTER TABLE secrets ADD COLUMN origins TEXT NOT NULL DEFAULT '[]'");
     db.exec(`CREATE TABLE IF NOT EXISTS voice_actions (
       id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL
     ); CREATE INDEX IF NOT EXISTS voice_actions_chat ON voice_actions(chat_id);`);

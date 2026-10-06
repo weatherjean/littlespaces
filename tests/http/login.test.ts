@@ -216,6 +216,31 @@ test('production HTTP login protects data, locks after three failures, and inval
     const secretText = await secretList.text();
     assert.ok(secretText.includes('HTTP_KEY'));
     assert.ok(!secretText.includes('never-return-this-value'));
+    const configuredSecret = await request('/api/settings/secrets', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        action: 'configure',
+        name: 'HTTP_KEY',
+        description: 'Updated',
+        origins: ['https://api.example.com'],
+      }),
+    });
+    assert.equal(configuredSecret.status, 200);
+    const configured = await configuredSecret.json();
+    assert.deepEqual(configured.secrets[0].origins, ['https://api.example.com']);
+    assert.equal(configured.secrets[0].description, 'Updated');
+    assert.ok(!JSON.stringify(configured).includes('never-return-this-value'));
+    const invalidOrigin = await request('/api/settings/secrets', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        action: 'configure',
+        name: 'HTTP_KEY',
+        origins: ['https://api.example.com/path'],
+      }),
+    });
+    assert.equal(invalidOrigin.status, 400);
     const csrfSecret = await request('/api/settings/secrets', {
       method: 'POST',
       headers: { ...headers, origin: 'https://evil.example' },
@@ -385,7 +410,9 @@ test('production HTTP login protects data, locks after three failures, and inval
     const persisted = await request('/api/settings/schedules', { headers: { cookie: third } });
     assert.equal((await persisted.json()).schedules[0].key, 'check');
     const persistedSecret = await request('/api/settings/secrets', { headers: { cookie: third } });
-    assert.equal((await persistedSecret.json()).secrets[0].name, 'HTTP_KEY');
+    const persistedMetadata = (await persistedSecret.json()).secrets[0];
+    assert.equal(persistedMetadata.name, 'HTTP_KEY');
+    assert.deepEqual(persistedMetadata.origins, ['https://api.example.com']);
     owner.configure('owner@example.com', 'new temporary http password', true);
     assert.equal(
       (await request('/api/spaces', { headers: { cookie: third } })).status,

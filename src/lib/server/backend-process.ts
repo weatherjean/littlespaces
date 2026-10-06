@@ -29,6 +29,7 @@ export async function runBackend(
   bundle: string,
   request: object,
   timeout = 5000,
+  http?: (input: unknown, signal: AbortSignal) => Promise<unknown>,
 ): Promise<RuntimeResult> {
   const payload = JSON.stringify(request);
   if (Buffer.byteLength(payload) > 4_000_000)
@@ -48,6 +49,9 @@ export async function runBackend(
         env: {},
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+      const controller = new AbortController();
+      let buffer = '';
+      let requests = 0;
       let stdout = '',
         stderr = '',
         failure = '';
@@ -56,6 +60,7 @@ export async function runBackend(
       child.stderr.setEncoding('utf8');
       const timer = setTimeout(() => {
         failure = 'Backend execution timed out.';
+        controller.abort();
         child.kill('SIGKILL');
       }, timeout);
       child.stdout.on('data', (chunk) => {
@@ -63,17 +68,61 @@ export async function runBackend(
         outputBytes += Buffer.byteLength(chunk);
         if (outputBytes > 5_000_000) {
           failure = 'Backend output is too large.';
+          controller.abort();
           child.kill('SIGKILL');
-        } else stdout += chunk;
+        } else {
+          buffer += chunk;
+          let newline;
+          while ((newline = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            let frame;
+            try {
+              frame = JSON.parse(line);
+            } catch {
+              stdout += line;
+              continue;
+            }
+            if (frame?.http === true) {
+              if (!http || ++requests > 10 || !Number.isSafeInteger(frame.id)) {
+                failure = 'HTTP is unavailable or its request limit was exceeded.';
+                controller.abort();
+                child.kill('SIGKILL');
+                return;
+              }
+              void Promise.resolve()
+                .then(() => http(frame.input, controller.signal))
+                .then(
+                  (result) => {
+                    if (!controller.signal.aborted)
+                      child.stdin.write(JSON.stringify({ id: frame.id, result }) + '\n');
+                  },
+                  (error) => {
+                    if (!controller.signal.aborted)
+                      child.stdin.write(
+                        JSON.stringify({
+                          id: frame.id,
+                          error:
+                            error instanceof Error ? error.message : 'External request failed.',
+                        }) + '\n',
+                      );
+                  },
+                );
+            } else stdout += line;
+          }
+        }
       });
       child.stderr.on('data', (chunk) => {
         if (stderr.length < 2000) stderr += chunk;
       });
       child.on('error', () => {
+        controller.abort();
         clearTimeout(timer);
         reject(new Error(sandbox.requirement));
       });
       child.on('close', (code) => {
+        controller.abort();
+        stdout += buffer;
         clearTimeout(timer);
         if (failure) return reject(new Error(failure));
         try {
@@ -86,7 +135,7 @@ export async function runBackend(
         }
       });
       child.stdin.on('error', () => {});
-      child.stdin.end(payload);
+      child.stdin.write(payload + '\n');
     });
   } finally {
     activeExecutions--;

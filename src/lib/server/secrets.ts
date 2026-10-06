@@ -1,4 +1,4 @@
-import { createCipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from './config';
@@ -20,8 +20,75 @@ function key() {
 }
 export function listSecrets() {
   return workspace((db) =>
-    db.prepare('SELECT name,description,updated_at AS updatedAt FROM secrets ORDER BY name').all(),
+    db
+      .prepare('SELECT name,description,origins,updated_at AS updatedAt FROM secrets ORDER BY name')
+      .all()
+      .map((row) => ({
+        name: String(row.name),
+        description: String(row.description),
+        updatedAt: String(row.updatedAt),
+        origins: JSON.parse(String(row.origins)) as string[],
+      })),
   );
+}
+function allowedOrigins(input: unknown): string[] {
+  if (!Array.isArray(input) || input.length > 10) throw Error('Add up to ten HTTPS API origins.');
+  return [
+    ...new Set(
+      input.map((value) => {
+        if (typeof value !== 'string' || value.length > 300) throw Error('Invalid API origin.');
+        const url = new URL(value);
+        if (
+          url.protocol !== 'https:' ||
+          url.username ||
+          url.password ||
+          url.pathname !== '/' ||
+          url.search ||
+          url.hash ||
+          (url.port && url.port !== '443')
+        )
+          throw Error('Use HTTPS origins without paths or custom ports.');
+        return url.origin;
+      }),
+    ),
+  ];
+}
+export function configureSecret(name: string, origins: unknown, description?: unknown) {
+  const normalized = allowedOrigins(origins);
+  if (description !== undefined && (typeof description !== 'string' || description.length > 500))
+    throw Error('Invalid description.');
+  const result = workspace((db) =>
+    db
+      .prepare(
+        'UPDATE secrets SET origins=?,description=COALESCE(?,description),updated_at=? WHERE name=?',
+      )
+      .run(
+        JSON.stringify(normalized),
+        description === undefined ? null : (description as string),
+        new Date().toISOString(),
+        name,
+      ),
+  );
+  if (!result.changes) throw Error('Secret not found.');
+}
+
+// Host-only: never expose this function through a route, agent tool or app context.
+export function secretForOrigin(name: string, origin: string): string {
+  const row = workspace((db) =>
+    db.prepare('SELECT ciphertext,origins FROM secrets WHERE name=?').get(name),
+  );
+  if (!row || !JSON.parse(String(row.origins)).includes(origin))
+    throw Error(
+      'Secret is missing or not allowed for this API origin. Update Secrets in Settings.',
+    );
+  const encrypted = JSON.parse(String(row.ciphertext));
+  const decipher = createDecipheriv('aes-256-gcm', key(), Buffer.from(encrypted.iv, 'base64'));
+  decipher.setAAD(Buffer.from(name));
+  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encrypted.data, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
 }
 export function saveSecret(input: Record<string, unknown>) {
   if (
@@ -36,6 +103,7 @@ export function saveSecret(input: Record<string, unknown>) {
     throw Error(
       'Use an uppercase secret name, a value, and a description of at most 500 characters.',
     );
+  const origins = input.origins === undefined ? undefined : allowedOrigins(input.origins);
   // Only metadata is exposed to the browser/model. Never log values or ciphertext.
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key(), iv);
@@ -44,8 +112,8 @@ export function saveSecret(input: Record<string, unknown>) {
   workspace((db) =>
     db
       .prepare(
-        `INSERT INTO secrets(name,description,ciphertext,updated_at) VALUES(?,?,?,?)
-    ON CONFLICT(name) DO UPDATE SET description=excluded.description,ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`,
+        `INSERT INTO secrets(name,description,ciphertext,updated_at,origins) VALUES(?,?,?,?,?)
+    ON CONFLICT(name) DO UPDATE SET description=excluded.description,ciphertext=excluded.ciphertext,updated_at=excluded.updated_at,origins=CASE WHEN ? THEN excluded.origins ELSE secrets.origins END`,
       )
       .run(
         input.name as string,
@@ -56,6 +124,8 @@ export function saveSecret(input: Record<string, unknown>) {
           data: encrypted.toString('base64'),
         }),
         new Date().toISOString(),
+        JSON.stringify(origins ?? []),
+        origins === undefined ? 0 : 1,
       ),
   );
 }

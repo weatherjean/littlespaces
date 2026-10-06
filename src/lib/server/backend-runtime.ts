@@ -1,13 +1,29 @@
 // Runs only inside the OS-sandboxed child. The host never evaluates applet code.
 export const runtimeSource = String.raw`
-const fs = require('node:fs');
 const assert = require('node:assert/strict');
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { raw += chunk; if (raw.length > 5000000) process.exit(1); });
-process.stdin.on('end', async () => {
+const readline = require('node:readline');
+const lines = readline.createInterface({input:process.stdin});
+const pending = new Map();
+let sequence = 0, started = false;
+function httpRequest(input) {
+  return new Promise((resolve,reject) => {
+    const id = ++sequence;
+    pending.set(id,{resolve,reject});
+    process.stdout.write(JSON.stringify({http:true,id,input})+'\n');
+  });
+}
+lines.on('line', raw => {
+  if (raw.length > 5000000) process.exit(1);
+  let value;
+  try { value = JSON.parse(raw); } catch { process.exit(1); }
+  if (!started) { started = true; void execute(value); }
+  else {
+    const waiting = pending.get(value.id);
+    if (waiting) { pending.delete(value.id); value.error ? waiting.reject(Error(value.error)) : waiting.resolve(value.result); }
+  }
+});
+async function execute(request) {
   try {
-    const request = JSON.parse(raw);
     const app = require('./backend.cjs');
     const actions = app.actions;
     if (!actions || typeof actions !== 'object' || Array.isArray(actions)) throw Error('Export an actions object.');
@@ -19,7 +35,7 @@ process.stdin.on('end', async () => {
       return { name, description: action.description, parameters: action.parameters, readOnly: action.readOnly };
     });
     const clone = value => JSON.parse(JSON.stringify(value));
-    function session(rows = []) {
+    function session(rows = [], mockHttp) {
       const data = new Map(rows.map(row => [row.key, clone(row.value)]));
       const db = Object.freeze({
         list: () => [...data].map(([key,value]) => ({key,value:clone(value)})),
@@ -27,7 +43,7 @@ process.stdin.on('end', async () => {
         set: (key,value) => { if (typeof key !== 'string' || !key || key.length > 200) throw Error('Invalid key'); data.set(key,clone(value)); },
         remove: key => { data.delete(key); }
       });
-      const context = Object.freeze({ db, now: () => new Date().toISOString(), uuid: () => require('node:crypto').randomUUID() });
+      const context = Object.freeze({ db, http: Object.freeze({request: input => request.mode === 'test' ? (mockHttp ? Promise.resolve().then(() => mockHttp(clone(input))) : Promise.reject(Error('Set mockHttp in this test before calling an integration.'))) : httpRequest(input)}), now: () => new Date().toISOString(), uuid: () => require('node:crypto').randomUUID() });
       return { db, call: async (name,input) => {
         if (!Object.hasOwn(actions,name)) throw Error('Unknown action');
         const before = JSON.stringify(db.list());
@@ -43,8 +59,9 @@ process.stdin.on('end', async () => {
       const report = [];
       for (const test of app.tests) {
         if (typeof test.name !== 'string' || !test.name.trim() || typeof test.run !== 'function') throw Error('Invalid test');
-        const current = session();
-        try { await test.run({call:current.call, db:current.db, assert}); report.push({name:test.name,passed:true}); }
+        let handler;
+        const current = session([], input => { if (!handler) throw Error('Set mockHttp in this test before calling an integration.'); return handler(input); });
+        try { await test.run({call:current.call, db:current.db, assert, mockHttp: fn => { if (typeof fn !== 'function') throw Error('mockHttp needs a function.'); handler = fn; }}); report.push({name:test.name,passed:true}); }
         catch (error) { report.push({name:test.name,passed:false,error:String(error.message).slice(0,1000)}); }
       }
       output = { catalog, report };
@@ -55,5 +72,6 @@ process.stdin.on('end', async () => {
     } else throw Error('Unknown execution mode');
     process.stdout.write(JSON.stringify({ok:true,...output}));
   } catch (error) { process.stdout.write(JSON.stringify({ok:false,error:String(error.message).slice(0,2000)})); process.exitCode=1; }
-});
+  finally { lines.close(); process.stdin.destroy(); }
+}
 `;

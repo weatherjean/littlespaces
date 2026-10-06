@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { request } from '$lib/client';
   let { archivedSpaceIds = [] }: { archivedSpaceIds?: string[] } = $props();
-  type Secret = { name: string; description: string };
+  type Secret = { name: string; description: string; origins: string[] };
   type Schedule = {
     space_id: string;
     key: string;
@@ -15,6 +15,8 @@
   };
   let secrets = $state<Secret[]>([]),
     schedules = $state<Schedule[]>([]);
+  let editing = $state(false);
+  let origins = $state('');
   let name = $state(''),
     value = $state(''),
     description = $state(''),
@@ -51,16 +53,34 @@
     error = '';
     status = '';
     try {
-      secrets = (await request('/api/settings/secrets', { name, value, description })).secrets;
+      secrets = (
+        await request('/api/settings/secrets', {
+          name,
+          value,
+          description,
+          origins: origins.split(/[\s,]+/).filter(Boolean),
+          ...(editing && !value ? { action: 'configure' } : {}),
+        })
+      ).secrets;
       value = '';
       name = '';
       description = '';
+      origins = '';
+      editing = false;
       status = 'Secret saved.';
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not save.';
     } finally {
       busy = false;
     }
+  }
+  function editSecret(secret: Secret) {
+    name = secret.name;
+    description = secret.description;
+    origins = secret.origins.join(', ');
+    value = '';
+    editing = true;
+    error = status = '';
   }
   async function removeSecret(secret: Secret) {
     if (busy || loading) return;
@@ -96,15 +116,20 @@
 
 <section class="setting-card automation-card">
   <h3>Secrets</h3>
-  <p>Encrypted on your server. Values are hidden from chat.</p>
+  <p>Connect apps to external services. Values are hidden from chat.</p>
   {#if loading}<p role="status">Loading settings…</p>{/if}
   {#if loadError}<p class="error" role="alert">{loadError}</p>
     <button class="secondary-button" onclick={load}>Retry loading settings</button>{/if}
   {#each secrets as secret}<div class="saved-row">
       <div>
         <strong>{secret.name}</strong>
-        <p>{secret.description || 'No description'} · Value hidden</p>
+        <p>{secret.description || secret.origins.join(', ') || 'No API access allowed'}</p>
       </div>
+      <button
+        class="secondary-button"
+        disabled={busy || loading || !!loadError}
+        onclick={() => editSecret(secret)}>Edit</button
+      >
       <button
         class="secondary-button"
         disabled={busy || loading || !!loadError}
@@ -113,12 +138,21 @@
     </div>{/each}
   <form onsubmit={save}>
     <div class="form-heading">
-      <h4>Add a secret</h4>
+      <h4>{editing ? `Edit ${name}` : 'Add a secret'}</h4>
+      {#if editing}<button
+          type="button"
+          class="secondary-button"
+          onclick={() => {
+            editing = false;
+            name = value = description = origins = '';
+          }}>Cancel</button
+        >{/if}
     </div>
     <label
       >Name<input
         disabled={busy || loading || !!loadError}
         required
+        readonly={editing}
         pattern={'[A-Z][A-Z0-9_]{0,63}'}
         maxlength="64"
         placeholder="WEATHER_API_KEY"
@@ -136,23 +170,31 @@
     <label class="value-field"
       >Secret value<input
         disabled={busy || loading || !!loadError}
-        required
+        required={!editing}
         type="password"
         autocomplete="new-password"
         maxlength="16000"
-        placeholder="Paste your key or token"
+        placeholder={editing ? 'Leave blank to keep the current value' : 'Paste your key or token'}
         bind:value
       /></label
     >
+    <label class="value-field"
+      >Allowed API origins<input
+        disabled={busy || loading || !!loadError}
+        placeholder="https://api.example.com"
+        bind:value={origins}
+        maxlength="3000"
+      /></label
+    >
     <div class="form-footer">
-      <p>Use an existing name to replace its value.</p>
+      <p>Apps can use this secret at these addresses. Separate origins with commas.</p>
       <button
         class="primary-button"
-        disabled={busy || loading || !!loadError || !name.trim() || !value}>Save secret</button
+        disabled={busy || loading || !!loadError || !name.trim() || (!editing && !value)}
+        >Save secret</button
       >
     </div>
   </form>
-  <p class="integration-note">App integrations aren’t available yet.</p>
   {#if status}<p class="success" role="status">{status}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>
@@ -278,10 +320,6 @@
     min-height: 40px;
     padding: 10px 18px;
   }
-  .integration-note {
-    margin-top: 12px;
-    font-size: 11px;
-  }
   .success,
   .error {
     margin-top: 12px;
@@ -305,6 +343,7 @@
     overflow-wrap: anywhere;
   }
   .saved-row > div {
+    flex: 1;
     min-width: 0;
   }
   .saved-row strong {

@@ -47,7 +47,7 @@ export const tests = [
 
 ## Execution and publishing
 
-TypeScript is compiled with esbuild and executed in a separate Node process inside Bubblewrap on Linux or a deny-by-default `sandbox-exec` profile on macOS. The macOS profile permits runtime files, system libraries, and Homebrew dynamic libraries to load; it blocks private file contents, host filesystem writes, subprocess creation, and networking. The child receives an empty environment and no credentials. Node permissions additionally restrict filesystem reads and process creation. The process has a 64 MB JavaScript heap limit, a five-second action timeout, and bounded input/output. Tests have ten seconds for the full suite. There is no fallback that evaluates generated backend code inside the server or runs without an OS sandbox. macOS currently depends on Apple's legacy `sandbox-exec` utility; if it is unavailable, backend execution fails explicitly. Other operating systems are not yet supported for app backends.
+TypeScript is compiled with esbuild and executed in a separate Node process inside Bubblewrap on Linux or a deny-by-default `sandbox-exec` profile on macOS. The macOS profile permits runtime files, system libraries, and Homebrew dynamic libraries to load; it blocks private file contents, host filesystem writes, subprocess creation, and networking. The child receives an empty environment and no credentials. Node permissions additionally restrict filesystem reads and process creation. The process has a 64 MB JavaScript heap limit, a thirty-second action timeout, and bounded input/output. Tests have ten seconds for the full suite. There is no fallback that evaluates generated backend code inside the server or runs without an OS sandbox. macOS currently depends on Apple's legacy `sandbox-exec` utility; if it is unavailable, backend execution fails explicitly. Other operating systems are not yet supported for app backends.
 
 Actions receive a snapshot of their app's records. Successful write actions commit the result atomically to that app's SQLite database. A data or revision change during execution rejects the commit rather than losing someone else's update. Action schemas and execution use the same revision. Read-only actions cannot commit writes. A failed action commits nothing. App data is limited to 4 MB of UTF-8 JSON per backend invocation and existing record limits still apply. At most four backend processes (actions, inspections, or tests) run at once; additional requests receive a retryable busy error.
 
@@ -129,7 +129,47 @@ Due items appear in a persistent inbox on Home and through the bottom-bar Inbox 
 
 Chat opens in **Knowledge** mode. Home Chat can list apps and read paginated records across them; it cannot write another app's records. App-scoped chat keeps its normal data actions. Select **Build** to expose the draft/test/publish tools for creating or changing code.
 
-Settings stores named secrets encrypted with AES-256-GCM. Names and descriptions are available through the agent's `list_secrets` tool; values are write-only from the UI and never enter model context or applet code. Adding the same name rotates its value. This is a vault and discovery mechanism; external API calls using these secrets are not yet supported. Keep values out of descriptions, chat, and app records.
+Settings stores named secrets encrypted with AES-256-GCM. Names, descriptions, and allowed API origins are available through the agent's `list_secrets` tool; values are write-only from the UI and never enter model context or applet code. Adding the same name rotates its value. Applet backends can use these credentials through the host HTTP helper below. Existing secrets start with no allowed API origins; edit them in Settings to enable access. Keep values out of descriptions, chat, and app records.
+
+### External APIs
+
+In **Settings → Secrets**, save a key and its allowed API origin, such as `https://api.example.com`. Origins have no path and use HTTPS port 443. Edit an existing secret to change its permissions without re-entering its value. An empty origins list disables its API access. Permissions apply to all applets in this single-owner workspace; they are not per-app grants. Use narrowly scoped service tokens and trusted API origins.
+
+Backends reference the name; the host decrypts and attaches its value:
+
+```ts
+const response = await ctx.http.request({
+  url: 'https://api.example.com/items',
+  headers: { Authorization: { secret: 'SERVICE_KEY', prefix: 'Bearer ' } },
+});
+if (!response.ok) throw Error(`Service returned ${response.status}`);
+return response.data;
+```
+
+`request({url, method?, headers?, query?, body?})` returns `{status, ok, data}`. The default method is GET. Headers and query parameters accept strings or `{secret, prefix?}` references; query values are URL-encoded by the host. `body` is JSON, for POST/PUT/PATCH/DELETE. `data` is parsed JSON when possible, otherwise text. Public APIs can also be called without credentials. Do not put secret values in URLs, source, records, or chat.
+
+Read-only actions may use only GET/HEAD, and must choose endpoints that actually have no side effects. Mark external writes `readOnly:false`. They cannot be rolled back with local database changes; a timeout or later error can occur after a remote write succeeded. Do not retry automatically. API access is not exposed directly to frontend JavaScript.
+
+The OS sandbox still has no network access. A bounded host bridge permits public IPv4 HTTPS endpoints, validates DNS answers, pins the checked address, and blocks private/reserved addresses, custom ports, redirects and routing-header overrides. Limits: ten requests per action, ten seconds per request, thirty seconds per action, 128 KB JSON request bodies and 1 MB responses. IPv6-only APIs, streaming, binary uploads, OAuth setup and provider SDKs are not supported yet. Response headers are discarded; common credential echoes are rejected. This is not protection against a malicious approved service encoding or otherwise disclosing credentials: allow only services you trust.
+
+Generated tests use a fresh mock handler in each test, never live APIs or stored values:
+
+```ts
+export const tests = [
+  {
+    name: 'Loads items',
+    run: async ({ call, assert, mockHttp }) => {
+      mockHttp((request) => {
+        assert.equal(request.headers.Authorization.secret, 'SERVICE_KEY');
+        return { status: 200, ok: true, data: [{ id: 'example' }] };
+      });
+      assert.deepEqual(await call('listItems', {}), [{ id: 'example' }]);
+    },
+  },
+];
+```
+
+An unmocked request fails validation. Include tests for API failures as well as successful responses.
 
 For a fixed reminder, use `window.applet.notifications.send({key,title,body,dueAt})`. The server makes it visible when due and sends Web Push to enabled devices, without requiring an open browser tab. Cancel or reschedule obsolete reminders when the underlying record changes.
 

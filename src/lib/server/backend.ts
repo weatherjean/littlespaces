@@ -1,4 +1,5 @@
 import { runBackend, type Action } from './backend-process';
+import { backendHttp } from './backend-http';
 import { logEvent, trace } from './diagnostics';
 import { build } from 'esbuild';
 import Ajv from 'ajv';
@@ -90,12 +91,17 @@ export async function callApp(
     if (!validate(input))
       throw new Error(`Invalid action input: ${ajv.errorsText(validate.errors)}`);
     const before = records(id);
-    const output = await runBackend(current.backendBundle!, {
-      mode: 'call',
-      action: name,
-      input,
-      records: before,
-    });
+    const output = await runBackend(
+      current.backendBundle!,
+      {
+        mode: 'call',
+        action: name,
+        input,
+        records: before,
+      },
+      30_000,
+      backendHttp(action.readOnly),
+    );
     if (!Array.isArray(output.records)) throw new Error('Backend returned invalid records.');
     // A second check in the host prevents a child from bypassing read-only declarations.
     const canonical = (rows: RecordEntry[]) =>
