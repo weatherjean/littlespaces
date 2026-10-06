@@ -11,7 +11,7 @@
   let { data }: { data: PageData } = $props();
   let creating = $state(false),
     error = $state('');
-  async function openChat(build = false, voice = false) {
+  async function openChat(voice = false) {
     if (!data.account?.canUsePlan) {
       await goto(voice ? '/voice' : '/chat');
       return;
@@ -20,18 +20,8 @@
     creating = true;
     error = '';
     try {
-      const { chat } = await request(`/api/spaces/${data.chatSpaceId}/chats`, {
-        ...(build
-          ? {
-              launch: {
-                title: 'Create an app',
-                task: 'New app creation from the home launcher. Help the user shape and build a personal app from their own description.',
-                welcome: 'Describe what you want to track, organize, or get done.',
-              },
-            }
-          : {}),
-      });
-      await goto(`${voice ? '/voice' : '/chat'}/${chat.id}${build ? '?mode=build' : ''}`, {
+      const { chat } = await request(`/api/spaces/${data.chatSpaceId}/chats`, {});
+      await goto(`${voice ? '/voice' : '/chat'}/${chat.id}`, {
         invalidateAll: true,
       });
     } catch (e) {
@@ -64,7 +54,7 @@
     </div>
     {#if !data.account?.canUsePlan}<ConnectChatGPT banner reconnect={!!data.account} />{/if}
     <div class="app-grid">
-      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat(false, true)}
+      <button class="app-tile chat-tile" disabled={creating} onclick={() => openChat(true)}
         ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">🎙️</span></span
         ><span>Voice</span></button
       >
@@ -80,10 +70,7 @@
             ></span
           ><span>{space.name}</span>{#if !space.appletCount}<small>In progress</small>{/if}</a
         >{/each}
-      <button class="app-tile add-app" disabled={creating} onclick={() => openChat(true)}
-        ><span class="app-icon icon-chat"><span class="app-emoji" aria-hidden="true">✨</span></span
-        ><span>{creating ? 'Opening…' : 'Add new'}</span></button
-      >
+
       <a class="app-tile" href="/settings"
         ><span class="app-icon icon-settings"
           ><span class="app-emoji" aria-hidden="true">⚙️</span></span
@@ -91,7 +78,7 @@
       >
     </div>
     {#if data.account?.canUsePlan && !data.spaces.length}<p class="launcher-hint">
-        Choose Add new to create your first app.
+        Open Chat to create your first app.
       </p>{/if}
     <Notifications home />
   </section>
@@ -131,7 +118,6 @@
   .app-tile {
     flex: 0 0 120px;
   }
-  .add-app,
   .chat-tile {
     background: transparent;
     color: inherit;

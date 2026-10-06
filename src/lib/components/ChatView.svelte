@@ -2,6 +2,8 @@
   import { readBrowserValue, writeBrowserValue } from '$lib/browser-storage';
   import { expertMode } from '$lib/preferences';
   import ToolCalls from './ToolCalls.svelte';
+  import BuildPlanCard from './BuildPlanCard.svelte';
+  import { buildPlanText, type BuildPlan } from '$lib/build-plan-types';
   import VoiceActions from './VoiceActions.svelte';
   import MessageText from './MessageText.svelte';
   import { speechText } from '$lib/web-citations';
@@ -100,15 +102,7 @@
         : 'default';
   }
   let effort = $state('default');
-  let mode = $state<'knowledge' | 'build'>(
-    untrack(() =>
-      (launcher && page.url.searchParams.get('mode') === 'build') || (!launcher && !applet)
-        ? 'build'
-        : 'knowledge',
-    ),
-  );
   let efforts = $derived(models.find((item) => item.slug === model)?.efforts || []);
-  let createdApp = $state<string | null>(null);
   let busy = $state(false),
     listening = $state(false),
     readReplies = $state(false),
@@ -224,21 +218,21 @@
       window.speechSynthesis?.cancel();
     };
   });
-  async function send() {
+  async function send(plan?: BuildPlan) {
     if (
       busy ||
       uploading ||
-      (!draft.trim() && !attachments.length) ||
+      (!plan && !draft.trim() && !attachments.length) ||
       !model ||
       !account?.canUsePlan
     )
       return;
     stopSpeaking();
-    const message = draft.trim() || 'What is in this photo?';
-    const sentPhotos = [...attachments];
-    attachments = [];
+    const message = plan ? buildPlanText(plan) : draft.trim() || 'What is in this photo?';
+    const sentPhotos = plan ? [] : [...attachments];
+    if (!plan) attachments = [];
     activeCalls = [];
-    draft = '';
+    if (!plan) draft = '';
     error = '';
     busy = true;
     chat = [
@@ -261,7 +255,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
-          mode: voiceMode ? 'voice' : mode,
+          mode: voiceMode ? 'voice' : undefined,
+          buildPlanId: plan?.id,
           photos: sentPhotos.map((photo) => photo.id),
           model,
           effort,
@@ -307,7 +302,6 @@
               ];
               calls = calls.filter((item) => !activeCalls.some((active) => active.id === item.id));
               window.dispatchEvent(new Event('notifications-changed'));
-              if (launcher && payload.applet) createdApp = payload.applet.id;
               await invalidateAll();
               voiceRefresh++;
               if (voiceMode) void speakReply(payload.message);
@@ -334,8 +328,10 @@
           ? e.message
           : 'Request failed.';
       if (!completed) {
-        attachments = sentPhotos;
-        draft = message;
+        if (!plan) {
+          attachments = sentPhotos;
+          draft = message;
+        }
         chat = chat.slice(0, -1);
       }
     } finally {
@@ -381,9 +377,7 @@
           {voiceMode
             ? 'What would you like to do?'
             : launcher
-              ? mode === 'build'
-                ? 'What would you like to build?'
-                : 'What’s on your mind?'
+              ? 'What’s on your mind?'
               : activeChat.launch?.title ||
                 (applet ? 'How can I help?' : 'What would you like to build?')}
         </h2>
@@ -391,9 +385,7 @@
           {voiceMode
             ? 'Talk about your apps. Confirm changes before they’re saved.'
             : launcher
-              ? mode === 'build'
-                ? 'Describe an app you wish existed.'
-                : 'Ask about your apps and data.'
+              ? 'Ask a question or describe an app you want.'
               : activeChat.launch?.welcome ||
                 (applet
                   ? 'Ask a question or change this app.'
@@ -416,10 +408,19 @@
           </div>{/if}
       </article>{/each}
     {#if $expertMode && calls.length}<ToolCalls {calls} />{/if}
-    {#if createdApp}<a class="created-app-link" href={`/spaces/${createdApp}/applet`}
-        >Open your new app <Icon name="grid" size={17} /></a
-      >{/if}
     {#if busy}<p class="status">{status}</p>{/if}
+    {#if !voiceMode}<BuildPlanCard
+        spaceId={space.id}
+        chatId={activeChat.id}
+        refreshKey={voiceRefresh}
+        disabled={busy ||
+          uploading ||
+          listening ||
+          !model ||
+          !!draft.trim() ||
+          !!attachments.length}
+        onapprove={(plan) => void send(plan)}
+      />{/if}
     {#if voiceMode}<VoiceActions
         chatId={activeChat.id}
         refreshKey={voiceRefresh}
@@ -430,7 +431,7 @@
         }}
       />{/if}
   </div>
-  {#if activeChat.launch && (!launcher || mode === 'build')}<details class="chat-context">
+  {#if activeChat.launch}<details class="chat-context">
       <summary>{activeChat.launch.title || 'App task'} · App context</summary>
       <p>{activeChat.launch.task}</p>
       {#if activeChat.launch.recordKeys?.length}<p>
@@ -555,9 +556,6 @@
           }}></textarea>
         <div class="composer-controls">
           <div class="model-controls">
-            {#if !voiceMode}<select aria-label="Chat mode" bind:value={mode} disabled={busy}>
-                <option value="knowledge">Knowledge</option><option value="build">Build</option>
-              </select>{/if}
             <select
               aria-label="Model"
               bind:value={model}

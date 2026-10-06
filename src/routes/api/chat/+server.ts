@@ -1,3 +1,5 @@
+import { claimBuildPlan, cancelBuildPlan, finishBuild } from '$lib/server/build-plans';
+import { buildPlanText, type BuildPlan } from '$lib/build-plan-types';
 import { logEvent, trace } from '$lib/server/diagnostics';
 import type { ToolCall } from '$lib/types';
 import { liveChatContext } from '$lib/server/chat-context';
@@ -94,15 +96,11 @@ export const POST: RequestHandler = async (event) => {
   }
   if (running.has(spaceId))
     return json(
-      { error: 'This space is already building. Wait for it to finish.' },
+      { error: 'A reply is already running in this space. Wait for it to finish.' },
       { status: 409 },
     );
-  const message = input.message.trim() || 'What is in this photo?';
+  let message = input.message.trim() || 'What is in this photo?';
   const model = input.model;
-  const history = [
-    ...messages(thread),
-    { role: 'user' as const, content: message, ...(photos.length ? { photos } : {}) },
-  ];
   const abort = new AbortController();
   // Model discovery can await network I/O; the empty composer may have been
   // discarded in another request in the meantime.
@@ -111,6 +109,24 @@ export const POST: RequestHandler = async (event) => {
   } catch {
     return json({ error: 'This empty conversation was closed. Open a new chat.' }, { status: 404 });
   }
+  let approved: BuildPlan | undefined;
+  try {
+    if (input.buildPlanId !== undefined) {
+      if (typeof input.buildPlanId !== 'string' || input.mode === 'voice')
+        throw Error('Choose a build plan in Chat.');
+      approved = claimBuildPlan(spaceId, thread, input.buildPlanId);
+      message = buildPlanText(approved);
+    } else cancelBuildPlan(spaceId, thread);
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Could not approve plan.' },
+      { status: 409 },
+    );
+  }
+  const history = [
+    ...messages(thread),
+    { role: 'user' as const, content: message, ...(photos.length ? { photos } : {}) },
+  ];
   const encoder = new TextEncoder();
   const toolCalls: ToolCall[] = [];
   running.add(spaceId);
@@ -134,7 +150,7 @@ export const POST: RequestHandler = async (event) => {
           const result = await generate(
             model,
             history,
-            current?.source,
+            approved ? current?.source : undefined,
             (delta) => {
               chars += delta.length;
               if (Date.now() - lastUpdate > 500) {
@@ -146,12 +162,8 @@ export const POST: RequestHandler = async (event) => {
             },
             abort.signal,
             {
-              mode:
-                input.mode === 'voice' && isLauncher
-                  ? 'voice'
-                  : input.mode === 'build'
-                    ? 'build'
-                    : 'knowledge',
+              mode: input.mode === 'voice' && isLauncher ? 'voice' : 'knowledge',
+              buildPlanId: approved?.id,
               spaceId,
               chatId: thread,
               appletId: id,
@@ -179,6 +191,7 @@ export const POST: RequestHandler = async (event) => {
             message: error instanceof Error ? error.message : 'Something went wrong. Please retry.',
           });
         } finally {
+          if (approved) finishBuild(spaceId, thread, approved.id);
           running.delete(spaceId);
           activeChatTurns.delete(thread);
           if (!abort.signal.aborted) controller.close();

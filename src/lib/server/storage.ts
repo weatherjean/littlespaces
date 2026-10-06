@@ -40,6 +40,7 @@ export function saveApplet(
   content: Omit<Revision, 'version'>,
   id: string = randomUUID(),
   spaceId?: string,
+  emoji?: string,
 ): Applet {
   if (spaceId) getSpace(spaceId);
   const existingSpace = workspace((db) =>
@@ -84,6 +85,7 @@ export function saveApplet(
       owner,
       id,
     );
+    if (emoji) db.prepare('UPDATE spaces SET icon = ? WHERE id = ?').run(emoji, owner);
     db.prepare(
       "UPDATE spaces SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
     ).run(owner);
@@ -270,6 +272,7 @@ export function deleteEmptyChats(chatId?: string): number {
       AND NOT EXISTS (SELECT 1 FROM messages WHERE thread = chats.id)
       AND NOT EXISTS (SELECT 1 FROM chat_tools WHERE thread = chats.id)
       AND NOT EXISTS (SELECT 1 FROM build_drafts WHERE chat_id = chats.id)
+      AND NOT EXISTS (SELECT 1 FROM build_plans WHERE chat_id = chats.id)
       AND NOT EXISTS (SELECT 1 FROM voice_actions WHERE chat_id = chats.id)`);
     db.exec('BEGIN IMMEDIATE');
     try {

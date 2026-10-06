@@ -15,7 +15,7 @@ type Draft = {
   published?: Applet;
 };
 const fields = ['title', 'description', 'source', 'backend', 'chatInstructions'] as const;
-export function draftWorkspace(chatId: string, spaceId: string, appletId?: string) {
+export function draftWorkspace(chatId: string, spaceId: string, appletId?: string, emoji?: string) {
   getChat(spaceId, chatId);
   function read(): Draft | undefined {
     return workspace((db) => {
@@ -152,6 +152,7 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
           draft.prepared,
           draft.target,
           spaceId === launcherChatId ? undefined : spaceId,
+          emoji,
         );
         draft.baseVersion = applet.version;
         draft.published = applet;

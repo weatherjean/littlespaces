@@ -200,10 +200,9 @@ test('agent receives current app guidance and bounded task context without treat
           item.content.includes('Selected fern'),
       ),
     );
-    assert.ok(body.instructions.includes('window.applet.chat.open'));
-    assert.ok(body.instructions.includes('PRIMARY entry point MUST be an Add'));
-    assert.ok(body.instructions.includes('Do not build photo → standalone AI analysis → form'));
-    assert.ok(body.instructions.includes('Opening it supplies context only'));
+    assert.ok(!body.instructions.includes('window.applet.chat.open'));
+    assert.ok(body.instructions.includes('load_skill'));
+    assert.ok(body.instructions.includes('not itself authorize a write'));
     return reply('{"message":"What would you like to call your fern?"}');
   };
   const before = storage.records(app.id);
@@ -222,7 +221,18 @@ test('builder saves and tests a draft, publishes through a visible tool and retu
   const space = storage.createSpace('Build flow'),
     chat = storage.createChat(space.id);
   const backend = `export const actions={list:{description:'List',readOnly:true,parameters:{type:'object'},run:(_,ctx)=>ctx.db.list()}};export const tests=[{name:'Empty',run:async({call,assert})=>assert.deepEqual(await call('list',{}),[])}];`;
+  const { proposeBuild, claimBuildPlan, readBuildPlan } =
+    await import('../src/lib/server/build-plans');
+  const plan = proposeBuild(space.id, chat.id, {
+    title: 'New app',
+    summary: 'A simple tested app with an empty list.',
+    emoji: '🪴',
+    features: ['List saved items'],
+    caveats: ['No external integrations'],
+  });
+  claimBuildPlan(space.id, chat.id, plan.id);
   const steps = [
+    ['load_skill', { name: 'build' }],
     ['read_draft', {}],
     [
       'write_draft',
@@ -260,7 +270,12 @@ test('builder saves and tests a draft, publishes through a visible tool and retu
     undefined,
     () => {},
     new AbortController().signal,
-    { spaceId: space.id, chatId: chat.id, onTool: (call) => events.push(call) },
+    {
+      spaceId: space.id,
+      chatId: chat.id,
+      buildPlanId: plan.id,
+      onTool: (call) => events.push(call),
+    },
   );
   assert.equal(result.published?.version, 1);
   assert.equal(storage.spaceApplets(space.id).length, 1);
@@ -269,6 +284,7 @@ test('builder saves and tests a draft, publishes through a visible tool and retu
     steps.map((s) => s[0]),
   );
   assert.equal('applet' in result, false);
+  assert.equal(readBuildPlan(space.id, chat.id)?.status, 'complete');
 });
 
 test('legacy source in a final reply cannot bypass builder tools', async () => {
@@ -340,7 +356,7 @@ test('hosted web search is enabled in every mode and returns persistent citation
       },
     ]);
   };
-  for (const mode of ['knowledge', 'build', 'scheduled', 'voice'] as const) {
+  for (const mode of ['knowledge', 'scheduled', 'voice'] as const) {
     const result = await generate(
       'test-model',
       [],

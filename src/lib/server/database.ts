@@ -67,7 +67,7 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
       CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, subscription TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS push_deliveries (endpoint TEXT NOT NULL, notification_id TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(endpoint,notification_id));`);
     db.exec(
-      'CREATE TABLE IF NOT EXISTS build_drafts (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS build_drafts (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS build_plans (chat_id TEXT PRIMARY KEY, data TEXT NOT NULL)',
     );
     if (
       !db

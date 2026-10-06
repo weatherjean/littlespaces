@@ -1,3 +1,5 @@
+import { buildSkill } from './build-skill';
+import { proposeBuild, readBuildPlan, requireBuildApproval, finishBuild } from './build-plans';
 import { listSecrets } from './secrets';
 import { listSchedules, saveSchedule, cancelSchedule } from './schedules';
 import { notify, listNotifications, cancelNotification } from './notifications';
@@ -37,15 +39,31 @@ export async function appTools(
   id?: string,
   spaceId?: string,
   chatId?: string,
-  mode: 'knowledge' | 'build' | 'scheduled' | 'voice' = 'build',
+  mode: 'knowledge' | 'scheduled' | 'voice' = 'knowledge',
   model = '',
+  buildPlanId?: string,
 ) {
   if (mode === 'voice' && (id || spaceId !== launcherChatId || !chatId))
     throw Error('Voice is only available from the home launcher.');
   const photoOwner = id ? appletSpaceId(id) : spaceId;
   const catalog = id ? await appActions(id) : [];
+  if (
+    buildPlanId &&
+    spaceId &&
+    chatId &&
+    requireBuildApproval(spaceId, chatId, buildPlanId).appletId !== id
+  )
+    throw Error('The approval belongs to another app.');
+  let skillLoaded = false;
   const drafts =
-    mode === 'build' && chatId && spaceId ? draftWorkspace(chatId, spaceId, id) : undefined;
+    buildPlanId && chatId && spaceId && mode !== 'voice' && mode !== 'scheduled'
+      ? draftWorkspace(
+          chatId,
+          spaceId,
+          id,
+          requireBuildApproval(spaceId, chatId, buildPlanId).emoji,
+        )
+      : undefined;
   const tools = drafts
     ? [
         tool(
@@ -91,6 +109,53 @@ export async function appTools(
         ),
       ]
     : [];
+
+  if (mode !== 'voice' && mode !== 'scheduled' && spaceId && chatId) {
+    tools.push(
+      tool(
+        'load_skill',
+        'Fetch detailed instructions for building and updating apps. Reading a skill does not authorize code changes.',
+        { name: { type: 'string', enum: ['build'] } },
+      ),
+    );
+    tools.push(
+      tool(
+        'read_build_plan',
+        'Read the latest proposed build or update and its approval status.',
+        {},
+      ),
+    );
+    if (!buildPlanId)
+      tools.push(
+        tool(
+          'propose_build',
+          'Present a concrete plan for this conversation for the owner to approve. Replaces the previous proposal. Does not build or update the app. Resolve important missing details first.',
+          {
+            title: { ...string, maxLength: 80 },
+            emoji: { ...string, maxLength: 16, description: 'One emoji to use as the app icon.' },
+            summary: {
+              ...string,
+              maxLength: 600,
+              description: 'One or two sentences describing the goal.',
+            },
+            features: {
+              type: 'array',
+              items: { type: 'string', maxLength: 240 },
+              minItems: 1,
+              maxItems: 8,
+              description: 'Concrete agreed capabilities, including what changes for an update.',
+            },
+            caveats: {
+              type: 'array',
+              items: { type: 'string', maxLength: 240 },
+              maxItems: 5,
+              description:
+                'Relevant limitations, dependencies, assumptions, or things deliberately left out. Empty if none; no boilerplate.',
+            },
+          },
+        ),
+      );
+  }
 
   if (id) {
     tools.push(
@@ -234,6 +299,14 @@ export async function appTools(
       name = name.replace(/^app\./, '');
       if (!tools.some((tool) => tool.name === name))
         throw new Error('That tool is unavailable in this chat.');
+      if (name === 'load_skill') {
+        if (input.name !== 'build') throw Error('Unknown skill.');
+        skillLoaded = true;
+        return { name: 'build', instructions: buildSkill };
+      }
+      if (name === 'read_build_plan' && spaceId && chatId) return readBuildPlan(spaceId, chatId);
+      if (name === 'propose_build' && spaceId && chatId)
+        return proposeBuild(spaceId, chatId, input);
       if (name === 'list_voice_actions' && chatId) return voiceActions(chatId);
       if (name === 'propose_app_action' && chatId) return proposeVoiceAction(chatId, input);
       if (name === 'describe_app' || name === 'read_app_action') {
@@ -300,8 +373,14 @@ export async function appTools(
       if (
         drafts &&
         ['read_draft', 'write_draft', 'edit_draft', 'test_draft', 'publish_draft'].includes(name)
-      )
-        return drafts.execute(name, input);
+      ) {
+        requireBuildApproval(spaceId!, chatId!, buildPlanId!);
+        if (!skillLoaded) throw Error('Load the build skill before using builder tools.');
+        const result = await drafts.execute(name, input);
+        if (name === 'publish_draft' && result && 'applet' in result && result.applet)
+          finishBuild(spaceId!, chatId!, buildPlanId!, result.applet.id);
+        return result;
+      }
       if (name === 'list_apps')
         return listSpaces()
           .filter((space) => space.id !== launcherChatId)

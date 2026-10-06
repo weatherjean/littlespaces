@@ -75,8 +75,9 @@ test('knowledge tools read cross-app data, paginate, and cannot publish or mutat
   await assert.rejects(tools.execute('publish_draft', { revision: 0 }), /unavailable/);
   await assert.rejects(tools.execute('set_record', { key: 'x', valueJSON: '{}' }), /unavailable/);
   await assert.rejects(tools.execute('read_app', { spaceId: space.id, offset: -1 }), /bounds/);
-  const build = await appTools(undefined, launcher.id, chat.id, 'build');
-  assert.ok(build.definitions[0].tools.some((tool) => tool.name === 'write_draft'));
+  const build = await appTools(undefined, launcher.id, chat.id, 'knowledge');
+  assert.ok(!build.definitions[0].tools.some((tool) => tool.name === 'write_draft'));
+  assert.ok(build.definitions[0].tools.some((tool) => tool.name === 'propose_build'));
 });
 
 test('cron timezone calculation and one-time validation are persisted and scoped', () => {
