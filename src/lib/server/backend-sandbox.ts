@@ -21,8 +21,13 @@ export function backendSandbox(directory: string) {
         '--symlink',
         'usr/lib',
         '/lib',
+        // Debian keeps the x86-64 loader in /usr/lib64, separate from /usr/lib.
+        // Architectures without this directory do not need the extra mount.
+        '--ro-bind-try',
+        '/usr/lib64',
+        '/usr/lib64',
         '--symlink',
-        'usr/lib',
+        'usr/lib64',
         '/lib64',
         '--ro-bind',
         process.execPath,

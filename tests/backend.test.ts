@@ -109,7 +109,7 @@ test('imports, filesystem reads and process spawning cannot escape the runtime',
   }
 });
 
-test('OS sandbox independently blocks private files, host writes, child processes and network', async () => {
+test('OS sandbox independently blocks private files, host writes and host network access', async () => {
   const appDirectory = mkdtempSync(join(tmpdir(), 'little-sandbox-probe-'));
   const secret = join(directory, 'private.txt');
   writeFileSync(secret, 'private host data');
@@ -125,8 +125,20 @@ test('OS sandbox independently blocks private files, host writes, child processe
       const fs = require('node:fs');
       assert.throws(() => fs.readFileSync(${JSON.stringify(secret)}));
       assert.throws(() => fs.writeFileSync(${JSON.stringify(join(directory, 'escape.txt'))}, 'escaped'));
-      const child = require('node:child_process').spawnSync(process.execPath, ['-e', 'process.exit(0)']);
-      assert.notEqual(child.status, 0);
+      // macOS denies subprocesses at the OS layer. Bubblewrap confines them to
+      // the same namespaces; Node permissions deny spawning in production.
+      const childProbe = ${JSON.stringify(`
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        assert.throws(() => fs.readFileSync(${JSON.stringify(secret)}));
+        assert.throws(() => fs.writeFileSync(${JSON.stringify(join(directory, 'escape.txt'))}, 'escaped'));
+        const socket = require('node:net').connect(${address.port}, '127.0.0.1');
+        socket.on('connect', () => process.exit(1));
+        socket.on('error', () => process.exit(0));
+        setTimeout(() => process.exit(2), 1500);
+      `)};
+      const child = require('node:child_process').spawnSync(process.execPath, ['-e', childProbe], { timeout: 2000 });
+      ${process.platform === 'linux' ? 'assert.equal(child.status, 0, String(child.stderr));' : 'assert.notEqual(child.status, 0);'}
       const socket = require('node:net').connect(${address.port}, '127.0.0.1');
       socket.on('connect', () => process.exit(1));
       socket.on('error', () => process.exit(0));
@@ -144,6 +156,29 @@ test('OS sandbox independently blocks private files, host writes, child processe
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(appDirectory, { recursive: true, force: true });
+  }
+});
+
+test('production sandbox flags deny subprocess creation', () => {
+  const appDirectory = mkdtempSync(join(tmpdir(), 'little-process-probe-'));
+  try {
+    const sandbox = backendSandbox(appDirectory);
+    const probe = `
+      const assert = require('node:assert/strict');
+      assert.throws(
+        () => require('node:child_process').spawnSync(process.execPath, ['-e', 'process.exit(0)']),
+        { code: 'ERR_ACCESS_DENIED' },
+      );
+    `;
+    const result = spawnSync(sandbox.command, [...sandbox.args.slice(0, -1), '-e', probe], {
+      cwd: appDirectory,
+      env: {},
+      encoding: 'utf8',
+      timeout: 3000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  } finally {
     rmSync(appDirectory, { recursive: true, force: true });
   }
 });
