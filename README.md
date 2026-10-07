@@ -16,6 +16,18 @@ A plant journal, a reading tracker, that oddly specific tool you've always wante
 
 You'll need an eligible ChatGPT account with subscription usage or available credits to build apps and use AI chat. LittleSpaces connects through ChatGPT sign-in; separate API keys aren't currently supported.
 
+## Planned deployment experience
+
+We're exploring a small DigitalOcean Droplet as the initial deployment target: 512 MiB RAM, currently $4/month before taxes and optional extras, running one LittleSpaces instance and its applets through Docker Compose with Traefik and persistent storage.
+
+The idea is to ship a Droplet management skill and tested maintenance scripts in this repository. After connecting DigitalOcean and granting the required server access, an owner could ask ChatGPT to deploy the app, check its health, update it, or back up and restore their data, without needing to administer Linux manually.
+
+The skill would provide instructions; connected tools would provide access. DigitalOcean tools would manage the Droplet itself, including provisioning, inspection, resizing, and snapshots. A separate server execution connection would let ChatGPT run the maintenance scripts, manage Docker Compose, and inspect application logs and disk usage.
+
+Repeatable operations would live in scripts rather than depend on improvised shell commands. An update would back up persistent data, deploy a known container image, verify application health, and roll back if needed. The skill would guide ChatGPT through these procedures and troubleshooting, with explicit authorization for destructive operations. Automatic restarts and routine backups would run on the server independently of ChatGPT conversations.
+
+This is a future direction, not an available deployment flow. We need more work on the app and deployment tooling, including measuring and controlling peak memory during applet creation and backend actions, validating the full stack on 512 MiB, and testing server access, diagnostics, updates, rollback, and data recovery before offering this experience.
+
 ## Docs
 
 - [Self-hosting and VPS deployment](docs/self-hosting.md) — including remote ChatGPT setup.
