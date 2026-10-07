@@ -99,7 +99,6 @@ test('production HTTP login protects data, locks after three failures, and inval
       '/icon-512.png',
       '/icon-180.png',
       '/manifest.webmanifest',
-      '/appearance.js',
       '/icon.svg',
       '/favicon.ico',
       '/favicon-16.png',

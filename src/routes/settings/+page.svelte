@@ -1,6 +1,5 @@
 <script lang="ts">
   import { readBrowserValue, writeBrowserValue } from '$lib/browser-storage';
-  import AppearanceSettings from '$lib/components/AppearanceSettings.svelte';
   import AppSettings from '$lib/components/AppSettings.svelte';
   import DeviceSettings from '$lib/components/DeviceSettings.svelte';
   import AutomationSettings from '$lib/components/AutomationSettings.svelte';
@@ -179,7 +178,6 @@
     <AutomationSettings
       archivedSpaceIds={data.apps.filter((app) => app.archived).map((app) => app.id)}
     />
-    <AppearanceSettings />
     <section class="setting-card">
       <div>
         <h3>Sessions</h3>

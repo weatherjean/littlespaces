@@ -1,9 +1,7 @@
 <script lang="ts">
   import { readBrowserValue } from '$lib/browser-storage';
   import { onMount } from 'svelte';
-  import { APPEARANCE_KEY, applyAppearance, readAppearance } from '$lib/appearance';
   import { page } from '$app/state';
-  import { afterNavigate } from '$app/navigation';
   import { notifications } from '$lib/notification-state';
   import { expertMode } from '$lib/preferences';
   import { refreshNotifications } from '$lib/notification-state';
@@ -13,13 +11,7 @@
   import '$lib/polish.css';
   import '$lib/mobile.css';
   import PrimaryNav from '$lib/components/PrimaryNav.svelte';
-  afterNavigate(() => applyAppearance(readAppearance()));
   onMount(() => {
-    applyAppearance(readAppearance());
-    const syncAppearance = (event: StorageEvent) => {
-      if (event.key === APPEARANCE_KEY || event.key === null) applyAppearance(readAppearance());
-    };
-    window.addEventListener('storage', syncAppearance);
     expertMode.set(readBrowserValue('little-spaces-expert') === 'true');
     const refresh = () => {
       if (page.data.owner) void refreshNotifications().catch(() => {});
@@ -34,7 +26,6 @@
     window.addEventListener('focus', refresh);
     window.addEventListener('notifications-changed', refresh);
     return () => {
-      window.removeEventListener('storage', syncAppearance);
       window.removeEventListener('pageshow', checkHistory);
       clearInterval(timer);
       window.removeEventListener('focus', refresh);

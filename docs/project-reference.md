@@ -139,11 +139,9 @@ On Linux, use `systemctl --user status little-spaces` to inspect it and `journal
 
 A clone contains the code, not the ignored `.data` directory. To retain existing apps, conversations, and records, stop the old server and copy its entire `.data` directory to the new checkout. Do not copy `node_modules`, `build`, or `.data/runtime` between operating systems; install dependencies and rebuild on the destination. Sign in again if needed. A fresh clone starts with an empty workspace.
 
-### Personal appearance
+### Host appearance
 
-Settings → Appearance opens a Custom CSS editor. Load an Orbit or Patchwork example, preview changes, and save them in this browser. Preview is temporary until saved and is reverted when leaving Settings. Undo restores the saved appearance; Reset to Orbit clears it. To recover from CSS that hides the interface, open `/settings?appearance=reset`. Preferences are device/browser-local and do not change applet iframe styles.
-
-Shared design tokens live in `src/lib/theme.css`. Override them with a `:root` block; ordinary CSS rules also work. The main tokens are `--bg`, `--panel`, `--surface`, `--ink`, `--muted`, `--accent`, `--on-accent`, `--line`, `--radius`, `--app-radius`, `--border-width`, `--shadow`, `--shadow-hover`, `--modal-shadow`, `--font-family`, and `--color-scheme`. `--tile-chat`, `--tile-0` through `--tile-3`, and `--tile-settings` control emoji tile backgrounds. Pair light palettes with `--color-scheme: light` and matching foreground colors. The editor stores CSS as text, applies it after host styles, and caps it at 32,000 characters.
+The host uses one shared appearance. Design tokens live in `src/lib/theme.css`; host layout and surfaces live in `src/lib/style.css`, `src/lib/polish.css`, and `src/lib/mobile.css`. Applet iframes keep their own styles.
 
 The Orbit artwork in `static/icon.svg` is the source of truth for the favicon and app icons. Run `npm run icons` after changing it to regenerate the 16/32px PNGs, 16/32/48px ICO, 180px Apple touch icon, 192/512px PWA icons, and the full-bleed 512px maskable icon.
 
