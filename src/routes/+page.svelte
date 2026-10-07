@@ -75,6 +75,13 @@
     <div class="apps-heading">
       <h2>Your apps</h2>
       <span>{data.spaces.length}</span>
+      <button
+        type="button"
+        class="reload-home"
+        aria-label="Reload home"
+        title="Reload home"
+        onclick={() => window.location.reload()}><Icon name="reload" size={17} /></button
+      >
     </div>
     {#if data.spaces.length > 6}
       <label class="app-search"
@@ -206,6 +213,28 @@
     align-items: center;
     gap: 10px;
     margin-bottom: 20px;
+  }
+  .reload-home {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--muted);
+    background: var(--hover);
+  }
+  .reload-home:hover {
+    color: var(--ink);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  @media (pointer: coarse) {
+    .reload-home {
+      width: 44px;
+      height: 44px;
+    }
   }
   .apps-heading h2 {
     font-size: 20px;
