@@ -88,6 +88,11 @@ export function workspace<T>(run: (db: DatabaseSync) => T): T {
     db.exec(`CREATE TABLE IF NOT EXISTS voice_actions (
       id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL
     ); CREATE INDEX IF NOT EXISTS voice_actions_chat ON voice_actions(chat_id);`);
+    db.exec(`CREATE TABLE IF NOT EXISTS chat_jobs (
+      id TEXT PRIMARY KEY, space_id TEXT NOT NULL, chat_id TEXT NOT NULL,
+      status TEXT NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL
+    ); CREATE UNIQUE INDEX IF NOT EXISTS chat_jobs_running_space ON chat_jobs(space_id) WHERE status='running';
+    CREATE INDEX IF NOT EXISTS chat_jobs_chat ON chat_jobs(chat_id);`);
     db.exec(photoSchema);
     db.exec(`CREATE INDEX IF NOT EXISTS messages_thread_id ON messages(thread,id);
       CREATE INDEX IF NOT EXISTS chats_space ON chats(space_id);

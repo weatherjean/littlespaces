@@ -136,7 +136,7 @@
 <section class="setting-card">
   <div>
     <h3>Device notifications</h3>
-    <p>Reminders on this device. Requires the server to stay running.</p>
+    <p>Reminders and reply-ready alerts on this device. Requires the server to stay running.</p>
     {#if !supported}<p>
         Unavailable here. Use a supported browser over HTTPS. On iOS, open the installed app.
       </p>{/if}

@@ -8,6 +8,23 @@ globalThis.fetch = async (url, init) => {
   if (!String(url).endsWith('/responses')) throw Error('Unexpected test network request.');
   const body = JSON.parse(String(init?.body));
   const latestUser = body.input.filter((item) => item.role === 'user').at(-1);
+  if (typeof latestUser?.content === 'string' && latestUser.content.startsWith('job-test:')) {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, latestUser.content.includes('restart') ? 60000 : 1200);
+      init.signal?.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer);
+          reject(new Error('Stopped test reply'));
+        },
+        { once: true },
+      );
+    });
+    const text = JSON.stringify({ message: 'Background reply complete.' });
+    return new Response(
+      `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: text })}\n\ndata: ${JSON.stringify({ type: 'response.completed', response: { output: [] } })}\n\n`,
+    );
+  }
   if (latestUser?.content === 'inspect-current-context') {
     const supplied = body.input.find(
       (item) =>

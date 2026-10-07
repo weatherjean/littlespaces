@@ -71,7 +71,11 @@ function notification(row: Record<string, unknown>): Notification {
     dueAt: String(row.due_at),
     read: !!row.is_read,
     source: String(row.source),
-    href: row.space_id === launcherChatId ? '/chat' : `/spaces/${row.space_id}/applet`,
+    href: String(row.key).startsWith('chat:')
+      ? `${row.space_id === launcherChatId ? '/chat' : `/spaces/${row.space_id}/chat`}/${encodeURIComponent(String(row.key).slice(5))}`
+      : row.space_id === launcherChatId
+        ? '/chat'
+        : `/spaces/${row.space_id}/applet`,
   };
 }
 export function markNotificationsRead(id?: string) {

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -62,10 +63,10 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
     }
     throw Error('Test server did not start: ' + output);
   }
-  async function stop() {
+  async function stop(signal: NodeJS.Signals = 'SIGTERM') {
     if (child && child.exitCode === null) {
       const closed = once(child, 'exit');
-      child.kill('SIGTERM');
+      child.kill(signal);
       await closed;
     }
     child = undefined;
@@ -109,7 +110,7 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
       404,
     );
     await request('/');
-    const { chat } = await (await request(`/api/spaces/${spaceId}/chats`, {})).json();
+    let { chat } = await (await request(`/api/spaces/${spaceId}/chats`, {})).json();
     const send = (extra: object = {}) =>
       request('/api/chat', {
         spaceId,
@@ -120,6 +121,78 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
       });
     const read = async () =>
       (await (await request(`/api/build-plans?spaceId=${spaceId}&chatId=${chat.id}`)).json()).plan;
+    // A mobile page can disappear without owning the server's turn.
+    const jobChat = (await (await request(`/api/spaces/${spaceId}/chats`, {})).json()).chat;
+    const jobInput = {
+      spaceId,
+      chatId: jobChat.id,
+      model: 'test-model',
+      message: 'job-test:complete',
+      requestId: randomUUID(),
+    };
+    const snapshot = async () =>
+      await (await request(`/api/chat?spaceId=${spaceId}&chatId=${jobChat.id}`)).json();
+    const waitJob = async (status: string) => {
+      for (let i = 0; i < 100; i++) {
+        const state = await snapshot();
+        if (state.job?.status === status) return state;
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      throw Error(`Job did not become ${status}`);
+    };
+    const [accepted, duplicate] = await Promise.all([
+      request('/api/chat', jobInput),
+      request('/api/chat', jobInput),
+    ]);
+    assert.equal(accepted.status, 202);
+    assert.ok([200, 202].includes(duplicate.status));
+    assert.equal((await accepted.json()).job.id, (await duplicate.json()).job.id);
+    const active = await snapshot();
+    assert.equal(active.job.status, 'running');
+    assert.equal(active.messages.filter((m: { role: string }) => m.role === 'user').length, 1);
+    assert.equal((await request('/api/chat', { ...jobInput, message: 'different' })).status, 409);
+    assert.equal(
+      (await request('/api/chat', { ...jobInput, requestId: randomUUID() })).status,
+      409,
+    );
+    const finished = await waitJob('complete');
+    assert.equal(finished.messages.length, 2);
+    assert.equal((await (await request('/api/chat', jobInput)).json()).job.status, 'complete');
+    assert.equal((await snapshot()).messages.length, 2, 'completed requests cannot replay');
+    const notification = (await (await request('/api/notifications')).json()).notifications.find(
+      (n: { key: string }) => n.key === `chat:${jobChat.id}`,
+    );
+    assert.equal(notification.href, `/chat/${jobChat.id}`);
+    // Closing a legacy live stream must also detach rather than stop generation.
+    const detached = await request('/api/chat', {
+      ...jobInput,
+      requestId: undefined,
+      message: 'job-test:detached',
+    });
+    await detached.body!.cancel();
+    assert.equal((await waitJob('complete')).messages.length, 4);
+    const stoppedInput = { ...jobInput, message: 'job-test:stop', requestId: randomUUID() };
+    await request('/api/chat', stoppedInput);
+    const stopped = await fetch(origin + '/api/chat', {
+      method: 'PATCH',
+      headers: { cookie, origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ jobId: stoppedInput.requestId, spaceId, chatId: jobChat.id }),
+    });
+    assert.equal(stopped.status, 200);
+    assert.equal((await waitJob('stopped')).messages.length, 5);
+    const restartInput = { ...jobInput, message: 'job-test:restart', requestId: randomUUID() };
+    await request('/api/chat', restartInput);
+    await stop('SIGKILL');
+    await start();
+    const interrupted = await waitJob('interrupted');
+    assert.match(interrupted.job.error, /server restarted/);
+    assert.equal(
+      (await (await request('/api/chat', restartInput)).json()).job.status,
+      'interrupted',
+    );
+    assert.equal((await snapshot()).messages.length, 6, 'restart cannot replay a turn');
+
+    ({ chat } = await (await request(`/api/spaces/${spaceId}/chats`, {})).json());
     const proposal = await send({ mode: 'build' });
     assert.match(await proposal.text(), /event: done/);
     const first = await read();

@@ -1,3 +1,4 @@
+import { interruptChatJobs } from '$lib/server/chat-jobs';
 import { startScheduler } from '$lib/server/scheduler';
 import { building, dev } from '$app/environment';
 import { isHttpError, isRedirect, type Handle, type HandleServerError } from '@sveltejs/kit';
@@ -9,6 +10,7 @@ import { deleteEmptyChats } from '$lib/server/storage';
 export function init() {
   if (!building) {
     initializeOwnerSetup();
+    interruptChatJobs();
     deleteEmptyChats();
     startScheduler();
   }

@@ -1,3 +1,18 @@
+import { randomUUID } from 'node:crypto';
+import {
+  createJob,
+  completeJob,
+  findJob,
+  latestJob,
+  runningJob,
+  fingerprint,
+  updateJob,
+  registerJob,
+  releaseJob,
+  stopJob,
+  type ChatJob,
+} from '$lib/server/chat-jobs';
+import { notify } from '$lib/server/notifications';
 import { claimBuildPlan, cancelBuildPlan, finishBuild } from '$lib/server/build-plans';
 import { buildPlanText, type BuildPlan } from '$lib/build-plan-types';
 import { logEvent, trace } from '$lib/server/diagnostics';
@@ -11,7 +26,7 @@ import {
   getChat,
   messages,
   revision,
-  saveExchange,
+  pendingTools,
   spaceApplets,
   readPhoto,
   saveToolCall,
@@ -22,7 +37,24 @@ import { launcherChatId } from '$lib/server/storage';
 import { generate, models } from '$lib/server/inference';
 import type { RequestHandler } from './$types';
 
-const running = new Set<string>();
+export const PATCH: RequestHandler = async (event) => {
+  const input = await body(event);
+  if (
+    typeof input.jobId !== 'string' ||
+    typeof input.spaceId !== 'string' ||
+    typeof input.chatId !== 'string'
+  )
+    return json({ error: 'Choose a reply to stop.' }, { status: 400 });
+  try {
+    getChat(input.spaceId, input.chatId);
+    return json({ job: stopJob(input.jobId, input.spaceId, input.chatId) });
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Could not stop reply.' },
+      { status: 404 },
+    );
+  }
+};
 
 export const DELETE: RequestHandler = async (event) => {
   const input = await body(event);
@@ -39,7 +71,12 @@ export const GET: RequestHandler = ({ url }) => {
   } catch {
     return json({ error: 'Chat not found in this space.' }, { status: 404 });
   }
-  return json({ messages: messages(chatId) });
+  return json({
+    messages: messages(chatId),
+    tools: pendingTools(chatId),
+    job: latestJob(chatId),
+    running: runningJob(spaceId),
+  });
 };
 
 export const POST: RequestHandler = async (event) => {
@@ -51,6 +88,27 @@ export const POST: RequestHandler = async (event) => {
     input.model.length > 150
   ) {
     return json({ error: 'Enter a message and choose a model.' }, { status: 400 });
+  }
+  if (
+    input.requestId !== undefined &&
+    (typeof input.requestId !== 'string' || !/^[0-9a-f-]{36}$/.test(input.requestId))
+  )
+    return json({ error: 'Invalid request ID.' }, { status: 400 });
+  const requestId = typeof input.requestId === 'string' ? input.requestId : randomUUID();
+  const hash = fingerprint(input);
+  try {
+    const previous = findJob(
+      requestId,
+      String(input.spaceId || ''),
+      String(input.chatId || ''),
+      hash,
+    );
+    if (previous) return json({ job: previous });
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Invalid request.' },
+      { status: 409 },
+    );
   }
   if (!(await connectedAccount())?.canUsePlan)
     return json(
@@ -109,7 +167,9 @@ export const POST: RequestHandler = async (event) => {
       { status: 400 },
     );
   }
-  if (running.has(spaceId))
+  const existing = findJob(requestId, spaceId, thread, hash);
+  if (existing) return json({ job: existing });
+  if (runningJob(spaceId))
     return json(
       { error: 'A reply is already running in this space. Wait for it to finish.' },
       { status: 409 },
@@ -144,78 +204,127 @@ export const POST: RequestHandler = async (event) => {
   ];
   const encoder = new TextEncoder();
   const toolCalls: ToolCall[] = [];
-  running.add(spaceId);
+  const job: ChatJob = {
+    id: requestId,
+    spaceId,
+    chatId: thread,
+    status: 'running',
+    activity: 'Thinking about your request…',
+    tools: toolCalls,
+  };
+  createJob(job, hash, message, photos);
+  registerJob(job.id, abort);
+  let subscribed = input.requestId === undefined;
   activeChatTurns.add(thread);
-  const stream = new ReadableStream({
-    async start(controller) {
-      return trace('chat', { spaceId, chatId: thread, appletId: id, model, effort }, async () => {
-        const send = (type: string, data: unknown) => {
-          if (!abort.signal.aborted)
-            controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
-        };
-        try {
-          logEvent('chat.input', {
-            history,
-            context: liveChatContext(id, getChat(spaceId, thread).launch, view),
-            version: current?.version,
-          });
-          send('status', { message: 'Thinking about your request…' });
-          let chars = 0,
-            lastUpdate = 0;
-          const result = await generate(
-            model,
-            history,
-            approved ? current?.source : undefined,
-            (delta) => {
-              chars += delta.length;
-              if (Date.now() - lastUpdate > 500) {
-                send('status', {
-                  message: `Working on your reply… ${Math.ceil(chars / 1000)}k characters`,
-                });
-                lastUpdate = Date.now();
-              }
-            },
-            abort.signal,
-            {
-              mode: input.mode === 'voice' && isLauncher ? 'voice' : 'knowledge',
-              buildPlanId: approved?.id,
-              spaceId,
-              chatId: thread,
-              appletId: id,
-              context: liveChatContext(id, getChat(spaceId, thread).launch, view),
-              effort,
-              onTool: (call) => {
-                const item = { ...call, prompt: message };
-                const index = toolCalls.findIndex((old) => old.id === item.id);
-                if (index < 0) toolCalls.push(item);
-                else toolCalls[index] = item;
-                saveToolCall(thread, item);
-                send('tool', item);
-              },
-              onActivity: (message) => send('status', { message }),
-            },
-          );
-          const applet = result.published;
-          if (abort.signal.aborted) return;
-          saveExchange(thread, message, result.message, photos, toolCalls);
-          logEvent('chat.saved', { message: result.message, applet });
-          send('done', { message: result.message, applet });
-        } catch (error) {
-          logEvent('chat.error', { error });
-          send('error', {
-            message: error instanceof Error ? error.message : 'Something went wrong. Please retry.',
-          });
-        } finally {
-          if (approved) finishBuild(spaceId, thread, approved.id);
-          running.delete(spaceId);
-          activeChatTurns.delete(thread);
-          if (!abort.signal.aborted) controller.close();
+  const run = async (controller?: ReadableStreamDefaultController) => {
+    return trace('chat', { spaceId, chatId: thread, appletId: id, model, effort }, async () => {
+      const send = (type: string, data: unknown) => {
+        if (abort.signal.aborted) return;
+        if (type === 'status') {
+          job.activity = (data as { message: string }).message;
+          updateJob(job);
         }
-      });
-    },
+        if (type === 'tool') updateJob(job);
+        if (subscribed) {
+          try {
+            controller!.enqueue(
+              encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`),
+            );
+          } catch {
+            subscribed = false;
+          }
+        }
+      };
+      try {
+        logEvent('chat.input', {
+          history,
+          context: liveChatContext(id, getChat(spaceId, thread).launch, view),
+          version: current?.version,
+        });
+        send('status', { message: 'Thinking about your request…' });
+        let chars = 0,
+          lastUpdate = 0;
+        const result = await generate(
+          model,
+          history,
+          approved ? current?.source : undefined,
+          (delta) => {
+            chars += delta.length;
+            if (Date.now() - lastUpdate > 500) {
+              send('status', {
+                message: `Working on your reply… ${Math.ceil(chars / 1000)}k characters`,
+              });
+              lastUpdate = Date.now();
+            }
+          },
+          abort.signal,
+          {
+            mode: input.mode === 'voice' && isLauncher ? 'voice' : 'knowledge',
+            buildPlanId: approved?.id,
+            spaceId,
+            chatId: thread,
+            appletId: id,
+            context: liveChatContext(id, getChat(spaceId, thread).launch, view),
+            effort,
+            onTool: (call) => {
+              const item = { ...call, prompt: message };
+              const index = toolCalls.findIndex((old) => old.id === item.id);
+              if (index < 0) toolCalls.push(item);
+              else toolCalls[index] = item;
+              saveToolCall(thread, item);
+              send('tool', item);
+            },
+            onActivity: (message) => send('status', { message }),
+          },
+        );
+        const applet = result.published;
+        if (abort.signal.aborted) return;
+        completeJob(job, result.message, toolCalls);
+        logEvent('chat.saved', { message: result.message, applet });
+        send('done', { message: result.message, applet });
+        try {
+          notify(spaceId, {
+            key: `chat:${thread}`,
+            title: 'Your reply is ready',
+            body: 'Open the conversation to read your reply.',
+          });
+        } catch (error) {
+          logEvent('chat.notification.error', { error });
+        }
+      } catch (error) {
+        logEvent('chat.error', { error });
+        job.status = abort.signal.aborted ? 'stopped' : 'failed';
+        job.error = abort.signal.aborted
+          ? 'Stopped. Completed app actions may remain saved; check the app before sending again.'
+          : error instanceof Error
+            ? error.message
+            : 'Something went wrong. Please retry.';
+        updateJob(job);
+        send('error', {
+          message: error instanceof Error ? error.message : 'Something went wrong. Please retry.',
+        });
+      } finally {
+        if (approved) finishBuild(spaceId, thread, approved.id);
+        if (abort.signal.aborted && job.status === 'running') {
+          job.status = 'stopped';
+          job.error =
+            'Stopped. Completed app actions may remain saved; check the app before sending again.';
+          updateJob(job);
+        }
+        releaseJob(job.id);
+        activeChatTurns.delete(thread);
+        if (subscribed) controller!.close();
+      }
+    });
+  };
+  if (input.requestId !== undefined) {
+    void run().catch((error) => logEvent('chat.job.error', { error }));
+    return json({ job }, { status: 202 });
+  }
+  const stream = new ReadableStream({
+    start: run,
     cancel() {
-      logEvent('chat.cancelled', { spaceId, chatId: thread });
-      abort.abort();
+      subscribed = false;
     },
   });
   return new Response(stream, {

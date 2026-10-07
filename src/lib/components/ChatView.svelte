@@ -54,7 +54,7 @@
   } = $props();
   const currentContext = $derived(appContext?.view ?? activeChat.launch);
   let calls = $state<ToolCall[]>(untrack(() => pendingToolCalls));
-  let activeCalls: ToolCall[] = [];
+
   let attachments = $state<Photo[]>([]),
     uploading = $state(false),
     photoOptions = $state(false);
@@ -120,8 +120,20 @@
     listening = $state(false),
     readReplies = $state(false),
     voiceAvailable = $state(false);
-  $effect(() => onbusy(busy || uploading || listening));
-  let cancelRequest: AbortController | undefined;
+  $effect(() => onbusy(uploading || listening));
+  let jobId = $state('');
+  let spaceBlocked = $state(false);
+  let initialized = $state(false);
+  let pendingInput: Record<string, unknown> | null = null;
+  let syncing = false;
+  let reconnecting = false;
+  let syncController: AbortController | undefined;
+  let lastFinished = '';
+  const draftKey = $derived(`little-spaces-chat-draft:${activeChat.id}`);
+  const pendingKey = $derived(`little-spaces-chat-pending:${activeChat.id}`);
+  $effect(() => {
+    if (initialized) writeBrowserValue(draftKey, JSON.stringify({ draft, attachments }));
+  });
   let stopVoice: (() => void) | undefined;
   let voiceRefresh = $state(0);
   let speechURL = $state('');
@@ -203,13 +215,13 @@
     });
   }
   beforeNavigate((navigation) => {
-    if (busy || uploading || listening) {
+    if (uploading || listening) {
       navigation.cancel();
-      error = 'Finish dictation, wait for the upload, or stop the reply before leaving this chat.';
+      error = 'Finish dictation or wait for the upload before leaving this chat.';
     }
   });
   async function discardEmptyChat() {
-    if (chat.length || busy || uploading) return;
+    if (chat.length || busy || uploading || draft.trim() || attachments.length) return;
     await fetch('/api/chat', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -225,6 +237,25 @@
       });
   });
   onMount(() => {
+    try {
+      const saved = JSON.parse(readBrowserValue(draftKey) || 'null');
+      if (saved) {
+        draft = typeof saved.draft === 'string' ? saved.draft : '';
+        attachments = Array.isArray(saved.attachments) ? saved.attachments.slice(0, 4) : [];
+      }
+      pendingInput = JSON.parse(readBrowserValue(pendingKey) || 'null');
+    } catch {
+      pendingInput = null;
+    }
+    initialized = true;
+    busy = !!pendingInput;
+    void syncChat();
+    const resume = () => {
+      if (document.visibilityState === 'visible') void syncChat();
+    };
+    window.addEventListener('online', resume);
+    document.addEventListener('visibilitychange', resume);
+    const poll = window.setInterval(resume, 2000);
     window.addEventListener('pagehide', discardEmptyChat);
     const restoreChat = (event: PageTransitionEvent) => {
       if (event.persisted) void invalidateAll();
@@ -253,14 +284,125 @@
       void discardEmptyChat();
       disposed = true;
       stopSpeaking();
-      cancelRequest?.abort();
+      window.clearInterval(poll);
+      window.removeEventListener('online', resume);
+      document.removeEventListener('visibilitychange', resume);
+      syncController?.abort();
       stopVoice?.();
       window.speechSynthesis?.cancel();
     };
   });
+  async function submitPending() {
+    if (!pendingInput) return;
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pendingInput),
+      signal: syncController?.signal,
+    });
+    if (!response.ok) {
+      // Only a server rejection proves the submission was not accepted.
+      if (response.status >= 400 && response.status < 500) {
+        pendingInput = null;
+        writeBrowserValue(pendingKey, null);
+        busy = false;
+      }
+      await responseJson(response);
+    }
+    const value = await responseJson(response);
+    jobId = value.job.id;
+    error = '';
+    const wasPlan = !!pendingInput?.buildPlanId;
+    pendingInput = null;
+    writeBrowserValue(pendingKey, null);
+    if (!wasPlan) {
+      draft = '';
+      attachments = [];
+      writeBrowserValue(draftKey, null);
+    }
+  }
+  async function syncChat() {
+    if (syncing || disposed) return;
+    if (!navigator.onLine) {
+      if (busy || pendingInput) status = 'Offline. Your reply can continue on the server.';
+      return;
+    }
+    syncing = true;
+    syncController = new AbortController();
+    const timeout = window.setTimeout(() => syncController?.abort(), 15000);
+    let submitted = false;
+    try {
+      await submitPending();
+      submitted = true;
+      const response = await fetch(
+        `/api/chat?spaceId=${encodeURIComponent(space.id)}&chatId=${encodeURIComponent(activeChat.id)}`,
+        { signal: syncController.signal },
+      );
+      const value = await responseJson(response);
+      if (disposed) return;
+      chat = value.messages;
+      calls = value.tools;
+      const job = value.job;
+      const wasRunning = !!jobId;
+      busy = job?.status === 'running';
+      jobId = busy ? job.id : '';
+      spaceBlocked = !!value.running && value.running.chatId !== activeChat.id;
+      if (reconnecting) error = '';
+      reconnecting = false;
+      status = busy
+        ? job.activity
+        : spaceBlocked
+          ? 'A reply is running in another conversation in this app.'
+          : '';
+      if (job && job.status !== 'running' && lastFinished !== job.id) {
+        lastFinished = job.id;
+        error = job.error || '';
+        window.dispatchEvent(new Event('notifications-changed'));
+        await invalidateAll();
+        voiceRefresh++;
+        if (wasRunning) onupdated();
+        if (job.status === 'complete' && wasRunning && document.visibilityState === 'visible') {
+          if (voiceMode) void speakReply(job.message);
+          else if (readReplies && window.speechSynthesis)
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(speechText(job.message)));
+        }
+      }
+      await scrollChat();
+    } catch (e) {
+      if (!disposed) {
+        error = e instanceof Error ? e.message : 'Could not reconnect.';
+        reconnecting = submitted || !!pendingInput;
+        if (busy || pendingInput) status = 'Reconnecting… Your reply can continue on the server.';
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      syncing = false;
+      syncController = undefined;
+    }
+  }
+  async function stopReply() {
+    if (!jobId) {
+      await syncChat();
+      return;
+    }
+    try {
+      await responseJson(
+        await fetch('/api/chat', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId, spaceId: space.id, chatId: activeChat.id }),
+        }),
+      );
+      await syncChat();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not stop reply.';
+    }
+  }
   async function send(plan?: BuildPlan) {
     if (
+      !initialized ||
       busy ||
+      spaceBlocked ||
       uploading ||
       (!plan && !draft.trim() && !attachments.length) ||
       !model ||
@@ -268,120 +410,26 @@
     )
       return;
     stopSpeaking();
-    const message = plan ? buildPlanText(plan) : draft.trim() || 'What is in this photo?';
-    const sentPhotos = plan ? [] : [...attachments];
-    if (!plan) attachments = [];
-    activeCalls = [];
-    if (!plan) draft = '';
-    error = '';
-    busy = true;
-    chat = [
-      ...chat,
-      {
-        role: 'user',
-        content: message,
-        ...(sentPhotos.length ? { photos: sentPhotos.map((photo) => photo.id) } : {}),
-      },
-    ];
-    status = 'Connecting to ChatGPT…';
-    cancelRequest = new AbortController();
     stopVoice?.();
     listening = false;
+    error = '';
+    busy = true;
+    status = 'Sending your message…';
+    pendingInput = {
+      requestId: crypto.randomUUID(),
+      message: plan ? buildPlanText(plan) : draft.trim() || 'What is in this photo?',
+      mode: voiceMode ? 'voice' : undefined,
+      buildPlanId: plan?.id,
+      photos: plan ? [] : attachments.map((photo) => photo.id),
+      model,
+      effort,
+      spaceId: space.id,
+      chatId: activeChat.id,
+      appContext,
+    };
+    writeBrowserValue(pendingKey, JSON.stringify(pendingInput));
+    await syncChat();
     await scrollChat(true);
-    let completed = false;
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          mode: voiceMode ? 'voice' : undefined,
-          buildPlanId: plan?.id,
-          photos: sentPhotos.map((photo) => photo.id),
-          model,
-          effort,
-          spaceId: space.id,
-          chatId: activeChat.id,
-          appContext,
-        }),
-        signal: cancelRequest.signal,
-      });
-      if (!response.ok) await responseJson(response);
-      if (!response.body) throw new Error('No response stream.');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-          let boundary;
-          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-            const block = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            const type = block
-              .split('\n')
-              .find((line) => line.startsWith('event: '))
-              ?.slice(7);
-            const payload = JSON.parse(
-              block
-                .split('\n')
-                .find((line) => line.startsWith('data: '))
-                ?.slice(6) || '{}',
-            );
-            if (type === 'tool') {
-              calls = [...calls.filter((item) => item.id !== payload.id), payload];
-              activeCalls = [...activeCalls.filter((item) => item.id !== payload.id), payload];
-            }
-            if (type === 'status') status = payload.message;
-            if (type === 'error') throw new Error(payload.message);
-            if (type === 'done') {
-              completed = true;
-              chat = [
-                ...chat,
-                { role: 'assistant', content: payload.message, toolCalls: activeCalls },
-              ];
-              calls = calls.filter((item) => !activeCalls.some((active) => active.id === item.id));
-              window.dispatchEvent(new Event('notifications-changed'));
-              await invalidateAll();
-              voiceRefresh++;
-              if (voiceMode) void speakReply(payload.message);
-              else if (readReplies && window.speechSynthesis) {
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(
-                  new SpeechSynthesisUtterance(speechText(payload.message)),
-                );
-              }
-              await scrollChat();
-            }
-          }
-          if (done || completed) break;
-        }
-      } finally {
-        await reader.cancel().catch(() => {});
-        reader.releaseLock();
-      }
-      if (!completed) throw new Error('The connection ended early. Please retry.');
-    } catch (e) {
-      error = cancelRequest.signal.aborted
-        ? 'Stopped. Completed app actions may remain saved; check the app before retrying.'
-        : e instanceof Error
-          ? e.message
-          : 'Request failed.';
-      if (!completed) {
-        if (!plan) {
-          attachments = sentPhotos;
-          draft = message;
-        }
-        chat = chat.slice(0, -1);
-      }
-    } finally {
-      voiceRefresh++;
-      busy = false;
-      status = '';
-      cancelRequest = undefined;
-      onupdated();
-    }
   }
   function voice() {
     if (listening) {
@@ -459,7 +507,7 @@
               </div>{/if}
           </article>{/each}
         {#if $expertMode && calls.length}<ToolCalls {calls} />{/if}
-        {#if busy}<p class="status">{status}</p>{/if}
+        {#if status}<p class="status">{status}</p>{/if}
         {#if !voiceMode}<BuildPlanCard
             spaceId={space.id}
             chatId={activeChat.id}
@@ -535,7 +583,7 @@
           class:listening
           disabled={!busy && (!voiceAvailable || !model || !account?.canUsePlan)}
           aria-pressed={listening}
-          onclick={() => (busy ? cancelRequest?.abort() : voice())}
+          onclick={() => (busy ? stopReply() : voice())}
         >
           <Icon name={busy || listening ? 'stop' : 'mic'} size={26} />
           {busy ? 'Stop reply' : listening ? 'Listening… tap to finish' : 'Tap to talk'}
@@ -660,14 +708,16 @@
                 type="button"
                 class="send-button"
                 aria-label="Stop reply"
-                onclick={() => cancelRequest?.abort()}><Icon name="stop" /></button
+                onclick={stopReply}><Icon name="stop" /></button
               >{:else}<button
                 class="send-button"
                 aria-label="Send message"
                 onpointerdown={(event) => {
                   if (event.pointerType === 'touch') event.preventDefault();
                 }}
-                disabled={uploading ||
+                disabled={!initialized ||
+                  spaceBlocked ||
+                  uploading ||
                   (!draft.trim() && !attachments.length) ||
                   !model ||
                   !account?.canUsePlan}><Icon name="send" /></button

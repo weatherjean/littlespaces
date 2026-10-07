@@ -95,3 +95,47 @@ test('compact dock opens fresh app chats with live context, guidance and preserv
     true,
   );
 });
+
+test('a saved completed reply does not blank the applet on first navigation from Home', async ({
+  page,
+  baseURL,
+}) => {
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill(credentials.email);
+  await page.getByLabel('Password', { exact: true }).fill(credentials.password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  const post = async (path: string, data: object) => {
+    const response = await page.request.post(path, { data, headers: { origin: baseURL! } });
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  const { applet } = await post('/api/applets', { template: 'plants' });
+  await post(`/api/applets/${applet.id}/actions`, {
+    action: 'addPlant',
+    input: { name: 'First-open fern', interval: 7 },
+  });
+  const { chat } = await post(`/api/spaces/${applet.id}/chats`, {});
+  const completed = await page.request.post('/api/chat', {
+    headers: { origin: baseURL! },
+    data: {
+      spaceId: applet.id,
+      chatId: chat.id,
+      model: 'test-model',
+      message: 'inspect-current-context',
+    },
+  });
+  expect(await completed.text()).toContain('event: done');
+  await page.reload();
+  await page.locator(`a[href="/spaces/${applet.id}/applet"]`).click();
+  const frame = page.frameLocator('iframe[title="Your applet"]');
+  await expect(frame.getByRole('heading', { name: 'First-open fern', exact: true })).toBeVisible();
+  // Recovering that same historical reply when opening its modal must preserve app UI drafts.
+  await frame.getByRole('button', { name: 'Select plant', exact: true }).click();
+  await frame.getByRole('button', { name: 'Edit plant', exact: true }).click();
+  await frame.getByLabel('Plant name', { exact: true }).fill('Keep my unsent edit');
+  await page.getByRole('button', { name: 'More app options', exact: true }).click();
+  await page.getByRole('button', { name: 'Versions & tests', exact: true }).click();
+  await expect(page.locator('.app-chat-modal .message')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click();
+  await expect(frame.getByLabel('Plant name', { exact: true })).toHaveValue('Keep my unsent edit');
+});
