@@ -329,24 +329,26 @@ function Automation() {
                 <p class="error">{warning}</p>
               ))}
             </div>
-            <button
-              class="secondary-button"
-              disabled={busy}
-              onClick={() => {
-                setStatus('');
-                setForm({
-                  ...secret,
-                  origins: secret.origins.join(', '),
-                  value: '',
-                  editing: true,
-                });
-              }}
-            >
-              Edit
-            </button>
-            <button class="secondary-button" disabled={busy} onClick={() => remove(secret)}>
-              Delete
-            </button>
+            <div class="saved-actions">
+              <button
+                class="secondary-button"
+                disabled={busy}
+                onClick={() => {
+                  setStatus('');
+                  setForm({
+                    ...secret,
+                    origins: secret.origins.join(', '),
+                    value: '',
+                    editing: true,
+                  });
+                }}
+              >
+                Edit
+              </button>
+              <button class="secondary-button" disabled={busy} onClick={() => remove(secret)}>
+                Delete
+              </button>
+            </div>
           </div>
         ))}
         {form && (
@@ -394,13 +396,15 @@ function Automation() {
                 onInput={(e) => set('value', e.target.value)}
               />
             </label>
-            <button type="button" class="secondary-button" onClick={() => setVisible(!visible)}>
-              {visible ? 'Hide value' : 'Show value'}
-            </button>
+            <div class="secret-visibility">
+              <button type="button" class="secondary-button" onClick={() => setVisible(!visible)}>
+                {visible ? 'Hide value' : 'Show value'}
+              </button>
+            </div>
             {warnings.map((warning) => (
               <p class="error">{warning}</p>
             ))}
-            <label>
+            <label class="origins-field">
               Allowed API origins
               <input
                 placeholder="https://api.example.com"
@@ -408,10 +412,14 @@ function Automation() {
                 onInput={(e) => set('origins', e.target.value)}
               />
             </label>
-            <p class="field-note">HTTPS origins only, without paths. Empty means no API access.</p>
-            <button class="primary-button" disabled={busy}>
-              {busy ? 'Saving…' : 'Save secret'}
-            </button>
+            <div class="form-footer">
+              <p class="field-note">
+                HTTPS origins only, without paths. Empty means no API access.
+              </p>
+              <button class="primary-button" disabled={busy}>
+                {busy ? 'Saving…' : 'Save secret'}
+              </button>
+            </div>
           </form>
         )}
         {status && (
@@ -435,10 +443,10 @@ function Automation() {
                     ? new Date(schedule.next_run).toLocaleString()
                     : 'Completed'}
               </p>
-              {data.apps.find((app) => app.id === schedule.space_id)?.archived && (
+              {!!data.apps.find((app) => app.id === schedule.space_id)?.archived && (
                 <p>Paused while the app is archived.</p>
               )}
-              {schedule.last_error && <p class="error">{schedule.last_error}</p>}
+              {!!schedule.last_error && <p class="error">{schedule.last_error}</p>}
             </div>
             <button
               class="secondary-button"

@@ -27,6 +27,7 @@ export function Notifications({ home = false }) {
   async function mark(id) {
     try {
       setNotes((await api('/api/notifications', { id })).notifications);
+      setError('');
     } catch (e) {
       setError(e.message);
     }
@@ -84,40 +85,42 @@ export function Notifications({ home = false }) {
       <Dialog
         className="notification-dialog"
         label="Notifications"
+        subtitle={`${unread.length} unread · on this computer`}
         open={open}
         onClose={() => setOpen(false)}
       >
-        <ErrorText error={error} />
         <div class="notification-toolbar">
-          <p>{unread.length} unread · on this computer</p>
           <button class="secondary-button" disabled={!unread.length} onClick={() => mark()}>
             Mark all read
           </button>
         </div>
+        <ErrorText error={error} />
         <div class="notification-list">
           {notes.length ? (
             notes.map((note) => (
-              <article class={`notification-card ${note.read ? 'read' : ''}`} key={note.id}>
-                <Link
-                  href={note.href}
-                  onClick={() => {
-                    mark(note.id);
-                    setOpen(false);
-                  }}
-                >
-                  <span class="eyebrow">{note.source}</span>
-                  <strong>{note.title}</strong>
-                </Link>
-                <p>
-                  <MessageText text={note.body} />
-                </p>
+              <article class={note.read ? '' : 'unread'} key={note.id}>
+                <div class="notification-copy">
+                  <Link
+                    href={note.href}
+                    onClick={() => {
+                      mark(note.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <span class="eyebrow">{note.source}</span>
+                    <h3>{note.title}</h3>
+                  </Link>
+                  <p>
+                    <MessageText text={note.body} />
+                  </p>
+                </div>
                 {!note.read && (
                   <button
-                    class="secondary-button"
+                    class="icon-button"
                     aria-label={`Mark ${note.title} read`}
                     onClick={() => mark(note.id)}
                   >
-                    Mark read
+                    <Icon name="check" size={17} />
                   </button>
                 )}
               </article>

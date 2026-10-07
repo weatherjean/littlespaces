@@ -17,7 +17,7 @@ import { Notifications } from './notifications.jsx';
 import { PhotoPicker, uploadPhoto } from './photopicker.jsx';
 import { canDictate, dictate } from '../src/lib/voice.ts';
 import { speechText } from '../src/lib/web-citations.ts';
-import { speak, stopSpeech } from './speech.js';
+import { speak, stopSpeech, subscribePlayback } from './speech.js';
 function ToolCalls({ calls = [] }) {
   return (
     <div class="tool-calls">
@@ -201,6 +201,7 @@ export function ChatPanel({
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [status, setStatus] = useState(''),
+    [openingRevision, setOpeningRevision] = useState(0),
     [spaceBlocked, setSpaceBlocked] = useState(false),
     [models, setModels] = useState([]),
     [model, setModel] = useState(read('little-spaces-model')),
@@ -215,7 +216,7 @@ export function ChatPanel({
     [listening, setListening] = useState(false),
     [plan, setPlan] = useState(null),
     [actions, setActions] = useState([]),
-    [readReplies, setReadReplies] = useState(voiceMode || preference),
+    [audioPlaying, setAudioPlaying] = useState(false),
     [following, setFollowing] = useState(true);
   const transcript = useRef(),
     textarea = useRef(),
@@ -230,6 +231,8 @@ export function ChatPanel({
     followingRef = useRef(true),
     pickerTrigger = useRef();
   useViewport(section);
+  useEffect(() => subscribePlayback(setAudioPlaying), []);
+  const readReplies = voiceMode || preference;
 
   const initialized = useRef(false);
   const draftKey = `little-spaces-draft:${chatId}`,
@@ -400,15 +403,17 @@ export function ChatPanel({
       pending.current = null;
     }
     api(`/api/spaces/${spaceId}/view`)
-      .then((value) => {
+      .then(async (value) => {
         if (disposed.current) return;
         setView(value);
-        if (!chatId)
-          api(`/api/spaces/${spaceId}/chats`, {}).then(({ chat }) =>
-            navigate(`${base}/${chat.id}`),
-          );
+        if (!chatId) {
+          const { chat } = await api(`/api/spaces/${spaceId}/chats`, {});
+          if (!disposed.current) navigate(`${base}/${chat.id}`);
+        }
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => {
+        if (!disposed.current) setError(e.message);
+      });
     initialized.current = true;
     if (workspace.account?.canUsePlan) loadModels();
     sync();
@@ -433,7 +438,7 @@ export function ChatPanel({
       )
         api('/api/chat', { chatId }, 'DELETE').catch(() => {});
     };
-  }, [spaceId, chatId]);
+  }, [spaceId, chatId, openingRevision]);
   async function send(approved, voiceText) {
     const current = state.current;
     if (disposed.current) return;
@@ -541,9 +546,26 @@ export function ChatPanel({
     context = appContext?.view || active?.launch;
   if (!chatId && workspace.account?.canUsePlan)
     return (
-      <p class="status" role="status">
-        Opening your conversation…
-      </p>
+      <section class="chat-opening" aria-label="Open conversation">
+        <Link class="back-link" href="/" aria-label="Back to Home">
+          <Icon name="back" />
+        </Link>
+        {error ? (
+          <>
+            <ErrorText error={error} />
+            <button
+              class="secondary-button"
+              onClick={() => setOpeningRevision((value) => value + 1)}
+            >
+              Try again
+            </button>
+          </>
+        ) : (
+          <p class="status" role="status">
+            Opening your conversation…
+          </p>
+        )}
+      </section>
     );
   return (
     <>
@@ -555,31 +577,23 @@ export function ChatPanel({
             </Link>
             <div class="chat-header-copy">
               <h1>{voiceMode ? 'Voice' : 'Chat'}</h1>
-              {workspace.account?.canUsePlan && (
-                <button
-                  ref={pickerTrigger}
-                  class="conversation-picker-trigger"
-                  aria-label={`Choose conversation: ${active?.title || 'New chat'}`}
-                  aria-haspopup="dialog"
-                  disabled={busy}
-                  onClick={() => {
-                    setQuery('');
-                    setPickerOpen(true);
-                  }}
-                >
-                  <span>{active?.title || 'New chat'}</span>
-                  <Icon name="chevron" size={14} />
-                </button>
-              )}
             </div>
-            <button
-              class="icon-button"
-              aria-label="New chat"
-              disabled={busy || !workspace.account?.canUsePlan}
-              onClick={newChat}
-            >
-              <Icon name="plus" />
-            </button>
+            {workspace.account?.canUsePlan && (
+              <button
+                ref={pickerTrigger}
+                class="icon-button"
+                aria-label="Conversations"
+                title="Conversations"
+                aria-haspopup="dialog"
+                disabled={busy}
+                onClick={() => {
+                  setQuery('');
+                  setPickerOpen(true);
+                }}
+              >
+                <Icon name="chat" />
+              </button>
+            )}
             <Notifications />
           </header>
         )}
@@ -610,7 +624,10 @@ export function ChatPanel({
               </button>
             </div>
           )}
-          <section ref={section} class={`ui-chat chat-view ${voiceMode ? 'voice-mode' : ''}`}>
+          <section
+            ref={section}
+            class={`ui-chat chat-view ${voiceMode ? `voice-mode ${!chat.length && !actions.length ? 'voice-idle' : ''}` : ''}`}
+          >
             <div class="transcript-wrap">
               <div
                 class="transcript"
@@ -627,7 +644,7 @@ export function ChatPanel({
                 }}
               >
                 <div>
-                  {!chat.length && (
+                  {!chat.length && !voiceMode && (
                     <div class="chat-welcome">
                       <span class="card-icon">
                         <Icon name={voiceMode ? 'mic' : 'spark'} size={28} />
@@ -765,44 +782,65 @@ export function ChatPanel({
                   </button>
                 </div>
               )}
+              {voiceMode && !chat.length && !actions.length && (
+                <div class="chat-welcome voice-welcome">
+                  <span class="card-icon">
+                    <Icon name="spark" size={28} />
+                  </span>
+                  <h2>What’s on your mind?</h2>
+                  <p>Ask a question or describe an app you want.</p>
+                </div>
+              )}
               {voiceMode ? (
                 <div class="voice-controls">
                   <button
-                    type="button"
-                    class="composer-options"
-                    aria-label="Chat options"
-                    aria-haspopup="dialog"
-                    onClick={() => setOptionsOpen(true)}
-                  >
-                    <Icon name="settings" size={18} />
-                    <span>{selected?.display_name || 'Options'}</span>
-                  </button>
-                  <button
                     class={`voice-talk ${listening ? 'listening' : ''}`}
-                    disabled={!busy && (!canDictate() || !model)}
-                    aria-pressed={listening}
-                    onClick={() => (busy ? stopReply() : voice())}
+                    disabled={!audioPlaying && !busy && (!canDictate() || !model)}
+                    aria-pressed={listening || audioPlaying}
+                    onClick={() => (audioPlaying ? stopSpeech() : busy ? stopReply() : voice())}
                   >
-                    <Icon name={busy || listening ? 'stop' : 'mic'} size={26} />
-                    {busy ? 'Stop reply' : listening ? 'Listening… tap to finish' : 'Tap to talk'}
+                    <span class="voice-talk-symbol">
+                      <Icon name={audioPlaying || busy || listening ? 'stop' : 'mic'} size={28} />
+                    </span>
+                    <span>
+                      {audioPlaying
+                        ? 'Stop audio'
+                        : busy
+                          ? 'Stop reply'
+                          : listening
+                            ? 'Listening… tap to finish'
+                            : 'Tap to talk'}
+                    </span>
                   </button>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={readReplies}
-                      onChange={(e) => {
-                        setReadReplies(e.target.checked);
-                        if (!e.target.checked) stopSpeech();
-                      }}
-                    />{' '}
-                    Read replies aloud
-                  </label>
+                  {!chat.length && status && <p role="status">{status}</p>}
+                  {listening && draft && <p class="voice-transcription">{draft}</p>}
+                  <div class="voice-model-row">
+                    <label>
+                      <select
+                        aria-label="Voice model"
+                        value={model}
+                        disabled={busy || !models.length}
+                        onChange={(e) => {
+                          setModel(e.target.value);
+                          write('little-spaces-model', e.target.value);
+                          setEffort(read(`little-spaces-effort:${e.target.value}`, 'default'));
+                        }}
+                      >
+                        {!models.length && <option value="">Loading models…</option>}
+                        {models.map((item) => (
+                          <option key={item.slug} value={item.slug}>
+                            {item.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
                   {!canDictate() && (
-                    <p>Dictation unavailable. Try Chrome or Edge, or type in Chat.</p>
+                    <p>
+                      Dictation unavailable. Try Chrome or Edge, or{' '}
+                      <Link href="/chat">type in Chat</Link>.
+                    </p>
                   )}
-                  <button class="stop-speech" onClick={stopSpeech}>
-                    Stop audio
-                  </button>
                 </div>
               ) : (
                 <>
@@ -1036,7 +1074,7 @@ export function ChatPanel({
             }}
           />
         </div>
-        <button class="picker-new" disabled={busy} onClick={newChat}>
+        <button class="picker-new" aria-label="New chat" disabled={busy} onClick={newChat}>
           <Icon name="plus" size={19} />
           New chat<span>Start fresh</span>
         </button>

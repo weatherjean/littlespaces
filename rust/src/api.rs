@@ -35,17 +35,47 @@ fn cookie(app: &App, request: &Request) -> String {
         .unwrap_or("")
         .into()
 }
+fn origin_matches(expected: &str, origin: Option<&str>, host: Option<&str>) -> bool {
+    if origin == Some(expected) {
+        return true;
+    }
+    let Some(origin) = origin else { return false };
+    let (Ok(expected), Ok(actual)) = (url::Url::parse(expected), url::Url::parse(origin)) else {
+        return false;
+    };
+    let local = |url: &url::Url| match url.host() {
+        Some(url::Host::Domain(name)) => name == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    };
+    // Local development aliases must still be same-origin with the request host.
+    // Production origins continue to require an exact match.
+    expected.scheme() == "http"
+        && actual.scheme() == "http"
+        && local(&expected)
+        && local(&actual)
+        && expected.port_or_known_default() == actual.port_or_known_default()
+        && actual.origin().ascii_serialization() == origin
+        && host.is_some_and(|host| {
+            origin
+                .strip_prefix("http://")
+                .is_some_and(|authority| host.eq_ignore_ascii_case(authority))
+        })
+}
 async fn guard(State(app): State<App>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
-    ) && request
-        .headers()
-        .get("origin")
-        .and_then(|v| v.to_str().ok())
-        != Some(app.origin.as_str())
-    {
+    ) && !origin_matches(
+        &app.origin,
+        request
+            .headers()
+            .get("origin")
+            .and_then(|v| v.to_str().ok()),
+        request.headers().get("host").and_then(|v| v.to_str().ok()),
+    ) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error":"Requests must come from this app"})),
@@ -69,6 +99,55 @@ async fn guard(State(app): State<App>, request: Request, next: Next) -> Response
             .into_response();
     }
     next.run(request).await
+}
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_matches;
+    #[test]
+    fn local_aliases_require_the_same_port_and_request_host() {
+        let expected = "http://127.0.0.1:5180";
+        assert!(origin_matches(
+            expected,
+            Some("http://localhost:5180"),
+            Some("localhost:5180")
+        ));
+        for (origin, host) in [
+            (Some("http://localhost:5181"), Some("localhost:5181")),
+            (Some("http://localhost:5180"), Some("127.0.0.1:5180")),
+            (
+                Some("http://attacker.example:5180"),
+                Some("attacker.example:5180"),
+            ),
+            (Some("http://localhost:5180/path"), Some("localhost:5180")),
+            (None, Some("localhost:5180")),
+        ] {
+            assert!(!origin_matches(expected, origin, host));
+        }
+        assert!(origin_matches(
+            "http://localhost:5180",
+            Some(expected),
+            Some("127.0.0.1:5180")
+        ));
+    }
+    #[test]
+    fn production_origins_remain_exact() {
+        let expected = "https://app.example";
+        assert!(origin_matches(
+            expected,
+            Some(expected),
+            Some("app.example")
+        ));
+        assert!(!origin_matches(
+            expected,
+            Some("https://localhost"),
+            Some("localhost")
+        ));
+        assert!(!origin_matches(
+            "https://127.0.0.1:5180",
+            Some("https://localhost:5180"),
+            Some("localhost:5180")
+        ));
+    }
 }
 pub fn router(app: App) -> Router {
     Router::new()

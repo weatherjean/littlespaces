@@ -149,7 +149,7 @@ export function useViewport(ref) {
     };
   }, [ref.current]);
 }
-export function Dialog({ className = '', label, title, children, open, onClose }) {
+export function Dialog({ className = '', label, title, subtitle, children, open, onClose }) {
   const ref = useRef();
   useViewport(ref);
   useEffect(() => {
@@ -170,6 +170,7 @@ export function Dialog({ className = '', label, title, children, open, onClose }
       <header class="picker-header">
         <div>
           <h2>{title || label}</h2>
+          {subtitle && <p>{subtitle}</p>}
         </div>
         <button
           type="button"

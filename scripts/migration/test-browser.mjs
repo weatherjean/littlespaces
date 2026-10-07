@@ -28,7 +28,7 @@ async function start() {
       const match = output.match(/http:\/\/127\.0\.0\.1:\d+(?:\/setup#token=[A-Za-z0-9_-]+)?/);
       if (match) {
         clearTimeout(timer);
-        resolve(match[0]);
+        resolve(match[0].replace('127.0.0.1', 'localhost'));
       }
     });
     child.on('error', (error) => {
@@ -48,6 +48,54 @@ async function stop() {
   await exited;
 }
 const password = 'correct horse battery fixture';
+async function checkGlassButtons(page) {
+  const flat = await page
+    .locator('.shell button:not(.app-tile):not(:disabled)')
+    .evaluateAll((buttons) =>
+      buttons
+        .filter((button) => button.getClientRects().length)
+        .filter((button) => {
+          const style = getComputedStyle(button);
+          return !style.backgroundImage.includes('gradient') || style.boxShadow === 'none';
+        })
+        .map((button) => button.getAttribute('aria-label') || button.textContent.trim()),
+    );
+  assert.deepEqual(flat, [], 'Visible host buttons use the shared glass treatment');
+}
+async function checkSettingsLayout(page, name) {
+  const voice = await page.getByLabel('Voice', { exact: true }).boundingBox();
+  assert(voice.height >= 44, 'Voice selector has the same field height as other settings');
+  await checkGlassButtons(page);
+  await page.getByRole('button', { name: 'Add secret', exact: true }).click();
+  await checkGlassButtons(page);
+  assert(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    'Secret form overflow',
+  );
+  await page.screenshot({ path: `build-rust/screenshots/secret-form-${name}.png`, fullPage: true });
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+}
+async function checkNotificationLayout(page, name) {
+  await page.getByRole('button', { name: /^Notifications, / }).click();
+  const dialog = page.getByRole('dialog', { name: 'Notifications', exact: true });
+  await dialog.locator('.notification-copy').first().waitFor();
+  await checkGlassButtons(page);
+  assert(
+    await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth),
+    'Notification dialog overflow',
+  );
+  const cramped = await dialog.locator('article').evaluateAll((rows) =>
+    rows.some((row) => {
+      const copy = row.querySelector('.notification-copy').getBoundingClientRect();
+      const action = row.querySelector('button')?.getBoundingClientRect();
+      return action && copy.right + 10 > action.left;
+    }),
+  );
+  assert(!cramped, 'Notification text and actions have separate columns with a gap');
+  await dialog.screenshot({ path: `build-rust/screenshots/notifications-${name}.png` });
+  await page.getByRole('button', { name: 'Close notifications', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+}
 try {
   let link = await start(),
     origin = new URL(link).origin;
@@ -64,6 +112,26 @@ try {
   );
   browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1200, height: 850 } });
+  await context.addInitScript(() => {
+    window.SpeechSynthesisUtterance = class {
+      constructor(text) {
+        this.text = text;
+      }
+    };
+    Object.defineProperty(window, 'speechSynthesis', {
+      configurable: true,
+      value: {
+        getVoices: () => [],
+        addEventListener() {},
+        removeEventListener() {},
+        cancel() {},
+        speak(utterance) {
+          window.fixtureUtterance = utterance;
+          utterance.onstart?.();
+        },
+      },
+    });
+  });
   const page = await context.newPage();
   activePage = page;
   const send = async (path, body, method = 'POST') =>
@@ -119,10 +187,41 @@ try {
   await page.getByRole('button', { name: 'Try voice', exact: true }).click();
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
   await mkdir('build-rust/screenshots', { recursive: true });
+  await checkSettingsLayout(page, 'desktop');
   await page.screenshot({ path: 'build-rust/screenshots/settings-desktop.png', fullPage: true });
   await page.getByLabel('Expert mode', { exact: true }).check();
+  const createChatRoute = '**/api/spaces/*/chats';
+  await page.route(createChatRoute, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Conversation temporarily unavailable.' }),
+    }),
+  );
   await page.getByRole('link', { name: 'Chat', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Conversation temporarily unavailable.');
+  await page.unroute(createChatRoute);
+  await page.getByRole('button', { name: 'Try again', exact: true }).click();
+  await page.waitForURL(/\/chat\/[^/]+$/);
   await page.getByLabel('Message', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Conversations', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Conversation picker', exact: true }).waitFor();
+  await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close conversation picker', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Conversation picker', exact: true })
+    .waitFor({ state: 'hidden' });
+  await page.screenshot({ path: 'build-rust/screenshots/chat-header-desktop.png' });
+  await checkGlassButtons(page);
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Chat options', exact: true })
+    .screenshot({ path: 'build-rust/screenshots/chat-options-desktop.png' });
+  await checkGlassButtons(page);
+  await page.getByRole('button', { name: 'Close chat options', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Chat options', exact: true })
+    .waitFor({ state: 'hidden' });
   await page.getByLabel('Message', { exact: true }).fill('Please build a journal app');
   await page.getByRole('button', { name: 'Send message' }).click();
   await page.getByRole('button', { name: 'Build app', exact: true }).waitFor();
@@ -199,6 +298,25 @@ try {
   // Voice suggestions are read-only until explicitly confirmed, and confirmation is exactly once.
   await page.getByRole('link', { name: 'Voice', exact: true }).click();
   await page.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();
+  await expect(page.getByRole('combobox', { name: 'Voice model', exact: true })).toHaveValue(
+    'fixture-model',
+  );
+  await expect(page.locator('.voice-controls input[type="checkbox"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop audio', exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole('heading', { name: 'What’s on your mind?', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Ask a question or describe an app you want.', { exact: true }),
+  ).toBeVisible();
+  const centeredVoice = await page.locator('.voice-mode .composer-area').boundingBox();
+  const voiceHeader = await page.locator('.chat-header').boundingBox();
+  assert(
+    Math.abs(centeredVoice.y + centeredVoice.height / 2 - (voiceHeader.height + 850) / 2) < 24,
+    'Empty Voice content is centered below the header',
+  );
+  await checkGlassButtons(page);
+  await page.screenshot({ path: 'build-rust/screenshots/voice-idle-desktop.png' });
   const voiceChat = new URL(page.url()).pathname.split('/')[2];
   let result = await send('/api/chat', {
     requestId: crypto.randomUUID(),
@@ -212,6 +330,9 @@ try {
   await page.getByRole('button', { name: 'Confirm', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.getByText('Done · Saved to your app', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Stop audio', exact: true }).click();
+  await page.evaluate(() => window.fixtureUtterance.onend());
+  await page.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();
   await page.screenshot({ path: 'build-rust/screenshots/voice-desktop.png', fullPage: true });
   await page.getByRole('link', { name: 'Back to Home' }).click();
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
@@ -226,6 +347,7 @@ try {
     body: 'Check your ideas.',
   });
   assert.equal(reminder.value.result.title, 'Journal reminder');
+  await checkNotificationLayout(page, 'desktop');
   const scheduled = await send(`/api/spaces/${spaceId}/schedules`, {
     key: 'fixture-check',
     title: 'Scheduled journal check',
@@ -278,7 +400,9 @@ try {
   link = await start();
   origin = new URL(link).origin;
   const cookies = await context.cookies();
-  await context.addCookies(cookies.map((cookie) => ({ ...cookie, domain: '127.0.0.1' })));
+  await context.addCookies(
+    cookies.map((cookie) => ({ ...cookie, domain: new URL(origin).hostname })),
+  );
   await page.goto(origin + appPath);
   await page
     .frameLocator('iframe')
@@ -324,6 +448,7 @@ try {
     });
     await phone.getByRole('button', { name: 'Chat with app', exact: true }).click();
     await phone.getByLabel('Message', { exact: true }).waitFor();
+    await checkGlassButtons(phone);
     await phone.screenshot({
       path: `build-rust/screenshots/app-chat-${engine.name()}-mobile.png`,
       fullPage: true,
@@ -332,6 +457,9 @@ try {
     await phone.getByRole('link', { name: 'Home', exact: true }).click();
     await phone.getByRole('link', { name: 'Settings', exact: true }).click();
     await phone.getByRole('heading', { name: 'Secrets', exact: true }).waitFor();
+    await expect(phone.getByRole('button', { name: 'Add secret', exact: true })).toBeEnabled();
+    await checkSettingsLayout(phone, `${engine.name()}-mobile`);
+    await checkNotificationLayout(phone, `${engine.name()}-mobile`);
     assert(
       await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       'Settings overflow',
@@ -339,6 +467,24 @@ try {
     await phone.screenshot({
       path: `build-rust/screenshots/settings-${engine.name()}-mobile.png`,
       fullPage: true,
+    });
+    await phone.getByRole('link', { name: 'Voice', exact: true }).click();
+    await phone.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();
+    await expect(phone.getByRole('combobox', { name: 'Voice model', exact: true })).toHaveValue(
+      'fixture-model',
+    );
+    await checkGlassButtons(phone);
+    const voicePanel = await phone.locator('.voice-controls').boundingBox();
+    assert(
+      voicePanel.y >= 0 && voicePanel.y + voicePanel.height <= 844,
+      'Voice controls fit the phone viewport',
+    );
+    assert(
+      await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      'Voice overflow',
+    );
+    await phone.screenshot({
+      path: `build-rust/screenshots/voice-idle-${engine.name()}-mobile.png`,
     });
     await mobile.close();
     await browser.close();
