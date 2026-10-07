@@ -1,0 +1,58 @@
+/* New boundaries only; existing design tokens and launcher styles are reused. */
+.migration-app-page {
+  max-width: 960px;
+  min-height: 100dvh;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+}
+.migration-app-page .page-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.migration-app-page .page-header a {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+.migration-app-page h1 {
+  font-size: 20px;
+}
+.migration-applet {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 70dvh;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--app-radius);
+}
+.migration-applet iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 70dvh;
+  border: 0;
+  background: var(--bg);
+}
+.migration-applet .error {
+  padding: 16px;
+}
+.speech-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+.settings-page {
+  padding-bottom: 120px;
+}
+.setting-card select {
+  width: 100%;
+  margin-top: 8px;
+}
+@media (min-width: 701px) {
+  .migration-app-page {
+    padding: 32px;
+  }
+}

@@ -27,7 +27,11 @@
     "verify": "npm run format:check && npm run check && npm test && npm run build && npm run test:http",
     "icons": "node scripts/generate-icons.mjs",
     "test:e2e": "npm run build && playwright test",
-    "test:e2e:ui": "npm run build && playwright test --ui"
+    "test:e2e:ui": "npm run build && playwright test --ui",
+    "build:rust:web": "node scripts/migration/build-web.mjs",
+    "start:rust": "cargo run --manifest-path rust/Cargo.toml",
+    "test:rust": "cargo test --manifest-path rust/Cargo.toml",
+    "test:rust:e2e": "node scripts/migration/test-browser.mjs"
   },
   "dependencies": {
     "@openai/codex": "0.160.0",
@@ -38,7 +42,9 @@
     "ajv": "^8.20.0",
     "cron-parser": "^5.10.1",
     "esbuild": "^0.25.0",
+    "htm": "^3.1.1",
     "jose": "^6.0.0",
+    "preact": "^11.0.0",
     "sharp": "^0.35.5",
     "svelte": "^5.25.0",
     "tailwindcss": "^4.3.3",

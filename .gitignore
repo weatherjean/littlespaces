@@ -9,3 +9,8 @@ build/
 *.sqlite*
 playwright-report/
 test-results/
+
+# Rust / Preact migration artifacts
+rust/target/
+build-rust/
+.data-rust/

@@ -1,0 +1,298 @@
+/* Ported from the existing launcher and PrimaryNav; keep visual parity. */
+
+.launcher {
+  max-width: 960px;
+  padding: max(24px, env(safe-area-inset-top)) 20px calc(112px + env(safe-area-inset-bottom));
+}
+.launcher-content {
+  width: 100%;
+  max-width: 760px;
+  padding: 0;
+}
+.launcher-header {
+  margin-bottom: 40px;
+}
+.launcher-header .wordmark {
+  font-size: 21px;
+}
+.launcher-intro {
+  margin-bottom: 28px;
+}
+.launcher-intro .eyebrow {
+  font-size: 10px;
+  margin-bottom: 14px;
+}
+.launcher-intro h1 {
+  max-width: 340px;
+  font-size: clamp(32px, 7vw, 44px);
+  line-height: 1.12;
+  letter-spacing: -1.3px;
+  margin-bottom: 14px;
+}
+.launcher-intro > p:last-child {
+  max-width: 290px;
+  font-size: 14px;
+}
+.quick-actions {
+  display: grid;
+  gap: 12px;
+  margin: 28px 0 36px;
+}
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border: var(--border-width) solid var(--line);
+  border-radius: calc(var(--radius) * 1.5);
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+}
+.voice-action {
+  background: var(--accent-soft);
+}
+.action-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.quick-action > span:nth-child(2) {
+  flex: 1;
+}
+.quick-action strong,
+.quick-action small {
+  display: block;
+}
+.quick-action strong {
+  font-size: 16px;
+  font-weight: 550;
+}
+.quick-action small {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.apps-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.reload-home {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--hover);
+}
+.reload-home:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+@media (pointer: coarse) {
+  .reload-home {
+    width: 44px;
+    height: 44px;
+  }
+}
+.apps-heading h2 {
+  font-size: 20px;
+  font-weight: 550;
+  letter-spacing: -0.4px;
+}
+.apps-heading > span {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--hover);
+  padding: 4px 9px;
+  border-radius: 20px;
+}
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px 8px;
+}
+.app-tile {
+  padding: 8px 2px;
+  gap: 10px;
+}
+.app-tile > span:not(.app-icon) {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.app-tile small {
+  display: block;
+}
+.create-tile {
+  background: transparent;
+  color: var(--muted);
+}
+.create-tile .app-icon {
+  border-style: dashed;
+  box-shadow: none;
+  background: var(--hover);
+}
+.app-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: var(--border-width) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 0 14px;
+  margin-bottom: 20px;
+  color: var(--muted);
+}
+.app-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font-size: 16px;
+}
+.launcher-empty {
+  padding: 28px 20px;
+  text-align: center;
+  border: var(--border-width) dashed var(--line);
+  border-radius: calc(var(--radius) * 1.5);
+}
+.empty-symbol {
+  color: var(--accent);
+}
+.launcher-empty h3 {
+  font-size: 17px;
+  font-weight: 550;
+  margin: 16px 0 8px;
+}
+.launcher-empty p {
+  max-width: 350px;
+  margin: 0 auto 20px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.launcher-hint {
+  margin-top: 20px;
+  font-size: 14px;
+}
+.launcher-content .home-notifications {
+  margin-top: 36px;
+  text-align: left;
+}
+@media (max-width: 700px) {
+  .has-apps .launcher-header {
+    margin-bottom: 24px;
+  }
+  .has-apps .launcher-intro .eyebrow {
+    display: none;
+  }
+  .has-apps .launcher-intro h1 {
+    font-size: 28px;
+    max-width: none;
+  }
+  .has-apps .launcher-intro > p:last-child {
+    display: none;
+  }
+  .has-apps .quick-actions {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 20px 0 28px;
+  }
+  .has-apps .quick-action {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+  }
+  .has-apps .quick-action > svg {
+    display: none;
+  }
+  .has-apps .quick-action strong {
+    font-size: 14px;
+  }
+  .has-apps .quick-action small {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .has-apps .action-icon {
+    width: 36px;
+    height: 36px;
+  }
+}
+@media (min-width: 701px) {
+  .launcher {
+    padding: 48px 32px 120px;
+  }
+  .launcher-header {
+    margin-bottom: 56px;
+  }
+  .launcher-intro h1,
+  .launcher-intro > p:last-child {
+    max-width: none;
+  }
+  .quick-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  .app-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 24px;
+  }
+}
+
+.primary-nav {
+  position: fixed;
+  z-index: 20;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  border-top: var(--border-width) solid var(--line);
+  background: var(--panel);
+}
+.primary-nav a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 54px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 11px;
+}
+.primary-nav a[aria-current='page'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.primary-nav a:hover {
+  background: var(--hover);
+}
+@media (min-width: 701px) {
+  .primary-nav {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    bottom: 20px;
+    width: 400px;
+    padding: 8px;
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 1.5);
+    box-shadow: var(--shadow);
+  }
+}

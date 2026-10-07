@@ -28,6 +28,10 @@ Repeatable operations would live in scripts rather than depend on improvised she
 
 This is a future direction, not an available deployment flow. We need more work on the app and deployment tooling, including measuring and controlling peak memory during applet creation and backend actions, validating the full stack on 512 MiB, and testing server access, diagnostics, updates, rollback, and data recovery before offering this experience.
 
+## Rust migration preview
+
+A local Rust/Preact/QuickJS vertical slice is available on the migration branch. It preserves the launcher styling and runs a sandboxed journal applet with SQLite persistence and device speech controls. See [the migration guide](docs/rust-migration.md) for commands, supported applet syntax, and the remaining port work. The existing application remains the complete implementation.
+
 ## Docs
 
 - [Self-hosting and VPS deployment](docs/self-hosting.md) — including remote ChatGPT setup.
