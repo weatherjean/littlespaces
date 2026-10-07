@@ -12,7 +12,15 @@ test('Secrets gives advisory format feedback and only reveals newly entered valu
   const secrets = page
     .locator('.automation-card')
     .filter({ has: page.getByRole('heading', { name: 'Secrets', exact: true }) });
-  await expect(secrets.getByLabel('Name', { exact: true })).toBeEnabled();
+  const add = secrets.getByRole('button', { name: 'Add secret', exact: true });
+  await expect(secrets.getByLabel('Name', { exact: true })).toHaveCount(0);
+  await expect(add).toBeEnabled();
+  await add.click();
+  await expect(secrets.getByLabel('Name', { exact: true })).toBeFocused();
+  await secrets.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(secrets.getByLabel('Name', { exact: true })).toHaveCount(0);
+  await expect(add).toBeFocused();
+  await add.click();
   await secrets.getByLabel('Name', { exact: true }).fill('GOOGLE_BOOKS_API_KEY');
   const value = secrets.getByLabel('Secret value', { exact: true });
   await value.fill('synthetic-invalid-google-value');
@@ -27,14 +35,16 @@ test('Secrets gives advisory format feedback and only reveals newly entered valu
   await expect(value).toHaveAttribute('type', 'text');
   await secrets.getByRole('button', { name: 'Save secret', exact: true }).click();
   await expect(secrets.getByRole('status')).toContainText('Saving does not verify the connection');
-  await expect(value).toHaveValue('');
-  await expect(value).toHaveAttribute('type', 'password');
+  await expect(value).toHaveCount(0);
+  await expect(add).toBeEnabled();
   const response = await page.request.get('/api/settings/secrets');
   const metadata = await response.json();
   expect(JSON.stringify(metadata)).not.toContain('synthetic-invalid-google-value');
   expect(metadata.secrets[0].warnings.length).toBeGreaterThan(0);
   await secrets.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(value).toHaveValue('');
+  await expect(value).toHaveAttribute('type', 'password');
+  await expect(secrets.getByLabel('Name', { exact: true })).toHaveAttribute('readonly', '');
   await value.fill('AIza' + 'a'.repeat(35));
   await expect(secrets.getByRole('status').filter({ hasText: 'usual Google Cloud' })).toHaveCount(
     0,

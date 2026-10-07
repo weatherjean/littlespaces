@@ -61,7 +61,8 @@ body {
 .shell .settings-content .automation-card {
   padding: 28px;
 }
-.shell .automation-card > h3 {
+.shell .automation-card > h3,
+.shell .automation-card .secrets-heading h3 {
   font-size: 17px;
   letter-spacing: -0.25px;
   margin-bottom: 8px;
@@ -155,6 +156,31 @@ body {
     0 3px 8px #02081718;
   color: var(--ink);
   border-radius: 14px;
+}
+.shell .app-dock :is(.dock-home, .dock-more) {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  background: linear-gradient(160deg, #ffffff12, #ffffff04);
+  border: 1px solid #dbeaff30;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 #ffffff18,
+    0 3px 8px #02081718;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.shell .app-dock :is(.dock-home, .dock-more):hover {
+  background: linear-gradient(160deg, #ffffff26, #ffffff0e);
+  border-color: #dbeaff60;
+}
+.shell .app-dock :is(.dock-home, .dock-more):active {
+  background: #dbeaff24;
 }
 .shell .primary-button,
 .shell .send-button {

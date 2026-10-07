@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import Icon from './Icon.svelte';
   import { request } from '$lib/client';
   import { credentialWarnings } from '$lib/secret-validation';
   let { archivedSpaceIds = [] }: { archivedSpaceIds?: string[] } = $props();
@@ -17,6 +18,9 @@
   let secrets = $state<Secret[]>([]),
     schedules = $state<Schedule[]>([]);
   let editing = $state(false);
+  let formOpen = $state(false);
+  let secretForm = $state<HTMLFormElement>();
+  let addButton = $state<HTMLButtonElement>();
   let origins = $state('');
   let valueVisible = $state(false);
   let name = $state(''),
@@ -65,12 +69,7 @@
           ...(editing && !value ? { action: 'configure' } : {}),
         })
       ).secrets;
-      value = '';
-      valueVisible = false;
-      name = '';
-      description = '';
-      origins = '';
-      editing = false;
+      closeSecretForm();
       status =
         'Secret saved. Saving does not verify the connection; ask the app’s chat to test it.';
     } catch (e) {
@@ -79,14 +78,25 @@
       busy = false;
     }
   }
-  function editSecret(secret: Secret) {
-    name = secret.name;
-    description = secret.description;
-    origins = secret.origins.join(', ');
+  async function openSecretForm(secret?: Secret) {
+    editing = !!secret;
+    name = secret?.name || '';
+    description = secret?.description || '';
+    origins = secret?.origins.join(', ') || '';
     value = '';
     valueVisible = false;
-    editing = true;
     error = status = '';
+    formOpen = true;
+    await tick();
+    secretForm
+      ?.querySelector<HTMLInputElement>(editing ? 'input:not([readonly])' : 'input')
+      ?.focus();
+  }
+  function closeSecretForm() {
+    formOpen = editing = valueVisible = false;
+    name = value = description = origins = '';
+    error = '';
+    void tick().then(() => addButton?.focus());
   }
   async function removeSecret(secret: Secret) {
     if (busy || loading) return;
@@ -121,8 +131,21 @@
 </script>
 
 <section class="setting-card automation-card">
-  <h3>Secrets</h3>
-  <p>Connect apps to external services. Values are hidden from chat.</p>
+  <div class="secrets-heading">
+    <div>
+      <h3>Secrets</h3>
+      <p>Connect apps to external services. Values are hidden from chat.</p>
+    </div>
+    <button
+      bind:this={addButton}
+      type="button"
+      class="secondary-button add-secret"
+      disabled={busy || loading || !!loadError || formOpen}
+      aria-expanded={formOpen}
+      aria-controls="secret-form"
+      onclick={() => openSecretForm()}><Icon name="plus" size={18} />Add secret</button
+    >
+  </div>
   {#if loading}<p role="status">Loading settings…</p>{/if}
   {#if loadError}<p class="error" role="alert">{loadError}</p>
     <button class="secondary-button" onclick={load}>Retry loading settings</button>{/if}
@@ -135,7 +158,7 @@
       <button
         class="secondary-button"
         disabled={busy || loading || !!loadError}
-        onclick={() => editSecret(secret)}>Edit</button
+        onclick={() => openSecretForm(secret)}>Edit</button
       >
       <button
         class="secondary-button"
@@ -143,80 +166,78 @@
         onclick={() => removeSecret(secret)}>Delete</button
       >
     </div>{/each}
-  <form onsubmit={save}>
-    <div class="form-heading">
-      <h4>{editing ? `Edit ${name}` : 'Add a secret'}</h4>
-      {#if editing}<button
-          type="button"
+  {#if formOpen}
+    <form id="secret-form" bind:this={secretForm} onsubmit={save}>
+      <div class="form-heading">
+        <h4>{editing ? `Edit ${name}` : 'Add a secret'}</h4>
+        <button type="button" class="secondary-button" disabled={busy} onclick={closeSecretForm}
+          >Cancel</button
+        >
+      </div>
+      <label
+        >Name<input
+          disabled={busy || loading || !!loadError}
+          required
+          readonly={editing}
+          pattern={'[A-Z][A-Z0-9_]{0,63}'}
+          maxlength="64"
+          placeholder="WEATHER_API_KEY"
+          bind:value={name}
+        /></label
+      >
+      <label
+        >Description <span class="optional">Optional</span><input
+          disabled={busy || loading || !!loadError}
+          maxlength="500"
+          placeholder="What this credential is for"
+          bind:value={description}
+        /></label
+      >
+      <label class="value-field"
+        >Secret value<input
+          disabled={busy || loading || !!loadError}
+          required={!editing}
+          type={valueVisible ? 'text' : 'password'}
+          autocomplete="new-password"
+          spellcheck="false"
+          autocapitalize="none"
+          maxlength="16000"
+          placeholder={editing
+            ? 'Leave blank to keep the current value'
+            : 'Paste your key or token'}
+          bind:value
+        /></label
+      >
+      <div class="secret-visibility">
+        <button
           class="secondary-button"
-          onclick={() => {
-            editing = false;
-            valueVisible = false;
-            name = value = description = origins = '';
-          }}>Cancel</button
-        >{/if}
-    </div>
-    <label
-      >Name<input
-        disabled={busy || loading || !!loadError}
-        required
-        readonly={editing}
-        pattern={'[A-Z][A-Z0-9_]{0,63}'}
-        maxlength="64"
-        placeholder="WEATHER_API_KEY"
-        bind:value={name}
-      /></label
-    >
-    <label
-      >Description <span class="optional">Optional</span><input
-        disabled={busy || loading || !!loadError}
-        maxlength="500"
-        placeholder="What this credential is for"
-        bind:value={description}
-      /></label
-    >
-    <label class="value-field"
-      >Secret value<input
-        disabled={busy || loading || !!loadError}
-        required={!editing}
-        type={valueVisible ? 'text' : 'password'}
-        autocomplete="new-password"
-        spellcheck="false"
-        autocapitalize="none"
-        maxlength="16000"
-        placeholder={editing ? 'Leave blank to keep the current value' : 'Paste your key or token'}
-        bind:value
-      /></label
-    >
-    <div class="secret-visibility">
-      <button
-        class="secondary-button"
-        type="button"
-        disabled={busy || loading || !!loadError}
-        aria-pressed={valueVisible}
-        onclick={() => (valueVisible = !valueVisible)}
-        >{valueVisible ? 'Hide entered value' : 'Show entered value'}</button
+          type="button"
+          disabled={busy || loading || !!loadError}
+          aria-pressed={valueVisible}
+          onclick={() => (valueVisible = !valueVisible)}
+          >{valueVisible ? 'Hide entered value' : 'Show entered value'}</button
+        >
+        <p>Show only reveals what you just entered; stored values are never returned.</p>
+      </div>
+      {#each valueWarnings as warning}<p class="error" role="status">{warning}</p>{/each}
+      <label class="value-field"
+        >Allowed API origins<input
+          disabled={busy || loading || !!loadError}
+          placeholder="https://api.example.com"
+          bind:value={origins}
+          maxlength="3000"
+        /></label
       >
-      <p>Show only reveals what you just entered; stored values are never returned.</p>
-    </div>
-    {#each valueWarnings as warning}<p class="error" role="status">{warning}</p>{/each}
-    <label class="value-field"
-      >Allowed API origins<input
-        disabled={busy || loading || !!loadError}
-        placeholder="https://api.example.com"
-        bind:value={origins}
-        maxlength="3000"
-      /></label
-    >
-    <div class="form-footer">
-      <p>Apps can use this secret at these addresses. Separate origins with commas.</p>
-      <button
-        class="primary-button"
-        disabled={busy || loading || !!loadError || !name.trim() || (!editing && !value)}
-        >Save secret</button
-      >
-    </div>
-  </form>
+      <div class="form-footer">
+        <p>Apps can use this secret at these addresses. Separate origins with commas.</p>
+        <button
+          class="primary-button"
+          disabled={busy || loading || !!loadError || !name.trim() || (!editing && !value)}
+          >Save secret</button
+        >
+      </div>
+    </form>
+  {/if}
   {#if status}<p class="success" role="status">{status}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>
@@ -253,6 +274,28 @@
 </section>
 
 <style>
+  .secrets-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+  }
+  .secrets-heading > div {
+    min-width: 0;
+  }
+  .add-secret {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  @media (max-width: 540px) {
+    .secrets-heading {
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+  }
+
   .automation-card {
     display: block;
     padding: 28px 0;
