@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { compile } from '@tailwindcss/node';
 import { gzipSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
@@ -110,10 +110,31 @@ const sheet = await compile('@import "tailwindcss";', {
 });
 const css = sheet.build([...utilities]);
 const defaults =
-  'html{color-scheme:dark}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#101827;color:#f3f7ff}button{cursor:pointer}button:disabled{cursor:wait;opacity:.6}textarea{min-height:100px}';
+  '@layer base{html{color-scheme:light}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:#fff;color:#17223b}button{cursor:pointer}button:disabled{cursor:wait;opacity:.6}textarea{min-height:100px}}';
 await writeFile('build-rust/web/applet.css', css + defaults);
 await writeFile('build-rust/web/applet-utilities.json', JSON.stringify([...utilities].sort()));
 const runtime = await readFile('build-rust/web/applet-runtime.js');
 console.log(
   `Applet styles: ${utilities.size} supported classes, ${gzipSync(css).length} bytes gzip. Preact/HTM runtime: ${gzipSync(runtime).length} bytes gzip.`,
 );
+
+const assets = [
+  '/offline.html',
+  '/icon-192.png',
+  ...(await readdir('build-rust/web/assets')).map((file) => '/assets/' + file),
+];
+const version = assets
+  .join('|')
+  .replace(/[^a-zA-Z0-9]/g, '')
+  .slice(-50);
+const worker = (await readFile('web/service-worker.js', 'utf8'))
+  .replace('__VERSION__', version)
+  .replace('__ASSETS__', JSON.stringify(assets));
+await writeFile('build-rust/web/service-worker.js', worker);
+
+for (const name of await readdir('build-rust/web/assets')) {
+  if (/\.(js|css)$/.test(name)) {
+    const bytes = await readFile('build-rust/web/assets/' + name);
+    await writeFile('build-rust/web/assets/' + name + '.gz', gzipSync(bytes));
+  }
+}

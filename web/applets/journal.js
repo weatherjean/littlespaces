@@ -1,3 +1,6 @@
+// This starter chooses its own dark palette; the host uses neutral defaults.
+document.documentElement.style.colorScheme = 'dark';
+document.body.classList.add('bg-slate-900', 'text-slate-100');
 const { html, render, useState, useEffect } = window.appletUI;
 function Journal() {
   const [entries, setEntries] = useState([]);

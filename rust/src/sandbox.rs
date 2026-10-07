@@ -1,7 +1,7 @@
 use crate::runtime::{Output, Request, MAX_BYTES};
 use std::{path::Path, process::Stdio};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
     process::Command,
     time::{timeout, Duration},
 };
@@ -10,7 +10,7 @@ fn command(executable: &Path) -> Result<Command, String> {
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
-        let profile = "(version 1)(deny default)(allow process-exec (literal (param \"EXEC\")))(allow sysctl-read)(allow file-read-metadata)(allow file-read* (literal (param \"EXEC\")) (subpath \"/System/Library\") (subpath \"/usr/lib\") (literal \"/dev/urandom\") (literal \"/dev/random\") (literal \"/\"))";
+        let profile = "(version 1)(deny default)(allow process-exec (literal (param \"EXEC\")))(allow sysctl-read)(allow file-read-metadata)(allow file-read* (literal (param \"EXEC\")) (subpath \"/System/Library\") (subpath \"/usr/lib\") (literal \"/dev/urandom\") (literal \"/dev/random\") (literal \"/\") (regex #\"^/opt/homebrew/.*\\.dylib$\") (regex #\"^/usr/local/.*\\.dylib$\"))";
         cmd.args([
             "-D",
             &format!("EXEC={}", executable.display()),
@@ -56,10 +56,31 @@ fn command(executable: &Path) -> Result<Command, String> {
 }
 
 pub async fn run(request: &Request) -> Result<Output, String> {
-    let input = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    run_with(request, None, true).await
+}
+pub async fn run_with(
+    request: &Request,
+    store: Option<&crate::store::Store>,
+    read_only: bool,
+) -> Result<Output, String> {
+    let mut diagnostics = Vec::new();
+    let result = run_with_trace(request, store, read_only, &mut diagnostics).await;
+    result.map(|mut output| {
+        output.requests = diagnostics;
+        output
+    })
+}
+pub async fn run_with_trace(
+    request: &Request,
+    store: Option<&crate::store::Store>,
+    read_only: bool,
+    diagnostics: &mut Vec<serde_json::Value>,
+) -> Result<Output, String> {
+    let mut input = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     if input.len() > MAX_BYTES {
-        return Err("App data exceeds the execution limit".into());
+        return Err("App data exceeds execution limit".into());
     }
+    input.push(b'\n');
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut child = command(&executable)?
         .env_clear()
@@ -73,38 +94,74 @@ pub async fn run(request: &Request) -> Result<Output, String> {
     let mut stdin = child.stdin.take().ok_or("Missing worker input")?;
     let stdout = child.stdout.take().ok_or("Missing worker output")?;
     let task = async {
-        // Read and write concurrently so an invalid early response cannot deadlock the pipes.
-        let writer = async move {
-            stdin.write_all(&input).await?;
-            drop(stdin);
-            Ok::<_, std::io::Error>(())
-        };
-        let reader = async {
-            let mut output = Vec::new();
-            stdout
+        stdin
+            .write_all(&input)
+            .await
+            .map_err(|_| "Worker input failed")?;
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut requests = 0;
+        loop {
+            let mut bytes = Vec::new();
+            let count = (&mut reader)
                 .take((MAX_BYTES + 1) as u64)
-                .read_to_end(&mut output)
-                .await?;
-            Ok::<_, std::io::Error>(output)
-        };
-        let (_, output) =
-            tokio::try_join!(writer, reader).map_err(|_| "Worker communication failed")?;
-        if output.len() > MAX_BYTES {
-            return Err("Worker output exceeds limit".to_string());
+                .read_until(b'\n', &mut bytes)
+                .await
+                .map_err(|_| "Worker output failed")?;
+            if count == 0 {
+                return Err("Isolated backend worker failed".into());
+            }
+            if bytes.len() > MAX_BYTES {
+                return Err("Worker output exceeds limit".into());
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|_| "Invalid worker response")?;
+            if value["http"].as_bool() == Some(true) {
+                requests += 1;
+                if requests > 10 {
+                    return Err("HTTP request limit exceeded".into());
+                }
+                let result = match store {
+                    Some(store) => crate::broker::request(store, &value["input"], read_only).await,
+                    None => Err("HTTP unavailable".into()),
+                };
+                let url = url::Url::parse(value["input"]["url"].as_str().unwrap_or(""));
+                let diagnostic = match &result {
+                    Ok(value) => {
+                        serde_json::json!({"code":if value["ok"].as_bool()==Some(true){"http_success"}else{"http_failure"},"status":value["status"],"message":if value["ok"].as_bool()==Some(true){"API request succeeded"}else{"API rejected the request"}})
+                    }
+                    Err(error) => serde_json::json!({"code":"http_failure","message":error}),
+                };
+                let mut diagnostic = diagnostic;
+                if let Ok(url) = url {
+                    diagnostic["origin"] = serde_json::json!(url.origin().ascii_serialization());
+                    diagnostic["path"] = serde_json::json!(url.path());
+                }
+                diagnostics.push(diagnostic);
+                let frame = match result {
+                    Ok(result) => serde_json::json!({"result":result}),
+                    Err(error) => serde_json::json!({"error":error}),
+                }
+                .to_string()
+                    + "\n";
+                stdin
+                    .write_all(frame.as_bytes())
+                    .await
+                    .map_err(|_| "Worker bridge failed")?;
+                continue;
+            }
+            drop(stdin);
+            let status = child.wait().await.map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err("Isolated backend worker failed".into());
+            }
+            if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(error.into());
+            }
+            return serde_json::from_value(value).map_err(|e| e.to_string());
         }
-        let status = child.wait().await.map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err("Isolated backend worker failed".into());
-        }
-        let value: serde_json::Value =
-            serde_json::from_slice(&output).map_err(|_| "Invalid worker response")?;
-        if let Some(error) = value.get("error").and_then(|x| x.as_str()) {
-            return Err(error.into());
-        }
-        serde_json::from_value(value).map_err(|e| e.to_string())
     };
-    match timeout(Duration::from_secs(3), task).await {
-        Ok(result) => result,
+    match timeout(Duration::from_millis(request.budget_ms + 1000), task).await {
+        Ok(value) => value,
         Err(_) => {
             let _ = child.kill().await;
             Err("Backend execution timed out".into())

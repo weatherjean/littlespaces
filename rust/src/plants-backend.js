@@ -1,0 +1,186 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all) __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if ((from && typeof from === 'object') || typeof from === 'function') {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, {
+          get: () => from[key],
+          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable,
+        });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, '__esModule', { value: true }), mod);
+var stdin_exports = {};
+__export(stdin_exports, {
+  actions: () => actions,
+  tests: () => tests,
+});
+module.exports = __toCommonJS(stdin_exports);
+const fields = {
+  name: { type: 'string', minLength: 1, maxLength: 80 },
+  interval: { type: 'integer', minimum: 1, maximum: 365 },
+  photoId: { type: 'string', maxLength: 80 },
+  scientificName: { type: 'string', maxLength: 150 },
+  location: { type: 'string', maxLength: 200 },
+  light: { type: 'string', maxLength: 100 },
+  wateringAdvice: { type: 'string', maxLength: 2e3 },
+  confirmed: { type: 'boolean' },
+};
+function details(input) {
+  const { name, interval } = input;
+  if (!name?.trim() || !Number.isInteger(interval) || interval < 1 || interval > 365)
+    throw Error('Enter a plant name and watering interval (1\u2013365 days).');
+  if (input.photoId && input.confirmed !== true)
+    throw Error('Confirm the plant identification and watering interval before saving.');
+  const value = { name: name.trim(), interval };
+  for (const key of ['photoId', 'scientificName', 'location', 'light', 'wateringAdvice'])
+    if (input[key] !== void 0) value[key] = input[key];
+  return value;
+}
+const actions = {
+  listPlants: {
+    description: 'List plants, their watering intervals, and last watering dates.',
+    readOnly: true,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    run: (_input, { db }) => db.list(),
+  },
+  addPlant: {
+    description: 'Add a plant to the journal.',
+    readOnly: false,
+    parameters: {
+      type: 'object',
+      properties: fields,
+      required: ['name', 'interval'],
+      additionalProperties: false,
+    },
+    run: (input, { db, uuid }) => {
+      const value = { ...details(input), wateredAt: null };
+      const key = uuid();
+      db.set(key, value);
+      return { key, value };
+    },
+  },
+  updatePlant: {
+    description:
+      'Update a plant\u2019s confirmed details and optional photo, preserving watering history and other saved fields.',
+    readOnly: false,
+    parameters: {
+      type: 'object',
+      properties: { ...fields, key: { type: 'string' } },
+      required: ['key', 'name', 'interval'],
+      additionalProperties: false,
+    },
+    run: (input, { db }) => {
+      const old = db.get(input.key);
+      if (!old) throw Error('Plant not found.');
+      const value = { ...old, ...details(input) };
+      db.set(input.key, value);
+      return { key: input.key, value };
+    },
+  },
+  waterPlant: {
+    description: 'Mark a plant as watered now, using its record key.',
+    readOnly: false,
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    run: ({ key }, { db, now }) => {
+      const plant = db.get(key);
+      if (!plant) throw Error('Plant not found.');
+      const value = { ...plant, wateredAt: now() };
+      db.set(key, value);
+      return { key, value };
+    },
+  },
+  removePlant: {
+    description: 'Remove a plant from the journal.',
+    readOnly: false,
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    run: ({ key }, { db }) => {
+      if (!db.get(key)) throw Error('Plant not found.');
+      db.remove(key);
+      return { removed: key };
+    },
+  },
+};
+const tests = [
+  {
+    name: 'Photo drafts require confirmation before a plant is saved',
+    run: async ({ call, assert }) => {
+      await assert.rejects(
+        () => call('addPlant', { name: 'Fern', interval: 7, photoId: 'photo-id' }),
+        /Confirm/,
+      );
+      assert.deepEqual(await call('listPlants', {}), []);
+      const plant = await call('addPlant', {
+        name: 'Fern',
+        interval: 7,
+        photoId: 'photo-id',
+        confirmed: true,
+        location: 'Desk',
+      });
+      assert.equal(plant.value.photoId, 'photo-id');
+      assert.equal(plant.value.location, 'Desk');
+    },
+  },
+  {
+    name: 'Editing an existing plant preserves watering history and custom fields',
+    run: async ({ call, db, assert }) => {
+      db.set('existing', { name: 'Old', interval: 7, wateredAt: '2026-01-01', custom: 'keep' });
+      await call('updatePlant', {
+        key: 'existing',
+        name: 'Fern',
+        interval: 14,
+        photoId: 'new-photo',
+        confirmed: true,
+      });
+      const saved = db.get('existing');
+      assert.equal(saved.wateredAt, '2026-01-01');
+      assert.equal(saved.custom, 'keep');
+      assert.equal(saved.photoId, 'new-photo');
+    },
+  },
+  {
+    name: 'Adding a plant and watering it preserves the plant details',
+    run: async ({ call, assert }) => {
+      const plant = await call('addPlant', { name: 'Fern', interval: 7 });
+      await call('waterPlant', { key: plant.key });
+      const rows = await call('listPlants', {});
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].value.name, 'Fern');
+      assert.equal(rows[0].value.interval, 7);
+      assert.ok(rows[0].value.wateredAt);
+    },
+  },
+  {
+    name: 'Invalid intervals are rejected without creating records',
+    run: async ({ call, assert }) => {
+      await assert.rejects(() => call('addPlant', { name: 'Fern', interval: -1 }));
+      assert.deepEqual(await call('listPlants', {}), []);
+    },
+  },
+  {
+    name: 'Removing one plant leaves the others intact',
+    run: async ({ call, assert }) => {
+      const first = await call('addPlant', { name: 'Fern', interval: 7 });
+      await call('addPlant', { name: 'Monstera', interval: 14 });
+      await call('removePlant', { key: first.key });
+      assert.equal((await call('listPlants', {}))[0].value.name, 'Monstera');
+    },
+  },
+];

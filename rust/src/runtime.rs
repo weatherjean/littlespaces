@@ -3,39 +3,86 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
+    io::Write,
     time::{Duration, Instant},
 };
 
-pub const MAX_BYTES: usize = 1_000_000;
+pub const MAX_BYTES: usize = 4_000_000;
 #[derive(Serialize, Deserialize)]
 pub struct Request {
     pub source: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default = "default_budget")]
+    pub budget_ms: u64,
     pub action: String,
     pub input: Value,
     pub records: BTreeMap<String, Value>,
     pub now: String,
 }
+fn default_budget() -> u64 {
+    2000
+}
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Output {
+    #[serde(default)]
+    pub requests: Vec<Value>,
+    #[serde(default)]
+    pub catalog: Vec<Value>,
+    #[serde(default)]
+    pub report: Vec<Value>,
     pub result: Value,
     pub records: BTreeMap<String, Value>,
 }
 
 pub fn execute(request: Request) -> Result<Output, String> {
-    if request.source.len() > 80_000 {
+    if request.source.len() > 1_000_000 {
         return Err("Backend source is too large".into());
     }
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
-    runtime.set_memory_limit(16 * 1024 * 1024);
+    runtime.set_memory_limit(32 * 1024 * 1024);
     runtime.set_max_stack_size(256 * 1024);
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_millis(request.budget_ms.clamp(100, 30000));
     runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     let payload = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     context.with(|ctx| -> Result<(), String> {
         ctx.globals()
+            .set("__now", Func::from(crate::store::now))
+            .map_err(|e| e.to_string())?;
+        ctx.globals()
             .set("__uuid", Func::from(crate::random_uuid))
+            .map_err(|e| e.to_string())?;
+        ctx.globals()
+            .set(
+                "__http",
+                Func::from(|input: String| -> String {
+                    let response = (|| -> Result<String, String> {
+                        let input: Value =
+                            serde_json::from_str(&input).map_err(|_| "Invalid HTTP input")?;
+                        let frame =
+                            serde_json::json!({"http":true,"input":input}).to_string() + "\n";
+                        std::io::stdout()
+                            .write_all(frame.as_bytes())
+                            .map_err(|e| e.to_string())?;
+                        std::io::stdout().flush().map_err(|e| e.to_string())?;
+                        let mut line = String::new();
+                        std::io::stdin()
+                            .read_line(&mut line)
+                            .map_err(|e| e.to_string())?;
+                        if line.len() > MAX_BYTES {
+                            return Err("HTTP response exceeds limit".into());
+                        }
+                        let value: Value =
+                            serde_json::from_str(&line).map_err(|_| "Invalid HTTP response")?;
+                        if let Some(error) = value.get("error").and_then(Value::as_str) {
+                            return Ok(serde_json::json!({"__bridgeError":error}).to_string());
+                        }
+                        Ok(value["result"].to_string())
+                    })();
+                    response.unwrap_or_else(|e| serde_json::json!({"__bridgeError":e}).to_string())
+                }),
+            )
             .map_err(|e| e.to_string())?;
         ctx.eval::<(), _>(format!("globalThis.__request = {payload};"))
             .map_err(|e| e.to_string())?;
@@ -67,7 +114,7 @@ pub fn execute(request: Request) -> Result<Output, String> {
         || output
             .records
             .keys()
-            .any(|key| key.is_empty() || key.len() > 200)
+            .any(|key| key.is_empty() || key.chars().count() > 200)
     {
         return Err("Invalid backend records".into());
     }
@@ -88,8 +135,7 @@ pub fn worker() -> Result<(), String> {
     }
     let mut input = String::new();
     std::io::stdin()
-        .take((MAX_BYTES + 1) as u64)
-        .read_to_string(&mut input)
+        .read_line(&mut input)
         .map_err(|e| e.to_string())?;
     if input.len() > MAX_BYTES {
         return Err("Backend input is too large".into());
@@ -111,6 +157,8 @@ mod tests {
     fn request(source: &str, action: &str, input: Value) -> Request {
         Request {
             source: source.into(),
+            mode: "call".into(),
+            budget_ms: 2000,
             action: action.into(),
             input,
             records: BTreeMap::new(),
