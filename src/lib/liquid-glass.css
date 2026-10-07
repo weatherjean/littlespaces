@@ -1,0 +1,178 @@
+/* Isolated visual experiment. Switch to main to restore Orbit. */
+:root {
+  --bg: #101827;
+  --panel: #202e46;
+  --surface: #334360;
+  --ink: #f3f7ff;
+  --muted: #b4c3da;
+  --accent: #c3deff;
+  --on-accent: #132039;
+  --line: #dbeaff26;
+  --accent-soft: #b5d8ff14;
+  --hover: #dbeaff0d;
+  --radius: 18px;
+  --app-radius: 26px;
+  --shadow: 0 12px 32px #02081730, inset 0 1px 0 #ffffff26;
+  --shadow-hover: 0 18px 40px #02081750, inset 0 1px 0 #ffffff40;
+  --modal-shadow: 0 32px 100px #02081780, inset 0 1px 0 #ffffff30;
+  --glass: linear-gradient(135deg, #ffffff12, #ffffff03 55%, #b6d7ff0a);
+}
+
+/* A fixed, quiet color field gives the translucent surfaces depth as you scroll. */
+body {
+  background:
+    radial-gradient(ellipse at 8% 12%, #365e7880, transparent 48%),
+    radial-gradient(ellipse at 92% 45%, #66538955, transparent 48%),
+    radial-gradient(ellipse at 50% 100%, #284a6855, transparent 55%), var(--bg);
+  background-attachment: fixed;
+}
+.shell {
+  background: transparent;
+}
+
+.shell .setting-card,
+.shell .notification-card,
+.shell .composer,
+.shell .app-chat-modal,
+.shell .conversation-picker,
+.shell .host-photo-modal,
+.shell .notification-dialog,
+.primary-nav,
+.shell .app-dock {
+  background: var(--glass), #202e46b3;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(145%);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+
+.shell .settings-content {
+  margin-top: 32px;
+}
+.shell .setting-card {
+  padding: 22px;
+  margin-bottom: 14px;
+  border-radius: 24px;
+}
+.shell .setting-card h3 {
+  font-weight: 550;
+}
+.shell .setting-icon,
+.shell .app-symbol {
+  background: linear-gradient(145deg, #c1e0ff24, #b5bfff08);
+  border: 1px solid #dbeaff24;
+  box-shadow:
+    inset 0 1px 0 #ffffff20,
+    0 4px 12px #02081718;
+}
+.shell .app-row,
+.shell .saved-row {
+  background: #dbeaff08;
+  border-color: #dbeaff18;
+  box-shadow: inset 0 1px 0 #ffffff0c;
+}
+.shell .secondary-button,
+.shell .notification-trigger {
+  background: linear-gradient(160deg, #ffffff12, #ffffff04);
+  border-color: #dbeaff30;
+  box-shadow:
+    inset 0 1px 0 #ffffff18,
+    0 3px 8px #02081718;
+  color: var(--ink);
+  border-radius: 14px;
+}
+.shell .primary-button,
+.shell .send-button {
+  background: linear-gradient(160deg, #e1efff, #accdfa);
+  box-shadow:
+    inset 0 1px 0 #ffffffa6,
+    0 4px 16px #080f2930;
+}
+.shell .secondary-button:hover:not(:disabled),
+.shell .notification-trigger:hover {
+  background: linear-gradient(160deg, #ffffff20, #ffffff0a);
+  border-color: #dbeaff50;
+}
+.shell :is(input:not([type='checkbox']), textarea, select) {
+  background-color: #101b2a99;
+  border-color: #dbeaff26;
+}
+.shell :is(button, a, input, textarea, select):focus-visible,
+.primary-nav a:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.primary-nav {
+  border-radius: 26px;
+  box-shadow:
+    0 14px 44px #02081770,
+    inset 0 1px 0 #ffffff30;
+}
+.primary-nav a[aria-current='page'] {
+  background: linear-gradient(145deg, #d8eaff24, #d8eaff0c);
+  box-shadow:
+    inset 0 1px 0 #ffffff20,
+    0 3px 12px #02081725;
+  color: var(--ink);
+}
+.shell .app-icon {
+  background-image: linear-gradient(145deg, #ffffff25, #ffffff00 60%, #ffffff0a);
+  border-color: #dbeaff30;
+}
+.shell .app-chat-modal,
+.shell .conversation-picker,
+.shell .host-photo-modal,
+.shell .notification-dialog {
+  /* Keep dialog text legible over busy applets. */
+  background: var(--glass), #202e46ed;
+  box-shadow: var(--modal-shadow);
+}
+
+@media (max-width: 700px) {
+  .shell .setting-card {
+    padding: 18px;
+    gap: 12px;
+    border-radius: 22px;
+  }
+  .shell .settings-page > .builtin-header {
+    background: #142237df;
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+  }
+  .primary-nav {
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    padding: 6px;
+    border: 1px solid var(--line);
+  }
+  .settings-page {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom));
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .shell .setting-card,
+  .shell .notification-card,
+  .shell .composer,
+  .primary-nav,
+  .shell .app-dock {
+    background: var(--panel);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .shell .setting-card,
+  .shell .notification-card,
+  .shell .composer,
+  .shell .app-chat-modal,
+  .shell .conversation-picker,
+  .shell .host-photo-modal,
+  .shell .notification-dialog,
+  .shell .settings-page > .builtin-header,
+  .primary-nav,
+  .shell .app-dock {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

@@ -10,6 +10,7 @@
   import '$lib/style.css';
   import '$lib/polish.css';
   import '$lib/mobile.css';
+  import '$lib/liquid-glass.css';
   import PrimaryNav from '$lib/components/PrimaryNav.svelte';
   onMount(() => {
     expertMode.set(readBrowserValue('little-spaces-expert') === 'true');
