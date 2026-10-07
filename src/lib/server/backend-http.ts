@@ -2,6 +2,9 @@ import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { secretForOrigin } from './secrets';
+import { credentialWarnings } from '../secret-validation';
+import type { HttpDiagnostic } from '../http-diagnostic-types';
+import { diagnosticValue } from './diagnostics';
 
 const blocked = new BlockList();
 for (const [address, prefix] of [
@@ -77,7 +80,11 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 // A new broker is bound by the host to one action. Children cannot select their permissions.
-export function backendHttp(readOnly: boolean, dependencies: Dependencies = defaults) {
+export function backendHttp(
+  readOnly: boolean,
+  dependencies: Dependencies = defaults,
+  onDiagnostic?: (diagnostic: HttpDiagnostic) => void,
+) {
   let calls = 0;
   return async (input: unknown, signal: AbortSignal) => {
     if (++calls > 10) throw Error('An action can make at most ten HTTP requests.');
@@ -101,6 +108,14 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
     if ((method === 'GET' || method === 'HEAD') && data.body !== undefined)
       throw Error('GET and HEAD requests cannot have a body.');
     const credentials = new Set<string>();
+    const diagnostic: HttpDiagnostic = {
+      origin: url.origin,
+      path: url.pathname,
+      method,
+      secrets: [],
+    };
+    const report = (details: Partial<HttpDiagnostic>) =>
+      onDiagnostic?.({ ...diagnostic, ...details });
     function value(raw: unknown) {
       if (typeof raw === 'string') return raw;
       const ref = object(raw);
@@ -110,8 +125,22 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
         (ref.prefix !== undefined && typeof ref.prefix !== 'string')
       )
         throw Error('Use a string or {secret, prefix?}.');
-      const secret = secretForOrigin(ref.secret, url.origin);
+      let secret: string;
+      try {
+        secret = secretForOrigin(ref.secret, url.origin);
+      } catch (error) {
+        report({
+          code: 'secret_unavailable',
+          message: error instanceof Error ? error.message : 'The named credential is unavailable.',
+        });
+        throw error;
+      }
       credentials.add(secret);
+      if (!diagnostic.secrets.some((item) => item.name === ref.secret))
+        diagnostic.secrets.push({
+          name: ref.secret,
+          warnings: credentialWarnings(ref.secret, secret),
+        });
       return (ref.prefix || '') + secret;
     }
     const headers: Record<string, string> = { accept: 'application/json' };
@@ -143,6 +172,7 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
     signal.addEventListener('abort', cancel, { once: true });
     if (signal.aborted) cancel();
     const timer = setTimeout(cancel, 10_000);
+    let failureCode = 'network_error';
     try {
       // DNS lookup itself is bounded even though the OS resolver cannot be cancelled.
       const aborted = new Promise<never>((_, reject) => {
@@ -153,18 +183,29 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
           });
       });
       const operation = async () => {
+        failureCode = 'dns_error';
         const addresses = await dependencies.resolve(url.hostname);
-        if (!addresses.length || addresses.some((address) => !publicIPv4(address)))
+        if (!addresses.length || addresses.some((address) => !publicIPv4(address))) {
+          failureCode = 'address_blocked';
           throw Error('Private address.');
+        }
         if (controller.signal.aborted) throw Error('Cancelled.');
+        failureCode = 'network_error';
         const response = await dependencies.send(
           { url, method, headers, body },
           addresses[0],
           controller.signal,
         );
         // Never follow redirects or return response headers, which can contain credentials.
-        if (response.status >= 300 && response.status < 400) throw Error('Redirect refused.');
-        if (Buffer.byteLength(response.text) > 1_000_000) throw Error('Response too large.');
+        diagnostic.status = response.status;
+        if (response.status >= 300 && response.status < 400) {
+          failureCode = 'redirect_blocked';
+          throw Error('Redirect refused.');
+        }
+        if (Buffer.byteLength(response.text) > 1_000_000) {
+          failureCode = 'response_too_large';
+          throw Error('Response too large.');
+        }
         // Reject common credential echoes before any response reaches app code or logs.
         for (const secret of credentials) {
           const variants = [
@@ -174,8 +215,10 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
             Buffer.from(secret).toString('base64'),
             JSON.stringify(secret).slice(1, -1),
           ];
-          if (variants.some((value) => response.text.includes(value)))
+          if (variants.some((value) => response.text.includes(value))) {
+            failureCode = 'credential_echo';
             throw Error('Credential echo.');
+          }
         }
         let result: unknown = response.text;
         try {
@@ -183,6 +226,44 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
         } catch {
           /* Text APIs are supported too. */
         }
+        const provider =
+          result && typeof result === 'object' && !Array.isArray(result)
+            ? (result as { error?: unknown }).error
+            : undefined;
+        let providerReason: string | undefined;
+        let providerMessage: string | undefined;
+        if (provider && typeof provider === 'object' && !Array.isArray(provider)) {
+          const error = provider as {
+            message?: unknown;
+            status?: unknown;
+            details?: unknown;
+            errors?: unknown;
+          };
+          const details = [
+            ...(Array.isArray(error.details) ? error.details : []),
+            ...(Array.isArray(error.errors) ? error.errors : []),
+          ];
+          const reason =
+            details.find(
+              (item) =>
+                item &&
+                typeof item.reason === 'string' &&
+                /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(item.reason),
+            )?.reason ?? error.status;
+          if (typeof reason === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(reason))
+            providerReason = reason;
+          if (typeof error.message === 'string')
+            providerMessage = String(diagnosticValue(error.message))
+              .replace(/https?:\/\/[^\s]+/gi, '[URL omitted]')
+              .replace(/AIza[A-Za-z0-9_-]+/g, '[redacted]')
+              .slice(0, 500);
+        }
+        report({
+          status: response.status,
+          code: response.status >= 200 && response.status < 300 ? 'http_success' : 'http_error',
+          providerReason,
+          message: providerMessage,
+        });
         return {
           status: response.status,
           ok: response.status >= 200 && response.status < 300,
@@ -192,8 +273,21 @@ export function backendHttp(readOnly: boolean, dependencies: Dependencies = defa
       return await Promise.race([operation(), aborted]);
     } catch {
       // DNS/TLS/provider errors may contain a URL or an injected header. Never forward them.
+      if (controller.signal.aborted) failureCode = signal.aborted ? 'cancelled' : 'timeout';
+      const explanations: Record<string, string> = {
+        dns_error: 'The API hostname could not be resolved.',
+        address_blocked: 'The API resolved to a blocked or unsupported address.',
+        network_error: 'The API connection or response failed.',
+        redirect_blocked: 'The API returned a redirect, which this host does not follow.',
+        response_too_large: 'The API response exceeded the size limit.',
+        credential_echo: 'The API response contained credential material and was withheld.',
+        cancelled: 'The request was cancelled.',
+        timeout: 'The API request exceeded the ten-second limit.',
+      };
+      const explanation = explanations[failureCode];
+      report({ code: failureCode, message: explanation });
       throw Error(
-        'External request failed or was blocked. Check the API address and permissions.' +
+        `External request failed or was blocked (${failureCode}). ${explanation} Check the API address and permissions.` +
           (method === 'GET' || method === 'HEAD'
             ? ''
             : ' The write may already have reached the service; check before retrying.'),

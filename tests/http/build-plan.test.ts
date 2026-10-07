@@ -176,6 +176,32 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
     const apps = (await (await request('/api/applets')).json()).applets;
     assert.equal(apps.length, 1);
     assert.equal(apps[0].version, 2);
+    const versionHistory = await (await request(`/api/applets/${completed.publishedId}`)).json();
+    assert.match(versionHistory.versions[0].requestedChange, /Approved update/);
+    assert.match(versionHistory.versions[0].requestedChange, /Organize notes with tags/);
+    assert.equal(versionHistory.versions[0].changeSummary, 'Republished without code changes.');
+    assert.equal(JSON.parse(versionHistory.versions[0].testReport)[0].passed, true);
+    assert.equal(
+      (
+        await request(`/api/applets/${completed.publishedId}`, {
+          action: 'restore',
+          version: 1,
+          expectedVersion: 1,
+        })
+      ).status,
+      400,
+    );
+    const restored = await (
+      await request(`/api/applets/${completed.publishedId}`, {
+        action: 'restore',
+        version: 1,
+        expectedVersion: 2,
+      })
+    ).json();
+    assert.equal(restored.applet.version, 3);
+    const restoredHistory = await (await request(`/api/applets/${completed.publishedId}`)).json();
+    assert.equal(restoredHistory.versions[0].restoredFrom, 1);
+    assert.equal(restoredHistory.versions.length, 3);
     const page = await (await request(`/chat/${chat.id}`)).text();
     assert.ok(!page.includes('aria-label="Chat mode"'));
   } finally {

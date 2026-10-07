@@ -5,9 +5,75 @@ import { build } from 'esbuild';
 import Ajv from 'ajv';
 import { revision, records, commitRecords } from './storage';
 import type { RecordEntry, Revision } from '../types';
+import type { ConnectionProbe, HttpDiagnostic } from '../http-diagnostic-types';
 
 // App-authored schema IDs must not share a registry or accumulate forever.
 const schemaValidator = () => new Ajv({ strict: false, allErrors: true, validateFormats: false });
+
+// A connection probe never commits records and never permits external writes.
+// Its broker diagnostics survive app-authored catch blocks that hide the cause.
+export async function probeBackendConnection(
+  bundle: string,
+  name: string,
+  input: unknown,
+  rows: RecordEntry[],
+  dependencies?: Parameters<typeof backendHttp>[1],
+): Promise<ConnectionProbe> {
+  const { catalog = [] } = await runBackend(bundle, { mode: 'inspect' });
+  const action = catalog.find((action) => action.name === name);
+  if (!action) throw Error('Choose an existing backend action to test.');
+  if (!action.readOnly) throw Error('Connection tests can only run read-only actions.');
+  const ajv = schemaValidator(),
+    validate = ajv.compile(action.parameters);
+  if (!validate(input)) throw Error(`Invalid action input: ${ajv.errorsText(validate.errors)}`);
+  const requests: HttpDiagnostic[] = [];
+  const base = { action: name, checkedAt: new Date().toISOString(), requests };
+  try {
+    const output = await runBackend(
+      bundle,
+      { mode: 'call', action: name, input, records: rows },
+      30_000,
+      backendHttp(true, dependencies, (diagnostic) => requests.push(diagnostic)),
+    );
+    const canonical = (entries: RecordEntry[]) =>
+      JSON.stringify([...entries].sort((a, b) => a.key.localeCompare(b.key)));
+    if (!Array.isArray(output.records) || canonical(output.records) !== canonical(rows))
+      throw Error('Connection test attempted to change records. No changes were saved.');
+    const verified =
+      requests.length > 0 && requests.every((request) => request.code === 'http_success');
+    return {
+      ...base,
+      ok: true,
+      verified,
+      result: output.result,
+      ...(!verified
+        ? {
+            note: requests.length
+              ? 'An external request failed; the connection is not verified.'
+              : 'This action made no external requests. No connection was verified.',
+          }
+        : {}),
+    };
+  } catch (error) {
+    return {
+      ...base,
+      ok: false,
+      verified: false,
+      error: error instanceof Error ? error.message : 'Connection test failed.',
+    };
+  }
+}
+
+export async function probeAppConnection(id: string, name: string, input: unknown) {
+  const current = revision(id);
+  if (!current.backendBundle) throw Error('This app has no backend to test.');
+  const result = await probeBackendConnection(current.backendBundle, name, input, records(id));
+  if (revision(id).version !== current.version)
+    throw Error(
+      'The app changed during the connection test. Read the current actions before testing again.',
+    );
+  return { version: current.version, ...result };
+}
 
 export async function compileBackend(source: string) {
   if (!source.trim() || source.length > 80_000)

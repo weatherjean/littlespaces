@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { json } from '@sveltejs/kit';
-import { revision, saveApplet, versions, appletSpaceId } from '$lib/server/storage';
+import { revision, restoreApplet, versions, appletSpaceId } from '$lib/server/storage';
 import { body } from '$lib/server/security';
 import { appletDocument } from '$lib/sandbox';
 import type { RequestHandler } from './$types';
@@ -27,10 +27,12 @@ export const POST: RequestHandler = async (event) => {
   )
     return json({ error: 'Invalid revision.' }, { status: 400 });
   try {
-    const old = revision(event.params.id, Number(input.version));
-    const applet = saveApplet(old, event.params.id);
+    const applet = restoreApplet(event.params.id, input.version, input.expectedVersion);
     return json({ applet });
-  } catch {
-    return json({ error: 'Could not restore that revision.' }, { status: 400 });
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Could not restore that revision.' },
+      { status: 400 },
+    );
   }
 };

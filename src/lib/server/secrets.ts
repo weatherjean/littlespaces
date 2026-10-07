@@ -3,13 +3,23 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from './config';
 import { workspace } from './database';
+import { credentialWarnings } from '../secret-validation';
 
-function key() {
+function key(create = false) {
   const path = join(dataDir, 'secrets.key');
   try {
     return readFileSync(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (!create)
+      throw Error(
+        'The secret encryption key is missing. Restore the matching secrets.key file from backup.',
+      );
+    // Do not generate a different vault key over existing encrypted values.
+    if (workspace((db) => Number(db.prepare('SELECT count(*) AS n FROM secrets').get()!.n)) > 0)
+      throw Error(
+        'The secret encryption key is missing. Restore the matching secrets.key file before saving credentials.',
+      );
     try {
       writeFileSync(path, randomBytes(32), { flag: 'wx', mode: 0o600 });
     } catch (error) {
@@ -21,15 +31,38 @@ function key() {
 export function listSecrets() {
   return workspace((db) =>
     db
-      .prepare('SELECT name,description,origins,updated_at AS updatedAt FROM secrets ORDER BY name')
+      .prepare(
+        'SELECT name,description,origins,ciphertext,updated_at AS updatedAt FROM secrets ORDER BY name',
+      )
       .all()
       .map((row) => ({
         name: String(row.name),
         description: String(row.description),
         updatedAt: String(row.updatedAt),
         origins: JSON.parse(String(row.origins)) as string[],
+        warnings: storedWarnings(String(row.name), String(row.ciphertext)),
+        verification: 'not_verified' as const,
       })),
   );
+}
+function decrypt(name: string, ciphertext: string) {
+  const encrypted = JSON.parse(ciphertext);
+  const decipher = createDecipheriv('aes-256-gcm', key(), Buffer.from(encrypted.iv, 'base64'));
+  decipher.setAAD(Buffer.from(name));
+  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encrypted.data, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+}
+function storedWarnings(name: string, ciphertext: string) {
+  try {
+    return credentialWarnings(name, decrypt(name, ciphertext));
+  } catch {
+    return [
+      'The stored value could not be decrypted. Restore the matching encryption key or replace the credential.',
+    ];
+  }
 }
 function allowedOrigins(input: unknown): string[] {
   if (!Array.isArray(input) || input.length > 10) throw Error('Add up to ten HTTPS API origins.');
@@ -77,18 +110,18 @@ export function secretForOrigin(name: string, origin: string): string {
   const row = workspace((db) =>
     db.prepare('SELECT ciphertext,origins FROM secrets WHERE name=?').get(name),
   );
-  if (!row || !JSON.parse(String(row.origins)).includes(origin))
+  if (!row) throw Error(`Secret ${name} is missing. Add it in Settings → Secrets.`);
+  if (!JSON.parse(String(row.origins)).includes(origin))
     throw Error(
-      'Secret is missing or not allowed for this API origin. Update Secrets in Settings.',
+      `Secret ${name} is not allowed for API origin ${origin}. Update its allowed origins in Settings → Secrets.`,
     );
-  const encrypted = JSON.parse(String(row.ciphertext));
-  const decipher = createDecipheriv('aes-256-gcm', key(), Buffer.from(encrypted.iv, 'base64'));
-  decipher.setAAD(Buffer.from(name));
-  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(encrypted.data, 'base64')),
-    decipher.final(),
-  ]).toString('utf8');
+  try {
+    return decrypt(name, String(row.ciphertext));
+  } catch {
+    throw Error(
+      `Secret ${name} could not be decrypted. Restore the matching encryption key or replace the credential in Settings → Secrets.`,
+    );
+  }
 }
 export function saveSecret(input: Record<string, unknown>) {
   if (
@@ -106,7 +139,7 @@ export function saveSecret(input: Record<string, unknown>) {
   const origins = input.origins === undefined ? undefined : allowedOrigins(input.origins);
   // Only metadata is exposed to the browser/model. Never log values or ciphertext.
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key(), iv);
+  const cipher = createCipheriv('aes-256-gcm', key(true), iv);
   cipher.setAAD(Buffer.from(input.name));
   const encrypted = Buffer.concat([cipher.update(input.value, 'utf8'), cipher.final()]);
   workspace((db) =>

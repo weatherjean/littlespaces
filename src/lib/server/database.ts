@@ -38,10 +38,19 @@ export function withApplet<T>(id: string, run: (db: DatabaseSync) => T, create =
   try {
     if (create) db.exec(schema);
     const columns = db.prepare('PRAGMA table_info(revisions)').all();
-    for (const name of ['backend', 'backendBundle', 'testReport', 'chatInstructions']) {
+    for (const name of [
+      'backend',
+      'backendBundle',
+      'testReport',
+      'chatInstructions',
+      'changeSummary',
+      'requestedChange',
+    ]) {
       if (!columns.some((column) => column.name === name))
         db.exec(`ALTER TABLE revisions ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
     }
+    if (!columns.some((column) => column.name === 'restoredFrom'))
+      db.exec('ALTER TABLE revisions ADD COLUMN restoredFrom INTEGER');
     db.exec(photoSchema);
     return run(db);
   } finally {

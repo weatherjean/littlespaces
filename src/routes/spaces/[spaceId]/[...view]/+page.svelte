@@ -8,14 +8,18 @@
   import AppletFrame from '$lib/components/AppletFrame.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import { request } from '$lib/client';
+  import type { AppVersion } from '$lib/types';
   let { data }: { data: PageData } = $props();
   let dialog: HTMLDialogElement;
   let error = $state(''),
     busy = $state(false),
     historyOpen = $state(false),
     refresh = $state(0);
-  let versions = $state<{ version: number; title: string }[]>([]);
-  let tests = $derived(JSON.parse(data.testReport) as { name: string; passed: boolean }[]);
+  let versions = $state<AppVersion[]>([]);
+  let restoreTarget = $state<number | null>(null);
+  function testResults(report: string) {
+    return JSON.parse(report || '[]') as { name: string; passed: boolean }[];
+  }
   $effect(() => {
     if (data.tab === 'chat') {
       if (!dialog.open) dialog.showModal();
@@ -26,6 +30,8 @@
   }
   async function history() {
     if (!data.applet) return;
+    error = '';
+    restoreTarget = null;
     try {
       versions = (await request(`/api/applets/${data.applet.id}`)).versions;
       historyOpen = !historyOpen;
@@ -36,9 +42,15 @@
   async function restore(version: number) {
     if (!data.applet) return;
     busy = true;
+    error = '';
     try {
-      await request(`/api/applets/${data.applet.id}`, { action: 'restore', version });
+      await request(`/api/applets/${data.applet.id}`, {
+        action: 'restore',
+        version,
+        expectedVersion: data.applet.version,
+      });
       historyOpen = false;
+      restoreTarget = null;
       await invalidateAll();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not restore version.';
@@ -110,19 +122,86 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if historyOpen}<section class="version-panel">
       <h3>Versions & tests</h3>
+      <p class="muted">
+        Restoring creates a new version and keeps current records and photos. Older code may expect
+        an older data format. External changes are not undone.
+      </p>
+      {#if restoreTarget !== null}
+        <div class="restore-confirmation">
+          <p>Restore app code and chat guidance from v{restoreTarget}?</p>
+          <button class="primary-button" disabled={busy} onclick={() => restore(restoreTarget!)}
+            >{busy ? 'Restoring…' : 'Restore version'}</button
+          >
+          <button class="secondary-button" disabled={busy} onclick={() => (restoreTarget = null)}
+            >Cancel</button
+          >
+        </div>
+      {/if}
       <div class="version-list">
-        {#each versions as item}<button
-            class="secondary-button"
-            disabled={busy || item.version === data.applet?.version}
-            onclick={() => restore(item.version)}
-            >v{item.version}{item.version === data.applet?.version
-              ? ' · Current'
-              : ' · Restore'}</button
-          >{/each}
+        {#each versions as item}<article class="version-entry">
+            <div class="version-heading">
+              <strong
+                >v{item.version}{item.version === data.applet?.version ? ' · Current' : ''}</strong
+              ><time datetime={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</time>
+            </div>
+            <p>{item.changeSummary || 'Published before change summaries were recorded.'}</p>
+            {#if item.requestedChange}<details>
+                <summary>Requested change</summary>
+                <p class="requested-change">{item.requestedChange}</p>
+              </details>{/if}
+            <details>
+              <summary>Tests ({testResults(item.testReport).length})</summary>
+              {#each testResults(item.testReport) as test}<p class="test-result">
+                  <Icon name={test.passed ? 'check' : 'close'} size={14} />{test.name} · {test.passed
+                    ? 'Passed'
+                    : 'Failed'}
+                </p>{:else}<p class="muted">No saved backend test results.</p>{/each}
+            </details>
+            <button
+              class="secondary-button"
+              disabled={busy || item.version === data.applet?.version}
+              onclick={() => (restoreTarget = item.version)}
+              >{item.version === data.applet?.version
+                ? 'Current version'
+                : `Restore v${item.version}`}</button
+            >
+          </article>{/each}
       </div>
-      {#each tests as test}<p class="test-result">
-          <Icon name="check" size={14} />{test.name}
-        </p>{:else}<p class="muted">This version has no backend tests.</p>{/each}
     </section>{/if}
   <ChatPanel {...data} base={`/spaces/${data.space.id}/chat`} onupdated={() => refresh++} />
 </dialog>
+
+<style>
+  .version-list {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .version-entry {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .version-heading {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  time {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .version-entry p {
+    margin: 8px 0;
+  }
+  .version-entry button {
+    margin-top: 10px;
+  }
+  .requested-change {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .restore-confirmation {
+    margin-bottom: 12px;
+  }
+</style>

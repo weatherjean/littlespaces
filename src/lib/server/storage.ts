@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { Photo } from '../photo-types';
-import type { Applet, Chat, Message, RecordEntry, Revision, Space } from '../types';
+import type { Applet, AppVersion, Chat, Message, RecordEntry, Revision, Space } from '../types';
 
 export function revision(id: string, version?: number): Revision {
   return withApplet(id, (db) => {
@@ -41,6 +41,7 @@ export function saveApplet(
   id: string = randomUUID(),
   spaceId?: string,
   emoji?: string,
+  publication?: { requestedChange?: string; restoredFrom?: number },
 ): Applet {
   if (spaceId) getSpace(spaceId);
   const existingSpace = workspace((db) =>
@@ -59,8 +60,28 @@ export function saveApplet(
   withApplet(
     id,
     (db) => {
+      const previous = db.prepare('SELECT * FROM revisions ORDER BY version DESC LIMIT 1').get();
+      const changes = (['source', 'backend', 'chatInstructions', 'title', 'description'] as const)
+        .filter((field) => previous && (previous[field] || '') !== (content[field] || ''))
+        .map(
+          (field) =>
+            ({
+              source: 'UI',
+              backend: 'backend',
+              chatInstructions: 'chat guidance',
+              title: 'title',
+              description: 'description',
+            })[field],
+        );
+      const changeSummary = publication?.restoredFrom
+        ? `Restored code and chat guidance from v${publication.restoredFrom}. Current data kept.`
+        : !previous
+          ? 'Initial app publication.'
+          : changes.length
+            ? `Updated ${changes.join(', ')}.`
+            : 'Republished without code changes.';
       db.prepare(
-        'INSERT INTO revisions (title, description, source, bundle, backend, backendBundle, testReport, chatInstructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO revisions (title, description, source, bundle, backend, backendBundle, testReport, chatInstructions, changeSummary, requestedChange, restoredFrom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(
         content.title,
         content.description,
@@ -70,6 +91,9 @@ export function saveApplet(
         content.backendBundle || '',
         content.testReport || '',
         content.chatInstructions || '',
+        changeSummary,
+        publication?.requestedChange || '',
+        publication?.restoredFrom ?? null,
       );
     },
     true,
@@ -104,14 +128,29 @@ export function saveApplet(
   return saved;
 }
 
-export function versions(id: string) {
-  return withApplet(id, (db) =>
-    db
-      .prepare(
-        'SELECT version, title, created_at AS createdAt FROM revisions ORDER BY version DESC',
-      )
-      .all(),
+export function versions(id: string): AppVersion[] {
+  return withApplet(
+    id,
+    (db) =>
+      db
+        .prepare(
+          'SELECT version, title, created_at AS createdAt, changeSummary, requestedChange, restoredFrom, testReport FROM revisions ORDER BY version DESC',
+        )
+        .all() as unknown as AppVersion[],
   );
+}
+
+export function restoreApplet(id: string, version: unknown, expectedVersion: unknown): Applet {
+  if (!Number.isSafeInteger(version) || Number(version) < 1)
+    throw new Error('Choose a valid published version to restore.');
+  const current = revision(id);
+  if (current.version !== expectedVersion)
+    throw new Error('The app changed. Reload its version history before restoring.');
+  if (current.version === version) throw new Error('That version is already current.');
+  return saveApplet(revision(id, Number(version)), id, undefined, undefined, {
+    restoredFrom: Number(version),
+    requestedChange: `Restore v${version}.`,
+  });
 }
 
 export function records(id: string): RecordEntry[] {

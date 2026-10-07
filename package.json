@@ -31,12 +31,15 @@
     "@openai/codex": "0.160.0",
     "@sveltejs/adapter-node": "^5.2.0",
     "@sveltejs/kit": "^2.20.0",
+    "@tailwindcss/node": "^4.3.3",
+    "@tailwindcss/oxide": "^4.3.3",
     "ajv": "^8.20.0",
     "cron-parser": "^5.10.1",
     "esbuild": "^0.25.0",
     "jose": "^6.0.0",
     "sharp": "^0.35.5",
     "svelte": "^5.25.0",
+    "tailwindcss": "^4.3.3",
     "web-push": "^3.6.7"
   },
   "overrides": {

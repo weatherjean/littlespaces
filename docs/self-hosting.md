@@ -121,6 +121,16 @@ Read the private setup link with `sudo journalctl -u little-spaces -n 50 --no-pa
 
 ### Updates, backups, and rollback
 
+Generated apps are data, not part of the application build. Their saved code, revision history, records, photos, and backend tables live in `APP_DATA_DIR/applets/*.sqlite`; workspace metadata and conversations live in `workspace.sqlite`. Replacing the checkout or build preserves them only when the service continues using the same complete data directory.
+
+Use these gates for every VPS update:
+
+1. Confirm the running service's working directory, deployed revision, and effective `APP_DATA_DIR`. Keep the existing absolute data path outside the checkout. Preserve the server's `.env`; never replace it with the laptop's configuration or an example file. A wrong or empty data path can make an existing installation appear brand new. Stop and correct the path if an established installation unexpectedly shows setup.
+2. Stage the selected source in a separate directory and run verification there with disposable test data. Do not point a preview server at production data. Do not delete, reset, or synchronize over the production data directory when replacing application files.
+3. Stop the service and take a complete protected data backup, including SQLite sidecars, credentials, and keys. Save the deployed revision and server configuration alongside it. Arrange to restart the existing version if backup creation fails. Keep the previous code available.
+4. Extract the backup into a private temporary directory, verify the restored files and SQLite integrity, and check that the candidate version reads the existing apps, revisions, conversations, photos, and records there. Run storage checks without starting AI jobs or scheduled work against the copy. Never test restoration over live data. Verify an off-server copy as well.
+5. Switch code, restart, and check an existing app and its saved data as well as the login page. Record the new deployed revision only after those checks pass. Retain the matching pre-update code and data backup for recovery.
+
 Brief downtime is acceptable for this single-owner service. Before updating, record the current commit and stop `little-spaces`. Make a permission-restricted backup of the entire data directory to a location outside the checkout/data directory. Download a protected copy off the VPS and check that the archive can be read. A stopped-service backup includes consistent SQLite files, credentials, photos, and the encryption key. Agree on a recurring backup destination and retention with the owner before relying on the installation for important data.
 
 Check out the selected new commit, run `npm ci` and `npm run verify` as the service account, then start the service and repeat the smoke checks. If checks fail, keep it stopped while restoring the previous commit, dependencies/build, and matching data backup, then restart. Restoring a backup discards writes made after that backup. Do not build over the files of a running server or assume rolling back code also rolls back database changes.

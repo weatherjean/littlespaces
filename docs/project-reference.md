@@ -48,6 +48,18 @@ Keep the local server running while using the app. Browser installation support 
 - Voice uses browser dictation, reads current app context, and proposes changes for explicit confirmation. Confirmed backend actions produce inbox notifications and device push when enabled. Suggestions persist across reloads, expire after 30 minutes, and cannot execute twice. Legacy apps without backend actions remain read-only in Voice.
 - On-demand local Piper speech in Voice, with one process at a time and no speech API charges. Run `npm run voice:setup` first (Python 3.9+ and venv/pip required). Browser dictation may use the browser vendor’s speech service; it does not use the ChatGPT transcription API. Text input remains available in unsupported browsers.
 
+## App building, styles, errors and version history
+
+Every successful publication keeps a complete UI/backend/chat-guidance snapshot and its backend test report. In an app's Chat, open the history icon for **Versions & tests**: each new publication includes its time, approved build request, and an automatic summary of the fields changed. Older versions show that no summary was recorded. The request describes intent; the field summary and tests describe what was published.
+
+Choose **Restore v…**, review the explanation, then confirm. Restoration creates a new version without deleting later versions or resetting records and photos. You can also ask the app's chat to go back: the agent can list/read versions and restore the requested version. Stale restore requests are rejected. Older code may expect older record shapes; external API changes are not reversed. Code history in the same SQLite file does not replace a protected backup of the full data directory.
+
+The build skill offers on-demand, copyable examples through `read_build_example`: **starter**, **list-editor**, **photos**, and **integration**. They include UI source, chat guidance and backend tests. The integration example uses a public GitHub repository lookup with mocked HTTP tests; those tests do not establish a live connection. Examples do not publish or overwrite anything by themselves, and generated apps still go through the approved draft/test/publish workflow.
+
+The app compiler supports Tailwind CSS v4 utilities, scanning only the candidate's Svelte source and embedding the resulting CSS into its saved bundle. Use complete literal classes, including responsive variants and arbitrary values; dynamic values belong in inline styles or mappings of complete class strings. There is no browser CDN or runtime download. Scoped Svelte CSS remains supported. Tailwind Preflight is omitted to preserve existing apps' native defaults. App code cannot import component packages or supply Tailwind plugins/configuration; `@apply` is not processed.
+
+The builder requires clear errors, next steps, preserved input, expandable safe details, and an **Ask about this error** button for investigation. The starter implements this pattern. The host also supplies a troubleshooting banner for unhandled runtime failures, including startup failures. Clicking opens app-scoped chat with bounded diagnostic context and guidance; it does not send a message or authorize a fix. The user writes their message to start the discussion. Existing apps gain the host banner when served by this version; their own handled error flows require an app update. Browsers may suppress details of some uncaught events inside isolated frames, so generated apps should catch SDK/action failures themselves.
+
 ## Storage and isolation
 
 ```text
@@ -73,6 +85,8 @@ await window.applet.remove('plant-1');
 ```
 
 Database files are real, independent SQLite databases. The prototype deliberately uses a fixed JSON-record schema rather than letting generated code execute migrations. Code revisions preserve records; the AI is instructed to maintain value-shape compatibility, but arbitrary future schema changes will need explicit migration support. Back up the entire `.data` directory with the server stopped.
+
+Approved integration builds include agent-run live connection checks: a direct `test_api_connection` before backend implementation, then `test_draft_connection` after mocked validation. Existing app troubleshooting uses `test_app_connection`. Safe diagnostics retain HTTP status and provider reasons even when generated code hides them. Settings shows advisory credential-format warnings and can reveal only a newly entered value; stored values never return to the browser or agent. Saving is not connection verification.
 
 ## ChatGPT integration
 

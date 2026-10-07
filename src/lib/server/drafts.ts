@@ -1,7 +1,17 @@
 import { notify } from './notifications';
 import { logEvent } from './diagnostics';
 import { randomUUID } from 'node:crypto';
-import { workspace, revision, saveApplet, getChat, launcherChatId, appletSpaceId } from './storage';
+import {
+  workspace,
+  revision,
+  records,
+  saveApplet,
+  getChat,
+  launcherChatId,
+  appletSpaceId,
+} from './storage';
+import { probeBackendConnection } from './backend';
+import type { ConnectionProbe } from '../http-diagnostic-types';
 import { prepareApp } from './publish';
 import type { Generation, Revision, Applet } from '../types';
 
@@ -13,9 +23,16 @@ type Draft = {
   content: Content;
   prepared?: Omit<Revision, 'version'>;
   published?: Applet;
+  connections?: ConnectionProbe[];
 };
 const fields = ['title', 'description', 'source', 'backend', 'chatInstructions'] as const;
-export function draftWorkspace(chatId: string, spaceId: string, appletId?: string, emoji?: string) {
+export function draftWorkspace(
+  chatId: string,
+  spaceId: string,
+  appletId?: string,
+  emoji?: string,
+  requestedChange?: string,
+) {
   getChat(spaceId, chatId);
   function read(): Draft | undefined {
     return workspace((db) => {
@@ -43,6 +60,7 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
       title: draft.content.title,
       tested: !!draft.prepared,
       published: draft.published,
+      connections: draft.connections || [],
     };
   }
   function checkVersion(draft: Draft, expected: unknown) {
@@ -117,11 +135,33 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
         draft.revision++;
         delete draft.prepared;
         delete draft.published;
+        delete draft.connections;
         save(draft);
         return summary(draft);
       }
       const draft = current();
       checkVersion(draft, input.revision);
+      if (name === 'test_draft_connection') {
+        if (!draft.prepared?.backendBundle)
+          throw Error(
+            'Run test_draft successfully on this exact revision before testing a live connection.',
+          );
+        if (typeof input.action !== 'string' || typeof input.inputJSON !== 'string')
+          throw Error('Provide action and inputJSON.');
+        const result = await probeBackendConnection(
+          draft.prepared.backendBundle,
+          input.action,
+          JSON.parse(input.inputJSON),
+          draft.baseVersion ? records(draft.target) : [],
+        );
+        checkVersion(current(), draft.revision);
+        draft.connections = [
+          ...(draft.connections || []).filter((check) => check.action !== input.action),
+          result,
+        ];
+        save(draft);
+        return result;
+      }
       if (name === 'test_draft') {
         if (!draft.content.title.trim() || !draft.content.source.trim())
           throw Error('A title and UI source are required.');
@@ -129,6 +169,7 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
           throw Error('New apps require a TypeScript backend with tests.');
         // Clear prior success before starting: a failed rerun cannot retain an old pass.
         delete draft.prepared;
+        delete draft.connections;
         save(draft);
         const prepared = await prepareApp(draft.content);
         checkVersion(current(), draft.revision);
@@ -153,6 +194,7 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
           draft.target,
           spaceId === launcherChatId ? undefined : spaceId,
           emoji,
+          { requestedChange },
         );
         draft.baseVersion = applet.version;
         draft.published = applet;
@@ -167,7 +209,7 @@ export function draftWorkspace(chatId: string, spaceId: string, appletId?: strin
         } catch (error) {
           logEvent('notification.error', { error, appletId: applet.id });
         }
-        return { applet };
+        return { applet, connectionChecks: draft.connections || [] };
       }
       throw Error('Unknown builder tool.');
     },

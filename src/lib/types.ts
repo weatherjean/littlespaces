@@ -38,6 +38,18 @@ export type Revision = {
   backendBundle?: string;
   testReport?: string;
   chatInstructions?: string;
+  changeSummary?: string;
+  requestedChange?: string;
+  restoredFrom?: number | null;
+};
+export type AppVersion = {
+  version: number;
+  title: string;
+  createdAt: string;
+  changeSummary: string;
+  requestedChange: string;
+  restoredFrom: number | null;
+  testReport: string;
 };
 export type Message = {
   role: 'user' | 'assistant';

@@ -11,11 +11,13 @@ export const POST: RequestHandler = async (event) => {
       configureSecret(input.name, input.origins, input.description);
     else saveSecret(input);
     return json({ secrets: listSecrets() });
-  } catch {
+  } catch (error) {
     return json(
       {
         error:
-          'Could not save secret. Check the name, value, and HTTPS API origins (no paths or custom ports).',
+          error instanceof Error
+            ? error.message
+            : 'Could not save secret. Check the name, value, and HTTPS API origins (no paths or custom ports).',
       },
       { status: 400 },
     );

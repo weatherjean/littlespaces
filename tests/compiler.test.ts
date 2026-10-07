@@ -33,3 +33,19 @@ test('sandbox document prevents script-tag breakout and includes restrictive CSP
   assert.ok(html.includes("connect-src 'none'"));
   assert.ok(html.includes("script-src 'nonce-abc123'"));
 });
+
+test('Tailwind styles include responsive and arbitrary utilities from this candidate only', async () => {
+  const { appletStyles } = await import('../src/lib/server/compiler');
+  const css = await appletStyles(
+    '<div class="flex sm:p-8 bg-[#123456] focus-visible:outline-2">Test</div>',
+  );
+  assert.match(css, /display: flex/);
+  assert.match(css, /#123456/);
+  assert.match(css, /@media/);
+  assert.match(css, /focus-visible/);
+  assert.doesNotMatch(css, /margin: 0/); // Preflight must not reset older apps.
+  const next = await appletStyles('<p class="text-red-500">Next</p>');
+  assert.doesNotMatch(next, /#123456/);
+  const bundle = await compileApplet('<div class="bg-[#123456]">Styled</div>');
+  assert.match(bundle, /#123456/);
+});

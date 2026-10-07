@@ -175,6 +175,12 @@ export const tests = [
 
 An unmocked request fails validation. Include tests for API failures as well as successful responses.
 
+During an approved integration build, the agent uses `test_api_connection({requestJSON})` before implementing the backend. It performs a real GET/HEAD request through the host HTTP broker with named secret references, returning status, safe provider diagnostics and a bounded successful-response preview. This requires current build approval and loading the build skill; it does not require a draft or run a shell command. The same origin, credential, private-address, redirect, time and response limits apply.
+
+After mocked validation, `test_draft_connection({revision,action,inputJSON})` exercises a read-only action from the exact tested draft. `test_app_connection({action,inputJSON})` diagnoses an existing app in its scoped chat. These probes never commit records or allow external writes. Their request diagnostics survive generated code that catches and hides a provider error. `ok:true` is not connection verification when an action made no external request or swallowed a failed request; inspect `verified` and the response shape. The agent performs these checks when configured credentials and the approved integration allow them, rather than requiring the owner to press a test button. Missing or rejected credentials still require the owner to correct the value privately in Settings.
+
+Secrets shows advisory format warnings without returning stored values. Saving a credential establishes storage and allowed origins, not provider validity. Google Books `API_KEY_INVALID`, for example, must be reported as a rejected key with its observed HTTP status rather than a generic retry message. Transport failures distinguish safe categories such as DNS, blocked addresses, redirects and timeouts without exposing credential-bearing URLs or headers.
+
 For a fixed reminder, use `window.applet.notifications.send({key,title,body,dueAt})`. The server makes it visible when due and sends Web Push to enabled devices, without requiring an open browser tab. Cancel or reschedule obsolete reminders when the underlying record changes.
 
 For a check requiring fresh reasoning, ask the app's chat to use `schedule_turn`, or use the scoped bridge:

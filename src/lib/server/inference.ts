@@ -155,7 +155,7 @@ async function generateImpl(
       logEvent('tool.call', { name, args, callId: callId });
       output = await available.execute(name, args);
       if (
-        name.replace(/^app\./, '') === 'publish_draft' &&
+        ['publish_draft', 'restore_app_version'].includes(name.replace(/^app\./, '')) &&
         output &&
         typeof output === 'object' &&
         'applet' in output
@@ -164,6 +164,7 @@ async function generateImpl(
       if (
         [
           'publish_draft',
+          'restore_app_version',
           'invoke',
           'set_record',
           'remove_record',

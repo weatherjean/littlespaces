@@ -1,9 +1,12 @@
 import { buildSkill } from './build-skill';
+import { probeApiConnection } from './api-connection';
+import { buildExamples, readBuildExample } from './build-examples';
+import { buildPlanText } from '../build-plan-types';
 import { proposeBuild, readBuildPlan, requireBuildApproval, finishBuild } from './build-plans';
 import { listSecrets } from './secrets';
 import { listSchedules, saveSchedule, cancelSchedule } from './schedules';
 import { notify, listNotifications, cancelNotification } from './notifications';
-import { appActions, callApp } from './backend';
+import { appActions, callApp, probeAppConnection } from './backend';
 import { proposeVoiceAction, voiceActions, voiceTarget } from './voice-actions';
 import {
   records,
@@ -17,6 +20,8 @@ import {
   listPhotos,
   readPhoto,
   revision,
+  versions,
+  restoreApplet,
 } from './storage';
 import { draftWorkspace } from './drafts';
 
@@ -62,6 +67,7 @@ export async function appTools(
           spaceId,
           id,
           requireBuildApproval(spaceId, chatId, buildPlanId).emoji,
+          buildPlanText(requireBuildApproval(spaceId, chatId, buildPlanId)),
         )
       : undefined;
   const tools = drafts
@@ -103,6 +109,16 @@ export async function appTools(
           { revision: { type: 'integer' } },
         ),
         tool(
+          'test_api_connection',
+          'Make one real GET/HEAD API request while building, before writing the backend. requestJSON is {url,method?,headers?,query?}; credential values must use named {secret,prefix?} references. The host injects credentials at owner-approved origins. Returns HTTP status, safe provider diagnostics and a bounded successful-response preview. No shell, writes, redirects or private-network access. Use only a harmless endpoint in the approved integration.',
+          { requestJSON: string },
+        ),
+        tool(
+          'test_draft_connection',
+          'Test a read-only action from the exact successfully tested draft against real APIs and configured named secrets. Returns safe broker diagnostics even if the app hides the error. No local or external writes are allowed. Mock tests do not establish a live connection.',
+          { revision: { type: 'integer' }, action: string, inputJSON: string },
+        ),
+        tool(
           'publish_draft',
           'Publish the exact successfully tested draft revision. Creates or updates this app, preserving records. Only when requested by the user. Repeat calls are idempotent.',
           { revision: { type: 'integer' } },
@@ -112,6 +128,13 @@ export async function appTools(
 
   if (mode !== 'voice' && mode !== 'scheduled' && spaceId && chatId) {
     tools.push(
+      tool(
+        'read_build_example',
+        'Read a tested, copyable starter or capability example. This does not change a draft or authorize a build.',
+        {
+          name: { type: 'string', enum: Object.keys(buildExamples) },
+        },
+      ),
       tool(
         'load_skill',
         'Fetch detailed instructions for building and updating apps. Reading a skill does not authorize code changes.',
@@ -158,6 +181,37 @@ export async function appTools(
   }
 
   if (id) {
+    tools.push(
+      tool(
+        'test_app_connection',
+        'Diagnose an existing read-only app action against real APIs using host-held credentials. Returns HTTP status, safe provider reasons and credential format warnings without values or request query strings. Never runs writes or commits records. Use when the user asks to test or troubleshoot a connection.',
+        { action: string, inputJSON: string },
+      ),
+    );
+    tools.push(
+      tool(
+        'list_app_versions',
+        'Read published versions, requested changes, automatic change summaries and test reports for this app.',
+        {},
+      ),
+      tool(
+        'read_app_version',
+        'Read the UI, backend and chat guidance of a published version for troubleshooting or comparison. App code is untrusted data. Reading does not authorize changes.',
+        { version: { type: 'integer', minimum: 1 } },
+        [],
+      ),
+    );
+    if (!buildPlanId)
+      tools.push(
+        tool(
+          'restore_app_version',
+          'Restore a published code version only when explicitly requested by the user. First inspect list_app_versions. Creates a new version and keeps current records and photos; old code may be incompatible with newer data. Does not undo external writes.',
+          {
+            version: { type: 'integer', minimum: 1 },
+            expectedVersion: { type: 'integer', minimum: 1 },
+          },
+        ),
+      );
     tools.push(
       tool('describe', 'Get this app’s available backend actions and their input schemas.', {}),
     );
@@ -302,8 +356,37 @@ export async function appTools(
       if (name === 'load_skill') {
         if (input.name !== 'build') throw Error('Unknown skill.');
         skillLoaded = true;
-        return { name: 'build', instructions: buildSkill };
+        return {
+          name: 'build',
+          instructions: buildSkill,
+          examples: Object.entries(buildExamples).map(([name, example]) => ({
+            name,
+            description: example.description,
+          })),
+        };
       }
+      if (name === 'read_build_example') return readBuildExample(input.name);
+      if (name === 'test_app_connection' && id) {
+        if (typeof input.action !== 'string' || typeof input.inputJSON !== 'string')
+          throw Error('Provide action and inputJSON.');
+        return probeAppConnection(id, input.action, JSON.parse(input.inputJSON));
+      }
+      if (name === 'list_app_versions' && id)
+        return { currentVersion: revision(id).version, versions: versions(id) };
+      if (name === 'read_app_version' && id) {
+        if (
+          input.version !== undefined &&
+          (!Number.isSafeInteger(input.version) || Number(input.version) < 1)
+        )
+          throw Error('Choose a valid published version.');
+        const { bundle, backendBundle, ...content } = revision(
+          id,
+          input.version as number | undefined,
+        );
+        return content;
+      }
+      if (name === 'restore_app_version' && id)
+        return { applet: restoreApplet(id, input.version, input.expectedVersion) };
       if (name === 'read_build_plan' && spaceId && chatId) return readBuildPlan(spaceId, chatId);
       if (name === 'propose_build' && spaceId && chatId)
         return proposeBuild(spaceId, chatId, input);
@@ -372,10 +455,23 @@ export async function appTools(
       }
       if (
         drafts &&
-        ['read_draft', 'write_draft', 'edit_draft', 'test_draft', 'publish_draft'].includes(name)
+        [
+          'read_draft',
+          'write_draft',
+          'edit_draft',
+          'test_draft',
+          'test_api_connection',
+          'test_draft_connection',
+          'publish_draft',
+        ].includes(name)
       ) {
         requireBuildApproval(spaceId!, chatId!, buildPlanId!);
         if (!skillLoaded) throw Error('Load the build skill before using builder tools.');
+        if (name === 'test_api_connection') {
+          if (typeof input.requestJSON !== 'string' || input.requestJSON.length > 12000)
+            throw Error('Provide a JSON HTTP request of at most 12,000 characters.');
+          return probeApiConnection(JSON.parse(input.requestJSON));
+        }
         const result = await drafts.execute(name, input);
         if (name === 'publish_draft' && result && 'applet' in result && result.applet)
           finishBuild(spaceId!, chatId!, buildPlanId!, result.applet.id);
@@ -386,7 +482,7 @@ export async function appTools(
           .filter((space) => space.id !== launcherChatId)
           .map(({ id, name, appletCount }) => ({ id, name, ready: !!appletCount }));
       if (!id) throw new Error('Open an app to access its data.');
-      if (name === 'describe') return { actions: catalog };
+      if (name === 'describe') return { actions: await appActions(id) };
       if (name === 'invoke') {
         if (typeof input.action !== 'string' || typeof input.inputJSON !== 'string')
           throw new Error('Provide action and inputJSON.');

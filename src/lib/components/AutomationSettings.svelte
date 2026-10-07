@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { request } from '$lib/client';
+  import { credentialWarnings } from '$lib/secret-validation';
   let { archivedSpaceIds = [] }: { archivedSpaceIds?: string[] } = $props();
-  type Secret = { name: string; description: string; origins: string[] };
+  type Secret = { name: string; description: string; origins: string[]; warnings?: string[] };
   type Schedule = {
     space_id: string;
     key: string;
@@ -17,12 +18,14 @@
     schedules = $state<Schedule[]>([]);
   let editing = $state(false);
   let origins = $state('');
+  let valueVisible = $state(false);
   let name = $state(''),
     value = $state(''),
     description = $state(''),
     error = $state(''),
     busy = $state(false),
     status = $state('');
+  let valueWarnings = $derived(value ? credentialWarnings(name, value) : []);
   let loading = $state(true),
     loadError = $state(''),
     scheduleError = $state(''),
@@ -63,11 +66,13 @@
         })
       ).secrets;
       value = '';
+      valueVisible = false;
       name = '';
       description = '';
       origins = '';
       editing = false;
-      status = 'Secret saved.';
+      status =
+        'Secret saved. Saving does not verify the connection; ask the app’s chat to test it.';
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not save.';
     } finally {
@@ -79,6 +84,7 @@
     description = secret.description;
     origins = secret.origins.join(', ');
     value = '';
+    valueVisible = false;
     editing = true;
     error = status = '';
   }
@@ -124,6 +130,7 @@
       <div>
         <strong>{secret.name}</strong>
         <p>{secret.description || secret.origins.join(', ') || 'No API access allowed'}</p>
+        {#each secret.warnings || [] as warning}<p class="error">{warning}</p>{/each}
       </div>
       <button
         class="secondary-button"
@@ -144,6 +151,7 @@
           class="secondary-button"
           onclick={() => {
             editing = false;
+            valueVisible = false;
             name = value = description = origins = '';
           }}>Cancel</button
         >{/if}
@@ -171,13 +179,25 @@
       >Secret value<input
         disabled={busy || loading || !!loadError}
         required={!editing}
-        type="password"
+        type={valueVisible ? 'text' : 'password'}
         autocomplete="new-password"
+        spellcheck="false"
+        autocapitalize="none"
         maxlength="16000"
         placeholder={editing ? 'Leave blank to keep the current value' : 'Paste your key or token'}
         bind:value
       /></label
     >
+    <button
+      class="secondary-button"
+      type="button"
+      disabled={busy || loading || !!loadError}
+      aria-pressed={valueVisible}
+      onclick={() => (valueVisible = !valueVisible)}
+      >{valueVisible ? 'Hide entered value' : 'Show entered value'}</button
+    >
+    <p>Show only reveals what you just entered; stored values are never returned.</p>
+    {#each valueWarnings as warning}<p class="error" role="status">{warning}</p>{/each}
     <label class="value-field"
       >Allowed API origins<input
         disabled={busy || loading || !!loadError}
