@@ -11,12 +11,14 @@ async function mount(page: import('@playwright/test').Page, bundle: string) {
     (document) => {
       const host = window as any;
       host.launches = [];
+      host.actions = [];
       host.failList = false;
       host.failChat = false;
       addEventListener('message', (event) => {
         if (event.data?.channel !== 'little-spaces') return;
         const { id, method, params } = event.data;
         if (method === 'chat.open') host.launches.push(params);
+        if (method === 'action') host.actions.push(params);
         event.source?.postMessage(
           {
             channel: 'little-spaces-result',
@@ -42,7 +44,7 @@ async function mount(page: import('@playwright/test').Page, bundle: string) {
       });
       const frame = window.document.createElement('iframe');
       frame.title = 'Test app';
-      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('sandbox', 'allow-scripts allow-forms');
       frame.style.cssText = 'width:100%;height:800px;border:0';
       frame.srcdoc = document;
       window.document.body.append(frame);
@@ -84,6 +86,49 @@ test('starter renders compiled Tailwind and attaches an actionable error to chat
     'Could not open troubleshooting chat',
   );
   await expect(frame.getByRole('alert').first()).toContainText('Service returned 401');
+});
+
+test('literal Svelte regex patterns accept ordinary decimal amounts in a real browser', async ({
+  page,
+}) => {
+  await expect(compileApplet('<input pattern="[0-9]+([.][0-9]{1,2})?" />')).rejects.toThrow(
+    /Svelte interpolation/,
+  );
+  const frame = await mount(
+    page,
+    await compileApplet(`
+    <script>
+      let amount = $state('');
+      let saved = $state(false);
+      async function submit(event) {
+        event.preventDefault();
+        await window.applet.call('add', { amount });
+        saved = true;
+      }
+    </script>
+    <form onsubmit={submit}>
+      <label>Amount<input bind:value={amount} required pattern={"[0-9]+([.][0-9]{1,2})?"} /></label>
+      <button>Save</button>
+    </form>
+    {#if saved}<p role="status">Saved</p>{/if}
+  `),
+  );
+  const input = frame.getByLabel('Amount');
+  await expect(input).toHaveAttribute('pattern', '[0-9]+([.][0-9]{1,2})?');
+  for (const value of ['0.10', '12.50', '100']) {
+    await input.fill(value);
+    expect(await input.evaluate((node: HTMLInputElement) => node.checkValidity())).toBe(true);
+  }
+  for (const value of ['1.234', 'abc', '-1', '']) {
+    await input.fill(value);
+    expect(await input.evaluate((node: HTMLInputElement) => node.checkValidity())).toBe(false);
+  }
+  await input.fill('0.10');
+  await frame.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(frame.getByRole('status')).toHaveText('Saved');
+  expect(await page.evaluate(() => (window as any).actions)).toEqual([
+    { action: 'add', input: { amount: '0.10' } },
+  ]);
 });
 
 test('unhandled app errors have a host-provided troubleshooting button with redacted context', async ({

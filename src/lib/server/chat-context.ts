@@ -1,33 +1,16 @@
 import type { ChatLaunch } from '../types';
-import { spaceApplets, records, readPhoto } from './storage';
+import { normalizeChatContext } from '../app-chat-context';
+import { spaceApplets, records, readPhoto, revision } from './storage';
 
-export function validateChatLaunch(spaceId: string, value: unknown): ChatLaunch {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('Provide a chat task.');
-  const v = value as ChatLaunch;
-  if (typeof v.task !== 'string' || !v.task.trim() || v.task.length > 2000)
-    throw new Error('Chat task must contain 1–2,000 characters.');
-  if (
-    v.title !== undefined &&
-    (typeof v.title !== 'string' || !v.title.trim() || v.title.length > 80)
-  )
-    throw new Error('Chat title must contain 1–80 characters.');
-  if (v.welcome !== undefined && (typeof v.welcome !== 'string' || v.welcome.length > 2000))
-    throw new Error('Chat welcome must be at most 2,000 characters.');
-  if (JSON.stringify(v.context ?? null).length > 8000)
-    throw new Error('Chat context is too large.');
-  for (const field of ['recordKeys', 'photoIds'] as const) {
-    if (
-      v[field] !== undefined &&
-      (!Array.isArray(v[field]) ||
-        v[field]!.length > (field === 'photoIds' ? 4 : 10) ||
-        v[field]!.some((x) => typeof x !== 'string' || !x || x.length > 200))
-    )
-      throw new Error('Invalid chat context references.');
-  }
+export function validateChatLaunch(
+  spaceId: string,
+  value: unknown,
+  allowMissingRecords = false,
+): ChatLaunch {
+  const v = normalizeChatContext(value);
   const app = spaceApplets(spaceId)[0];
   const keys = new Set(app ? records(app.id).map((row) => row.key) : []);
-  if (v.recordKeys?.some((key) => !keys.has(key)))
+  if (!allowMissingRecords && v.recordKeys?.some((key) => !keys.has(key)))
     throw new Error('A selected record is not available in this app.');
   for (const id of v.photoIds || []) readPhoto(spaceId, id);
   return {
@@ -40,10 +23,14 @@ export function validateChatLaunch(spaceId: string, value: unknown): ChatLaunch 
   };
 }
 
-export function liveChatContext(appletId: string | undefined, launch?: ChatLaunch) {
-  if (!launch) return undefined;
+export function liveChatContext(
+  appletId: string | undefined,
+  launch?: ChatLaunch,
+  view?: ChatLaunch | null,
+) {
+  if (!appletId && !launch) return undefined;
   const current = appletId ? records(appletId) : [];
-  return {
+  const snapshot = (launch: ChatLaunch) => ({
     task: launch.task,
     screenContext: launch.context,
     photoIds: launch.photoIds || [],
@@ -54,5 +41,20 @@ export function liveChatContext(appletId: string | undefined, launch?: ChatLaunc
         ? { key, omitted: 'Large record; retrieve through app tools.' }
         : row;
     }),
+  });
+  const app = appletId ? revision(appletId) : undefined;
+  return {
+    ...(app
+      ? {
+          app: {
+            id: appletId,
+            title: app.title,
+            description: app.description,
+            version: app.version,
+          },
+        }
+      : {}),
+    ...(launch ? snapshot(launch) : {}),
+    ...(view ? { currentView: snapshot(view) } : {}),
   };
 }

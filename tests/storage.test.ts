@@ -196,6 +196,38 @@ test('task chats persist scoped references, refresh records, and handle deleted 
   assert.throws(() => storage.getChat(b.id, chat.id), /not found/);
 });
 
+test('main app chat always has app identity and resolves live view records without leaking another app', async () => {
+  const { validateChatLaunch, liveChatContext } = await import('../src/lib/server/chat-context');
+  const a = storage.saveApplet(content),
+    b = storage.saveApplet(content);
+  storage.putRecord(a.id, 'selected', { name: 'Before' });
+  storage.putRecord(b.id, 'foreign', { name: 'Private' });
+  const view = validateChatLaunch(
+    a.id,
+    {
+      task: 'Viewing selection',
+      recordKeys: ['selected', 'foreign'],
+      context: { filter: 'today' },
+    },
+    true,
+  );
+  storage.putRecord(a.id, 'selected', { name: 'After' });
+  const context = liveChatContext(a.id, undefined, view)!;
+  assert.equal(context.app?.id, a.id);
+  assert.equal(context.app?.title, content.title);
+  assert.deepEqual(context.currentView?.selectedRecords, [
+    { key: 'selected', value: { name: 'After' } },
+    { key: 'foreign', missing: true },
+  ]);
+  assert.ok(liveChatContext(a.id)?.app);
+  assert.equal(liveChatContext(undefined), undefined);
+  storage.removeRecord(a.id, 'selected');
+  assert.deepEqual(liveChatContext(a.id, undefined, view)?.currentView?.selectedRecords[0], {
+    key: 'selected',
+    missing: true,
+  });
+});
+
 test('empty chat cleanup removes placeholders but preserves history, work, and active turns', () => {
   const space = storage.createSpace('Empty chat cleanup');
   const empty = storage.createChat(space.id);

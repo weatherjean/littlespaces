@@ -7,6 +7,25 @@ globalThis.fetch = async (url, init) => {
     });
   if (!String(url).endsWith('/responses')) throw Error('Unexpected test network request.');
   const body = JSON.parse(String(init?.body));
+  const latestUser = body.input.filter((item) => item.role === 'user').at(-1);
+  if (latestUser?.content === 'inspect-current-context') {
+    const supplied = body.input.find(
+      (item) =>
+        typeof item.content === 'string' && item.content.startsWith('App-provided context,'),
+    );
+    const context = supplied
+      ? JSON.parse(supplied.content.slice(supplied.content.indexOf('\n') + 1))
+      : null;
+    const guidance = body.input.some(
+      (item) =>
+        item.role === 'developer' && item.content.includes('conversational side of Plant care'),
+    );
+    const text = JSON.stringify({ message: JSON.stringify({ context, guidance }) });
+    return new Response(
+      `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: text })}\n\ndata: ${JSON.stringify({ type: 'response.completed', response: { output: [] } })}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    );
+  }
   const tools = body.tools[0].tools;
   const building = tools.some((tool) => tool.name === 'write_draft');
   const results = body.input.filter((item) => item.type === 'function_call_output');

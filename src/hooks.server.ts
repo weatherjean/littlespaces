@@ -1,5 +1,5 @@
 import { startScheduler } from '$lib/server/scheduler';
-import { building } from '$app/environment';
+import { building, dev } from '$app/environment';
 import { isHttpError, isRedirect, type Handle, type HandleServerError } from '@sveltejs/kit';
 import { guard, privateHeaders } from '$lib/server/access-control';
 import { initializeOwnerSetup } from '$lib/server/setup';
@@ -15,7 +15,7 @@ export function init() {
 }
 export const handle: Handle = async ({ event, resolve }) => {
   try {
-    guard(event);
+    guard(event, dev);
   } catch (error) {
     if (isRedirect(error))
       return privateHeaders(

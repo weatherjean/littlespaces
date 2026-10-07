@@ -105,7 +105,7 @@ export async function appTools(
         ),
         tool(
           'test_draft',
-          'Compile the saved UI and run backend tests in isolated storage. Returns test results. Does not publish.',
+          'Compile the saved UI, validate browser input-pattern syntax, and run backend tests in isolated storage. Returns test results and explicit coverage. Does not run a browser or verify UI workflows. Does not publish.',
           { revision: { type: 'integer' } },
         ),
         tool(

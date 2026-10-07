@@ -179,6 +179,12 @@ export function draftWorkspace(
           ...summary(draft),
           compiled: true,
           tests: JSON.parse(prepared.testReport || '[]'),
+          coverage: {
+            uiCompiled: true,
+            inputPatternsValidated: true,
+            backendTestsRun: !!prepared.backendBundle,
+            browserWorkflowsTested: false,
+          },
         };
       }
       if (name === 'publish_draft') {

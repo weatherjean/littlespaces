@@ -90,7 +90,8 @@ test('same agent can fetch the skill, but code tools require approval and loadin
   const { space, chat } = setup();
   const normal = await appTools(undefined, space.id, chat.id, 'knowledge');
   const skill = (await normal.execute('load_skill', { name: 'build' })) as any;
-  assert.match(skill.instructions, /PRIMARY entry point MUST/);
+  assert.match(skill.instructions, /single primary conversation entry/);
+  assert.match(skill.instructions, /chat.setContext/);
   assert.match(skill.instructions, /ctx.http.request/);
   assert.match(skill.instructions, /Settings → Secrets/);
   assert.match(skill.instructions, /minimum scopes/);

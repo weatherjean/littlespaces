@@ -28,6 +28,7 @@ export type Chat = {
   updatedAt: string;
   launch?: ChatLaunch;
 };
+export type AppChatContext = { appletId: string; version: number; view: ChatLaunch | null };
 export type Revision = {
   version: number;
   title: string;

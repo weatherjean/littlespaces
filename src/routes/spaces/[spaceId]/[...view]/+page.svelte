@@ -8,13 +8,31 @@
   import AppletFrame from '$lib/components/AppletFrame.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import { request } from '$lib/client';
-  import type { AppVersion } from '$lib/types';
+  import type { AppVersion, AppChatContext } from '$lib/types';
   let { data }: { data: PageData } = $props();
   let dialog: HTMLDialogElement;
+  let options: HTMLDialogElement;
+  let appContext = $state<AppChatContext>();
   let error = $state(''),
     busy = $state(false),
     historyOpen = $state(false),
     refresh = $state(0);
+  let dataRevision = $state(0);
+  let openingChat = $state(false),
+    chatOpenError = $state('');
+  async function openAppChat() {
+    if (openingChat) return;
+    openingChat = true;
+    chatOpenError = '';
+    try {
+      const { chat } = await request(`/api/spaces/${data.space.id}/chats`, {});
+      await goto(`/spaces/${data.space.id}/chat/${chat.id}`, { invalidateAll: true });
+    } catch (e) {
+      chatOpenError = e instanceof Error ? e.message : 'Could not open a fresh chat.';
+    } finally {
+      openingChat = false;
+    }
+  }
   let versions = $state<AppVersion[]>([]);
   let restoreTarget = $state<number | null>(null);
   function testResults(report: string) {
@@ -66,6 +84,8 @@
     {#if data.applet}{#key `${data.applet.id}:${refresh}`}<AppletFrame
           id={data.applet.id}
           version={data.applet.version}
+          oncontext={(value) => (appContext = value)}
+          {dataRevision}
         />{/key}{:else}<div class="empty-app">
         <span class="app-icon icon-chat"
           ><span class="app-emoji" aria-hidden="true"
@@ -80,18 +100,59 @@
       </div>{/if}
   </div>
   <nav class="app-dock" aria-label="App navigation">
-    <a class="dock-back" href="/" aria-label="Back to Home"
-      ><Icon name="back" size={21} /><span>Home</span></a
-    ><span class="dock-app-name"
-      ><span aria-hidden="true">{appEmoji(data.space.name, data.space.icon)}</span>{data.space
-        .name}</span
-    ><Notifications /><a
-      class="dock-chat"
-      href={`/spaces/${data.space.id}/chat/${data.activeChat.id}`}
-      ><Icon name="chat" size={19} />Chat</a
+    <a class="dock-home" href="/" aria-label="Home"><Icon name="home" size={23} /></a>
+    <a
+      class="dock-app-icon"
+      href={`/spaces/${data.space.id}/applet`}
+      aria-label={`Open app: ${data.space.name}`}
+      title={data.space.name}
+    >
+      <span aria-hidden="true">{appEmoji(data.space.name, data.space.icon)}</span>
+    </a><button class="dock-chat" onclick={openAppChat} disabled={openingChat}
+      ><Icon name="chat" size={19} />{openingChat ? 'Opening…' : 'Chat with app'}</button
+    >
+    <button
+      class="dock-more"
+      aria-label="More app options"
+      aria-haspopup="dialog"
+      onclick={() => options.showModal()}><Icon name="more" size={24} /></button
     >
   </nav>
+  {#if chatOpenError}<p class="error" role="alert">{chatOpenError}</p>{/if}
 </main>
+<dialog class="app-options" bind:this={options} aria-labelledby="app-options-title">
+  <header class="picker-header">
+    <h2 id="app-options-title">{data.space.name}</h2>
+    <button class="icon-button" aria-label="Close app options" onclick={() => options.close()}
+      ><Icon name="close" /></button
+    >
+  </header>
+  <div class="app-options-actions">
+    <Notifications />
+    <button
+      onclick={async () => {
+        options.close();
+        try {
+          await invalidateAll();
+          refresh++;
+        } catch (e) {
+          chatOpenError = e instanceof Error ? e.message : 'Could not refresh the app.';
+        }
+      }}><Icon name="history" size={19} />Refresh app</button
+    >
+    <button
+      disabled={!data.applet}
+      onclick={async () => {
+        options.close();
+        await goto(`/spaces/${data.space.id}/chat/${data.activeChat.id}`);
+        await history();
+      }}><Icon name="history" size={19} />Versions & tests</button
+    >
+    <a href="/settings" onclick={() => options.close()}
+      ><Icon name="settings" size={19} />Settings</a
+    >
+  </div>
+</dialog>
 <dialog
   class="app-chat-modal"
   use:chatViewport
@@ -168,10 +229,81 @@
           </article>{/each}
       </div>
     </section>{/if}
-  <ChatPanel {...data} base={`/spaces/${data.space.id}/chat`} onupdated={() => refresh++} />
+  <ChatPanel
+    {...data}
+    {appContext}
+    base={`/spaces/${data.space.id}/chat`}
+    onupdated={() => dataRevision++}
+  />
 </dialog>
 
 <style>
+  .app-dock {
+    gap: 8px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .dock-home,
+  .dock-app-icon,
+  .dock-more {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: var(--radius);
+    color: var(--ink);
+  }
+  .dock-app-icon {
+    font-size: 23px;
+  }
+  .dock-more {
+    border: 0;
+    background: transparent;
+  }
+  .dock-chat {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .app-options {
+    padding: 0;
+    width: min(420px, calc(100% - 24px));
+    border: var(--border-width) solid var(--line);
+    border-radius: calc(var(--radius) * 1.5);
+    color: var(--ink);
+    background: var(--panel);
+  }
+  .app-options::backdrop {
+    background: #0008;
+  }
+  .app-options-actions {
+    display: grid;
+    gap: 8px;
+    padding: 16px;
+  }
+  .app-options-actions > button,
+  .app-options-actions > a {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 10px 14px;
+    color: var(--ink);
+    background: var(--surface);
+    border: var(--border-width) solid var(--line);
+    border-radius: var(--radius);
+    text-align: left;
+  }
+  @media (max-width: 700px) {
+    .app-options {
+      margin: auto auto calc(12px + env(safe-area-inset-bottom));
+    }
+  }
   .version-list {
     display: grid;
     grid-template-columns: 1fr;

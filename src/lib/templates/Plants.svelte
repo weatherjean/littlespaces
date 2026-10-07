@@ -55,39 +55,43 @@
     }
   }
   onMount(() => {
+    const unsubscribe = window.applet.onDataChanged(refresh);
     refresh()
       .catch((e) => (error = e.message))
       .finally(() => (loading = false));
+    return unsubscribe;
   });
-  async function openChat(key?: string, plant?: Plant) {
-    if (locked) return;
-    busy = true;
-    error = '';
-    try {
-      await window.applet.chat.open(
-        key
-          ? {
-              title: `Help ${plant?.name || 'my plant'}`.slice(0, 80),
-              task: 'Plant care advice for the selected plant.',
-              welcome:
-                'What have you noticed, or what would you like help with? Your plant’s details are already available here. You can also attach a new photo.',
-              recordKeys: [key],
-              photoIds: plant?.photoId ? [plant.photoId] : [],
-            }
-          : {
-              title: 'Add a plant',
-              task: 'New plant setup. Guide the user through identification, growing conditions, and confirmation before saving.',
-              welcome:
-                'Share a photo or tell me your plant’s name—even “unknown” is fine. We’ll work out its location, light, and watering needs together before saving it to your journal.',
-            },
-      );
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Could not open chat.';
-    } finally {
-      busy = false;
-    }
-  }
+  let selectedKey = $state<string | null>(null);
+  let contextError = $state('');
+  $effect(() => {
+    const key = editingKey || selectedKey;
+    const selected = plants.find((plant) => plant.key === key);
+    void window.applet.chat
+      .setContext({
+        task: draftOpen
+          ? 'Plant setup form with unsaved details.'
+          : 'Plant journal and care for the selected plant.',
+        title: selected ? `Plant: ${selected.value.name}`.slice(0, 80) : 'Plant care',
+        welcome: 'Ask about a plant, add one, or update its care. You can attach a photo here.',
+        context: {
+          screen: draftOpen ? 'plant-form' : 'journal',
+          draft: draftOpen
+            ? { name, scientificName, location, light, interval, wateringAdvice }
+            : null,
+          error: error ? error.slice(0, 800) : null,
+        },
+        recordKeys: selected ? [selected.key] : [],
+        photoIds: photo ? [photo.id] : selected?.value.photoId ? [selected.value.photoId] : [],
+      })
+      .then(() => {
+        contextError = '';
+      })
+      .catch(() => {
+        contextError = 'Could not share this view with app chat.';
+      });
+  });
   function start() {
+    selectedKey = null;
     editingKey = null;
     name = '';
     scientificName = '';
@@ -225,12 +229,13 @@
       <p>A photo, a little care, a happy plant.</p>
     </div>
     <div class="header-actions">
-      <button class="primary" disabled={locked} onclick={() => openChat()}
-        ><span aria-hidden="true">+</span> Add with chat</button
-      ><button disabled={locked} onclick={start}>Add manually</button>
+      <button class="primary" disabled={locked} onclick={start}
+        ><span aria-hidden="true">+</span> Add plant</button
+      >
     </div>
   </header>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if contextError}<p class="error" role="alert">{contextError}</p>{/if}
   {#if draftOpen}<section class="setup" aria-label="Plant setup">
       <div class="setup-heading">
         <div>
@@ -361,8 +366,10 @@
             >
           </div>
           <div class="actions">
-            <button disabled={locked} onclick={() => openChat(plant.key, plant.value)}
-              >Help with chat</button
+            <button
+              disabled={locked}
+              aria-pressed={selectedKey === plant.key}
+              onclick={() => (selectedKey = plant.key)}>Select plant</button
             ><button disabled={locked} onclick={() => action('waterPlant', plant.key)}
               >Watered today</button
             ><button class="subtle" disabled={locked} onclick={() => edit(plant.key, plant.value)}

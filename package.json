@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:instance": "node scripts/dev-instance.mjs",
+    "dev:eval": "node scripts/dev-eval.mjs",
     "build": "vite build",
     "preview": "node scripts/start.mjs",
     "start": "node scripts/start.mjs",

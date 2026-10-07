@@ -2,6 +2,7 @@ import { error, redirect, type RequestEvent } from '@sveltejs/kit';
 import { origin, secureCookies } from './config';
 import { authenticated, requireSameOrigin } from './security';
 import { ownerStore } from './owner';
+import { devControlAuthorized } from '../../../scripts/dev-control.mjs';
 
 const publicAssets = new Set([
   '/icon.svg',
@@ -19,7 +20,7 @@ const publicAssets = new Set([
   '/service-worker.js',
   '/service-worker.mjs',
 ]);
-export function guard(event: RequestEvent) {
+export function guard(event: RequestEvent, development = false) {
   // adapter-node uses the configured ORIGIN for event.url, even when the browser
   // requested a loopback alias. Redirect safe requests before rendering any forms.
   const configuredOrigin = new URL(origin);
@@ -61,6 +62,13 @@ export function guard(event: RequestEvent) {
     )
       error(401, 'Owner setup is required.');
     redirect(303, '/setup');
+  }
+  if (
+    path.startsWith('/api/') &&
+    devControlAuthorized(event.request, origin, development, process.env.APP_DEV_CONTROL_TOKEN)
+  ) {
+    event.locals.owner = { email: ownerStore().requireOwner().email };
+    return;
   }
   const session = authenticated(event);
   event.locals.owner = session ? { email: session.email } : null;

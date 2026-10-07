@@ -83,28 +83,38 @@ GPT speech, arbitrary network access, and package dependencies are not implement
 
 An app revision may include `chatInstructions` (up to 12,000 characters). The builder writes guidance for the app's purpose, questions, workflows, and confirmation rules alongside its UI and backend. Omitting the field during an update preserves current guidance; setting it to an empty string clears it. Code rollback restores the guidance too. Host rules and the user's requests take precedence; app guidance does not authorize data changes.
 
-UI buttons can start focused conversations:
+The host's **Chat with app** button opens a fresh conversation every time, with an empty composer. Older saved conversations remain in the conversation picker. App chat always receives current app identity and versioned `chatInstructions`, and can inspect live records and invoke backend actions. The builder documents the app's full workflows, data shapes, and confirmation rules in those instructions.
+
+Publish the current UI view without opening or sending chat:
 
 ```ts
-await window.applet.chat.open({
-  title: 'Help this plant',
-  task: 'Care advice for the selected plant.',
-  welcome: 'What have you noticed? Your plant’s details are already available here.',
-  recordKeys: [plant.key],
-  photoIds: plant.value.photoId ? [plant.value.photoId] : [],
-  context: { screen: 'plant detail', unsavedLocation: location },
+$effect(() => {
+  void window.applet.chat
+    .setContext({
+      title: 'Plant care',
+      task: 'Browsing the plant journal and the selected plant.',
+      welcome: 'Ask about a plant, add one, or update its care.',
+      recordKeys: selectedPlant ? [selectedPlant.key] : [],
+      photoIds: selectedPlant?.value.photoId ? [selectedPlant.value.photoId] : [],
+      context: { screen: 'journal', filter, unsavedLocation: location },
+    })
+    .catch(() => {
+      contextError = 'Could not share this view with app chat.';
+    });
+});
+onMount(() => {
+  void load();
+  return window.applet.onDataChanged(load);
 });
 ```
 
-Use this only in response to a user click. The host creates a fresh conversation in the app's own space, opens the existing chat modal with an empty composer, and waits for the user to write. The task is background context; it is never inserted into the composer or sent as a user message. Optional `welcome` text (up to 2,000 characters) appears in the empty conversation with the task title, explaining what the user can share next. It is rendered as plain text, not a fabricated assistant reply. Failed user requests remain editable for retry. The bottom-bar Chat button remains the general conversation entry point.
+`setContext` accepts a task (1–2,000 characters), optional title (1–80), welcome (up to 2,000), up to ten record keys, up to four photo IDs, and an 8,000-character JSON snapshot. Pass `null` to clear it. It never opens chat, fills the composer, sends a message, or authorizes writes. Update it when selection, view, filters, dates or unsaved values change. Registration is local to the mounted app; it is not stored as a record or a fabricated user message. Avoid including `contextError` in the published snapshot, which could cause a feedback loop.
 
-The task and references persist with the conversation. Record references (up to ten) are resolved against current data each turn, including explicit missing-record markers after deletion. Photo references (up to four) must belong to this space and can be inspected with the agent's photo tools. Context is an 8,000-character JSON snapshot for unsaved UI state, treated as untrusted data rather than instructions. Avoid copying records into snapshots; reference their keys instead. A visible expandable context panel shows the task and included context.
+Every chat request carries an app ID/version envelope. The server rejects a mismatched app or stale version, scopes photo references, reloads selected records from the app's database, and marks missing records explicitly. Snapshots are untrusted data; app instructions and screen context cannot authorize changes by themselves. The agent can retrieve additional records through tools rather than receiving an unbounded copy of the database. An expandable context panel shows what the app is sharing.
 
-Plant care uses Add with chat for guided setup and Help with chat for selected-plant care. Quick actions and manual entry remain available in its frontend.
+`onDataChanged` signals after an app chat turn finishes. Reload backend data while preserving unsaved input and view/selection; clear selections for records that were deleted. Return the unsubscribe function from `onMount` cleanup. Legacy apps without a subscription reload after chat for compatibility. The existing `chat.open(...)` API remains available for legacy workflows and narrowly scoped troubleshooting, but new apps use the main chat rather than Add/Edit/Help with chat buttons.
 
-## Chat-first creation flows
-
-The builder must make **Add … with chat** the primary entry point when adding a record requires AI interpretation, photos, estimates, or several questions, unless the user explicitly requests a form-first flow. A standalone photo-analysis form with a secondary “Refine with chat” button does not satisfy this default. App surfaces should emphasize browsing, totals, history, and simple direct actions; known-value manual entry can be secondary and collapsed. Chat receives the selected date and record/photo references as context, displays welcome guidance, and waits for the user to write. Backend tests verify actions, not the visual interaction hierarchy, so the builder must also review that hierarchy before publishing.
+Plant care now uses ordinary **Add plant** and **Select plant** controls. Its live context includes the selected plant and unsaved setup form; the main chat handles identification, care, creation and requested changes. Updating the host does not rewrite immutable app revisions: previously published app UIs need a normal app update to emit live view context, while their saved instructions and backend tools remain available in chat.
 
 ## Central notifications
 

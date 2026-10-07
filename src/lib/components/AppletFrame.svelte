@@ -1,12 +1,24 @@
 <script lang="ts">
   import { readBrowserValue } from '$lib/browser-storage';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { request as hostRequest, responseJson } from '$lib/client';
   import PhotoPicker from './PhotoPicker.svelte';
   import Icon from './Icon.svelte';
   import type { Photo } from '$lib/photo-types';
-  let { id, version }: { id: string; version: number } = $props();
+  import { normalizeChatContext } from '$lib/app-chat-context';
+  import type { AppChatContext } from '$lib/types';
+  let {
+    id,
+    version,
+    oncontext = () => {},
+    dataRevision = 0,
+  }: {
+    id: string;
+    version: number;
+    oncontext?: (context: AppChatContext) => void;
+    dataRevision?: number;
+  } = $props();
   let owner = $state('');
   let photoDialog: HTMLDialogElement;
   let photoRequest = $state<{ owner: string; resolve: (value: unknown) => void } | null>(null);
@@ -34,10 +46,32 @@
   let document = $state('');
   let error = $state('');
   let loading = $state(true);
+  let subscribed = false;
+  let lastDataRevision = 0;
+  let loadedIdentity = '';
+  let documentController: AbortController | undefined;
+  $effect(() => {
+    const next = dataRevision;
+    if (next === lastDataRevision) return;
+    lastDataRevision = next;
+    if (!frame?.contentWindow) return;
+    if (subscribed) frame.contentWindow.postMessage({ channel: 'little-spaces-data-changed' }, '*');
+    else {
+      oncontext({ appletId: id, version, view: null });
+      frame.srcdoc = document;
+    }
+  });
   $effect(() => {
     const currentId = id;
-    void version;
+    const currentVersion = version;
+    const identity = `${currentId}:${currentVersion}`;
+    if (loadedIdentity === identity) return;
+    loadedIdentity = identity;
+    documentController?.abort();
+    subscribed = false;
+    untrack(() => oncontext({ appletId: currentId, version: currentVersion, view: null }));
     const controller = new AbortController();
+    documentController = controller;
     loading = true;
     error = '';
     document = '';
@@ -53,7 +87,6 @@
       .finally(() => {
         if (!controller.signal.aborted) loading = false;
       });
-    return () => controller.abort();
   });
   onMount(() => {
     let inFlight = 0;
@@ -72,6 +105,8 @@
           'photos.list',
           'photos.analyze',
           'chat.open',
+          'chat.setContext',
+          'data.subscribe',
           'diagnostics.report',
           'schedules.save',
           'schedules.list',
@@ -95,6 +130,17 @@
       }
       inFlight++;
       try {
+        if (request.method === 'data.subscribe') {
+          subscribed = true;
+          reply({ result: null });
+          return;
+        }
+        if (request.method === 'chat.setContext') {
+          const view = request.params === null ? null : normalizeChatContext(request.params);
+          oncontext({ appletId: currentId, version, view });
+          reply({ result: null });
+          return;
+        }
         if (request.method.startsWith('schedules.')) {
           const response = await hostRequest(
             `/api/spaces/${currentOwner}/schedules`,
@@ -208,6 +254,7 @@
     }
     window.addEventListener('message', handle);
     return () => {
+      documentController?.abort();
       cancelPhoto();
       window.removeEventListener('message', handle);
     };

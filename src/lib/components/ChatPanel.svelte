@@ -6,7 +6,7 @@
   import ChatView from './ChatView.svelte';
   import Icon from './Icon.svelte';
   import { request } from '$lib/client';
-  import type { Account, Space, Chat, Message, Applet, ToolCall } from '$lib/types';
+  import type { Account, Space, Chat, Message, Applet, ToolCall, AppChatContext } from '$lib/types';
   let {
     space,
     chats,
@@ -15,6 +15,7 @@
     pendingToolCalls = [],
     account,
     applet,
+    appContext,
     base,
     voiceMode = false,
     standalone = false,
@@ -27,6 +28,7 @@
     pendingToolCalls?: ToolCall[];
     account: Account | null;
     applet: Applet | null;
+    appContext?: AppChatContext;
     base: string;
     voiceMode?: boolean;
     standalone?: boolean;
@@ -144,6 +146,7 @@
         {pendingToolCalls}
         {account}
         {applet}
+        {appContext}
         {onupdated}
         onbusy={(value) => (chatBusy = value)}
         launcher={base === '/chat' || voiceMode}

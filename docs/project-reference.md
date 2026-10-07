@@ -38,7 +38,7 @@ Keep the local server running while using the app. Browser installation support 
 - ChatGPT OAuth with dynamic client registration, PKCE, state, nonce, signature/issuer/audience validation, granted-scope checks, protected credentials, and refresh-token rotation.
 - Account-specific model picker and Responses API streaming with `store: false`. An incomplete or failed stream never becomes a saved applet.
 - AI-generated Svelte apps with TypeScript backend actions shared by the UI and app-scoped agent.
-- Versioned app-specific chat guidance and contextual task buttons. Plant care offers Add with chat and Help with chat; selected records stay current each turn.
+- Versioned app-specific chat guidance and live screen context for the main Chat with app button. Fresh conversations carry the current selection and unsaved form; selected records stay current each turn.
 - OS-isolated backend execution on macOS and Linux, generated tests before publication, atomic data commits, and UI/backend version rollback.
 - A model picker and account-specific reasoning-effort selector.
 - A minimal launcher, full app view, scoped chat modal, and multiple conversations per app.
@@ -55,6 +55,10 @@ Every successful publication keeps a complete UI/backend/chat-guidance snapshot 
 Choose **Restore v…**, review the explanation, then confirm. Restoration creates a new version without deleting later versions or resetting records and photos. You can also ask the app's chat to go back: the agent can list/read versions and restore the requested version. Stale restore requests are rejected. Older code may expect older record shapes; external API changes are not reversed. Code history in the same SQLite file does not replace a protected backup of the full data directory.
 
 The build skill offers on-demand, copyable examples through `read_build_example`: **starter**, **list-editor**, **photos**, and **integration**. They include UI source, chat guidance and backend tests. The integration example uses a public GitHub repository lookup with mocked HTTP tests; those tests do not establish a live connection. Examples do not publish or overwrite anything by themselves, and generated apps still go through the approved draft/test/publish workflow.
+
+Before implementation, the builder chooses a visual direction suited to the app's purpose and the user's preferences: mood, palette, typography, and layout. It uses CSS color variables and web-safe or system font stacks without downloading fonts, considers contrast, keyboard focus, long content and small screens, and records a brief style description in the app's chat guidance for future updates. Updates preserve an established visual identity unless a redesign is requested. This is prompt guidance, not an automated visual-quality score.
+
+`test_draft` compiles the UI, checks static HTML input patterns, and runs isolated backend tests. It rejects Svelte interpolation inside quoted patterns (which can silently corrupt regex quantifiers) and invalid static browser regular expressions. Write quantifiers as a literal expression, such as `pattern={"[0-9]+([.][0-9]{1,2})?"}`. Dynamic patterns must be passed as a whole expression and still require runtime validation. The result includes explicit coverage with `browserWorkflowsTested: false`: neither compilation nor backend tests verify form submission, refresh persistence, layout, or accessibility in a browser. Builder guidance requires truthful reporting and focused repairs from observed browser failures.
 
 The app compiler supports Tailwind CSS v4 utilities, scanning only the candidate's Svelte source and embedding the resulting CSS into its saved bundle. Use complete literal classes, including responsive variants and arbitrary values; dynamic values belong in inline styles or mappings of complete class strings. There is no browser CDN or runtime download. Scoped Svelte CSS remains supported. Tailwind Preflight is omitted to preserve existing apps' native defaults. App code cannot import component packages or supply Tailwind plugins/configuration; `@apply` is not processed.
 
@@ -118,6 +122,8 @@ The hardening regression suite also covers backend write bypasses, revision race
 Detailed local traces are enabled in `.data/logs`: prompts, model responses, tools, tests, publications, record changes, timings, and errors. Credentials and image bytes are excluded; conversation text and app data are included. Use `npm run logs -- --event chat --limit 20` to find a trace. See [diagnostics](diagnostics.md) for filtering, retention, and limits.
 
 Settings includes encrypted secrets (metadata only for the model), scheduled-check management, PWA installation guidance, and per-device Web Push controls. Chat handles questions and app creation together. Approve a proposed plan to build or update code; detailed building instructions are fetched through the build skill. See the backend contract for scheduler and notification APIs.
+
+Inside an app, the compact bottom bar contains Home, the app icon, Chat with app, and a three-dot options sheet for the inbox, refresh, versions and settings. Chat with app starts fresh; saved conversations remain in its picker.
 
 The host defaults to the dark Orbit theme with a custom SVG brand mark and native emoji app icons. Home and the app bottom bar share a notification inbox for app updates and scheduled in-app reminders. Applets can use the notification SDK described in the backend contract. Settings also offers Expert mode, which shows and persists new tool calls directly in chat.
 

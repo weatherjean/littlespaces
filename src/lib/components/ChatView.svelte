@@ -17,7 +17,16 @@
   import { uploadPhoto } from '$lib/photos';
   import type { Photo } from '$lib/photo-types';
   import Icon from './Icon.svelte';
-  import type { Account, Space, Chat, Message, Model, Applet, ToolCall } from '$lib/types';
+  import type {
+    Account,
+    Space,
+    Chat,
+    Message,
+    Model,
+    Applet,
+    ToolCall,
+    AppChatContext,
+  } from '$lib/types';
   let {
     space,
     activeChat,
@@ -25,6 +34,7 @@
     pendingToolCalls = [],
     account,
     applet,
+    appContext,
     launcher = false,
     voiceMode = false,
     onupdated = () => {},
@@ -36,11 +46,13 @@
     pendingToolCalls?: ToolCall[];
     account: Account | null;
     applet: Applet | null;
+    appContext?: AppChatContext;
     launcher?: boolean;
     voiceMode?: boolean;
     onupdated?: () => void;
     onbusy?: (value: boolean) => void;
   } = $props();
+  const currentContext = $derived(appContext?.view ?? activeChat.launch);
   let calls = $state<ToolCall[]>(untrack(() => pendingToolCalls));
   let activeCalls: ToolCall[] = [];
   let attachments = $state<Photo[]>([]),
@@ -290,6 +302,7 @@
           effort,
           spaceId: space.id,
           chatId: activeChat.id,
+          appContext,
         }),
         signal: cancelRequest.signal,
       });
@@ -416,7 +429,7 @@
                 ? 'What would you like to do?'
                 : launcher
                   ? 'What’s on your mind?'
-                  : activeChat.launch?.title ||
+                  : currentContext?.title ||
                     (applet ? 'How can I help?' : 'What would you like to build?')}
             </h2>
             <p>
@@ -424,7 +437,7 @@
                 ? 'Talk about your apps. Confirm changes before they’re saved.'
                 : launcher
                   ? 'Ask a question or describe an app you want.'
-                  : activeChat.launch?.welcome ||
+                  : currentContext?.welcome ||
                     (applet
                       ? 'Ask a question or change this app.'
                       : 'Describe the app you want to make.')}
@@ -474,15 +487,15 @@
         ><Icon name="chevron" size={18} />Latest messages</button
       >{/if}
   </div>
-  {#if activeChat.launch}<details class="chat-context">
-      <summary>{activeChat.launch.title || 'App task'} · App context</summary>
-      <p>{activeChat.launch.task}</p>
-      {#if activeChat.launch.recordKeys?.length}<p>
-          {activeChat.launch.recordKeys.length} selected record(s), refreshed each turn.
-        </p>{/if}{#if activeChat.launch.photoIds?.length}<p>
-          {activeChat.launch.photoIds.length} referenced photo(s).
-        </p>{/if}{#if activeChat.launch.context}<pre>{JSON.stringify(
-            activeChat.launch.context,
+  {#if currentContext}<details class="chat-context">
+      <summary>{currentContext.title || 'App task'} · App context</summary>
+      <p>{currentContext.task}</p>
+      {#if currentContext.recordKeys?.length}<p>
+          {currentContext.recordKeys.length} selected record(s), refreshed each turn.
+        </p>{/if}{#if currentContext.photoIds?.length}<p>
+          {currentContext.photoIds.length} referenced photo(s).
+        </p>{/if}{#if currentContext.context}<pre>{JSON.stringify(
+            currentContext.context,
             null,
             2,
           )}</pre>{/if}

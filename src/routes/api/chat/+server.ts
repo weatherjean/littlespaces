@@ -2,7 +2,8 @@ import { claimBuildPlan, cancelBuildPlan, finishBuild } from '$lib/server/build-
 import { buildPlanText, type BuildPlan } from '$lib/build-plan-types';
 import { logEvent, trace } from '$lib/server/diagnostics';
 import type { ToolCall } from '$lib/types';
-import { liveChatContext } from '$lib/server/chat-context';
+import { liveChatContext, validateChatLaunch } from '$lib/server/chat-context';
+import type { ChatLaunch } from '$lib/types';
 import { json } from '@sveltejs/kit';
 import { body } from '$lib/server/security';
 import { connectedAccount } from '$lib/server/connection';
@@ -94,6 +95,20 @@ export const POST: RequestHandler = async (event) => {
   } catch {
     return json({ error: 'Applet not found.' }, { status: 404 });
   }
+  let view: ChatLaunch | null | undefined;
+  try {
+    if (input.appContext !== undefined) {
+      const context = input.appContext as { appletId?: unknown; version?: unknown; view?: unknown };
+      if (!context || !id || context.appletId !== id || context.version !== current?.version)
+        throw Error('The app context changed. Refresh the app before sending.');
+      view = context.view === null ? null : validateChatLaunch(spaceId, context.view, true);
+    }
+  } catch (error) {
+    return json(
+      { error: error instanceof Error ? error.message : 'Invalid app context.' },
+      { status: 400 },
+    );
+  }
   if (running.has(spaceId))
     return json(
       { error: 'A reply is already running in this space. Wait for it to finish.' },
@@ -141,7 +156,7 @@ export const POST: RequestHandler = async (event) => {
         try {
           logEvent('chat.input', {
             history,
-            context: liveChatContext(id, getChat(spaceId, thread).launch),
+            context: liveChatContext(id, getChat(spaceId, thread).launch, view),
             version: current?.version,
           });
           send('status', { message: 'Thinking about your request…' });
@@ -167,7 +182,7 @@ export const POST: RequestHandler = async (event) => {
               spaceId,
               chatId: thread,
               appletId: id,
-              context: liveChatContext(id, getChat(spaceId, thread).launch),
+              context: liveChatContext(id, getChat(spaceId, thread).launch, view),
               effort,
               onTool: (call) => {
                 const item = { ...call, prompt: message };

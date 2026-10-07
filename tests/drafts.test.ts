@@ -101,3 +101,31 @@ test('drafts cannot cross chats and stale builds cannot overwrite a newer live r
   await assert.rejects(() => fresh.execute('publish_draft', { revision: 1 }), /live app changed/);
   assert.equal(storage.revision(applet.id).title, 'A newer change');
 });
+
+test('the evaluated form bug blocks publication; corrected drafts report actual test coverage', async () => {
+  const { tools, space } = setup();
+  await tools.execute('write_draft', {
+    revision: 0,
+    ...content,
+    source: '<input pattern="[0-9]+([.][0-9]{1,2})?" />',
+  });
+  await assert.rejects(() => tools.execute('test_draft', { revision: 1 }), /Svelte interpolation/);
+  await assert.rejects(() => tools.execute('publish_draft', { revision: 1 }), /test_draft/);
+  assert.equal(storage.spaceApplets(space.id).length, 0);
+  await tools.execute('edit_draft', {
+    revision: 1,
+    field: 'source',
+    search: 'pattern="[0-9]+([.][0-9]{1,2})?"',
+    replace: 'pattern={"[0-9]+([.][0-9]{1,2})?"}',
+  });
+  const result = (await tools.execute('test_draft', { revision: 2 })) as any;
+  assert.equal(result.tests.length, 1);
+  assert.deepEqual(result.coverage, {
+    uiCompiled: true,
+    inputPatternsValidated: true,
+    backendTestsRun: true,
+    browserWorkflowsTested: false,
+  });
+  await tools.execute('publish_draft', { revision: 2 });
+  assert.equal(storage.spaceApplets(space.id).length, 1);
+});

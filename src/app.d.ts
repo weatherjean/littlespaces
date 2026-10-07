@@ -6,6 +6,7 @@ declare global {
   }
   interface Window {
     applet: {
+      onDataChanged(listener: () => void | Promise<void>): () => void;
       schedules: {
         save(input: {
           key: string;
@@ -29,7 +30,10 @@ declare global {
         list(): Promise<import('./lib/types').Notification[]>;
         cancel(key: string): Promise<{ cancelled: boolean }>;
       };
-      chat: { open(options: import('./lib/types').ChatLaunch): Promise<{ id: string }> };
+      chat: {
+        open(options: import('./lib/types').ChatLaunch): Promise<{ id: string }>;
+        setContext(options: import('./lib/types').ChatLaunch | null): Promise<void>;
+      };
       photos: {
         pick(): Promise<import('./lib/photo-types').PhotoData | null>;
         get(id: string): Promise<import('./lib/photo-types').PhotoData>;

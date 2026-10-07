@@ -46,6 +46,7 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
           HOST: '127.0.0.1',
           PORT: String(port),
           APP_DIAGNOSTICS: 'off',
+          APP_DEV_CONTROL_TOKEN: 'a'.repeat(43),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -78,6 +79,15 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
   const spaceId = '00000000-0000-4000-8000-000000000001';
   try {
     await start();
+    assert.equal(
+      (
+        await fetch(origin + '/api/spaces', {
+          headers: { authorization: `Bearer ${'a'.repeat(43)}` },
+        })
+      ).status,
+      401,
+      'production ignores development capabilities',
+    );
     assert.equal((await request('/api/build-plans?spaceId=x&chatId=y')).status, 401);
     const signed = await fetch(origin + '/login', {
       method: 'POST',
@@ -89,6 +99,15 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
       .getSetCookie()
       .find((value) => value.startsWith('little_spaces_session='))!
       .split(';')[0];
+    assert.equal(
+      (
+        await fetch(origin + '/api/dev/session', {
+          method: 'POST',
+          headers: { origin, cookie, authorization: `Bearer ${'a'.repeat(43)}` },
+        })
+      ).status,
+      404,
+    );
     await request('/');
     const { chat } = await (await request(`/api/spaces/${spaceId}/chats`, {})).json();
     const send = (extra: object = {}) =>
@@ -160,6 +179,13 @@ test('HTTP chat proposes, persists, approves, loads the skill, tests and publish
       model: 'test-model',
       message: 'Improve my notes app',
     };
+    for (const appContext of [
+      { appletId: 'another-app', version: 1, view: null },
+      { appletId: completed.publishedId, version: 999, view: null },
+      { appletId: completed.publishedId, version: 1, view: { task: 'x'.repeat(2001) } },
+    ]) {
+      assert.equal((await request('/api/chat', { ...updateInput, appContext })).status, 400);
+    }
     await (await request('/api/chat', updateInput)).text();
     const update = (
       await (
