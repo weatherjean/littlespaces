@@ -188,15 +188,17 @@
         bind:value
       /></label
     >
-    <button
-      class="secondary-button"
-      type="button"
-      disabled={busy || loading || !!loadError}
-      aria-pressed={valueVisible}
-      onclick={() => (valueVisible = !valueVisible)}
-      >{valueVisible ? 'Hide entered value' : 'Show entered value'}</button
-    >
-    <p>Show only reveals what you just entered; stored values are never returned.</p>
+    <div class="secret-visibility">
+      <button
+        class="secondary-button"
+        type="button"
+        disabled={busy || loading || !!loadError}
+        aria-pressed={valueVisible}
+        onclick={() => (valueVisible = !valueVisible)}
+        >{valueVisible ? 'Hide entered value' : 'Show entered value'}</button
+      >
+      <p>Show only reveals what you just entered; stored values are never returned.</p>
+    </div>
     {#each valueWarnings as warning}<p class="error" role="status">{warning}</p>{/each}
     <label class="value-field"
       >Allowed API origins<input
