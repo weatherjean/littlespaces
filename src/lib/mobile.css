@@ -573,3 +573,15 @@ summary {
     overflow: auto;
   }
 }
+
+/* The launcher and navigation act as controls, including their icons and labels. */
+.launcher,
+.primary-nav,
+.app-dock {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.launcher :is(input, textarea, .error, .notification-card, .notification-empty) {
+  -webkit-user-select: text;
+  user-select: text;
+}
