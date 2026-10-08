@@ -228,12 +228,16 @@ impl Store {
         )
     }
     pub fn applet_id(&self, space: &str) -> Result<String> {
-        first(
+        self.applet_id_optional(space)?.ok_or("Not found".into())
+    }
+    pub fn applet_id_optional(&self, space: &str) -> Result<Option<String>> {
+        Ok(query(
             &self.workspace()?,
             "SELECT applet_id FROM space_applets WHERE space_id=?",
             &[json!(space)],
-        )
-        .map(|r| text(&r, "applet_id").into())
+        )?
+        .first()
+        .map(|row| text(row, "applet_id").to_string()))
     }
     pub fn create_space(&self, name: &str, icon: &str) -> Result<Value> {
         if name.trim().is_empty() || name.len() > 200 {
@@ -338,17 +342,23 @@ impl Store {
         Ok(())
     }
     pub fn json_row(&self, table: &str, key: &str) -> Result<Value> {
+        self.json_row_optional(table, key)?
+            .ok_or("Not found".into())
+    }
+    pub fn json_row_optional(&self, table: &str, key: &str) -> Result<Option<Value>> {
         let column = if table == "build_plans" || table == "build_drafts" {
             "chat_id"
         } else {
             "id"
         };
-        first(
+        query(
             &self.workspace()?,
             &format!("SELECT data FROM {table} WHERE {column}=?"),
             &[json!(key)],
-        )
-        .and_then(|r| serde_json::from_str(text(&r, "data")).map_err(|e| e.to_string()))
+        )?
+        .first()
+        .map(|row| serde_json::from_str(text(row, "data")).map_err(|error| error.to_string()))
+        .transpose()
     }
     pub fn json_save(&self, table: &str, key: &str, value: &Value) -> Result<()> {
         let column = if table == "build_plans" || table == "build_drafts" {

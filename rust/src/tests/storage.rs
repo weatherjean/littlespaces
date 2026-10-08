@@ -309,3 +309,53 @@ fn changed_draft_or_revoked_approval_cannot_publish() {
     )
     .is_err());
 }
+
+#[test]
+fn optional_draft_reads_distinguish_missing_rows_from_corrupt_data() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let chat = crate::random_uuid();
+    assert!(store
+        .json_row_optional("build_drafts", &chat)
+        .unwrap()
+        .is_none());
+    let db = store.workspace().unwrap();
+    execute(
+        &db,
+        "INSERT INTO build_drafts VALUES(?,?)",
+        &[json!(chat), json!("{broken")],
+    )
+    .unwrap();
+    assert!(store.json_row_optional("build_drafts", &chat).is_err());
+    assert_eq!(
+        first(
+            &db,
+            "SELECT data FROM build_drafts WHERE chat_id=?",
+            &[json!(chat)]
+        )
+        .unwrap()["data"],
+        "{broken"
+    );
+    db.execute_batch("ALTER TABLE build_drafts RENAME COLUMN data TO broken")
+        .unwrap();
+    assert!(store
+        .json_row_optional("build_drafts", &chat)
+        .unwrap_err()
+        .contains("no such column"));
+}
+
+#[test]
+fn optional_applet_reads_do_not_hide_database_errors() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    assert!(store.applet_id_optional(LAUNCHER).unwrap().is_none());
+    store
+        .workspace()
+        .unwrap()
+        .execute_batch("ALTER TABLE space_applets RENAME COLUMN applet_id TO broken")
+        .unwrap();
+    assert!(store
+        .applet_id_optional(LAUNCHER)
+        .unwrap_err()
+        .contains("no such column"));
+}
