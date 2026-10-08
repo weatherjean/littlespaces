@@ -1,56 +1,31 @@
 # LittleSpaces
 
-> **Work in progress.** Expect bugs and breaking changes. Back up your data; this isn't ready for critical use.
+A private workspace where an owner creates and uses personal apps through conversation.
 
-![LittleSpaces — Make your own apps. Just ask.](docs/assets/readme-banner.gif)
+One Rust executable owns owner authentication, direct ChatGPT integration, agent jobs/tools, SQLite, restricted Rhai backend actions, HTTP, schedules and commits. It embeds a Preact shell and Preact/HTM applet runtime. Applets run in sandboxed iframes. Ordinary app usage is local and needs no model request.
 
-**Make your own apps. Just ask.**
+This clean rewrite has no users and is not released. It has no runtime Node, Codex, QuickJS or Bubblewrap, and no legacy import or compatibility path. Existing development databases and authentication files are never deleted by setup/source cleanup; initialize a fresh directory.
 
-Describe what you need. Build it with ChatGPT. Make it yours.
+## Build and run
 
-A plant journal, a reading tracker, that oddly specific tool you've always wanted. Create personal apps through conversation, use them from your own launcher, and keep changing them as your needs change. Runs on your own server, with one private workspace per owner.
-
-## Rust migration branch
-
-This branch develops the Rust/Axum host with Preact/HTM applet frontends and plain-JavaScript actions in fresh OS-isolated QuickJS workers. Rust owns storage, permissions, credentials, HTTP brokering, validation, and commits. It includes owner authentication, ChatGPT chat and app generation, revision history, photos, schedules, notifications, voice confirmation, and workspace import.
-
-Use Node 24+ and Rust 1.84+. Linux also requires Bubblewrap; macOS uses `sandbox-exec`.
+Node is needed only to build the frontend. Rust 1.84+ and Node 24+:
 
 ```sh
-npm ci
-npm run dev:rust
+npm ci --prefix web
+npm run build --prefix web
+cargo build --manifest-path rust/Cargo.toml --release --locked
+rust/target/release/little-spaces init .data-monolith-rework
+rust/target/release/little-spaces serve .data-monolith-rework
 ```
 
-Open the private setup link printed in the terminal. See [contributor commands](CONTRIBUTING.md) and [the Rust guide](docs/rust-migration.md) for builds, verification, configuration, and the applet SDK. Local Rust data defaults to `.data-rust`, separate from the preserved legacy `.data` workspace.
+Open the private owner-setup link printed by the server. Choose a password, sign in, then Continue with ChatGPT in Settings. The server binds `127.0.0.1:5175`; supply another port after the workspace argument if needed. ChatGPT OAuth uses the same local server at `/auth/callback`. After building, the executable runs without Node or a static asset directory.
 
-AI chat and app creation require an eligible ChatGPT account and the pinned Codex app-server executable installed by npm. Connect through Settings; separate API keys are not currently supported. Applet HTTP access needs both action declarations and owner-managed per-app grants.
+Create an app, describe it in its build conversation, select an available model and send. The agent edits a persisted draft, tests backend contracts and fixes diagnostics. Preview the tested revision, review its isolated UI and choose Approve preview and publish. Every published backend can use every workspace secret; values remain host-only. The optional development browser harness can automate frontend assertions and let the agent publish after matching backend/browser evidence.
 
-The SvelteKit/Node implementation is preserved for comparison and migration. Unqualified npm commands still target it; explicit `*:rust` commands target this branch's new implementation. Major source moves are proposed in [the repository structure review](docs/repository-structure.md).
+Real-account requests consume ChatGPT usage. Sign-in and real-model generation still need explicit user testing; the passing scripted-provider/browser regression does not establish that milestone. No private Codex authentication cache is used. [Connection details](docs/rhai/sign-in.md).
 
-## Release status
+## Development
 
-Routine checks are defined in [GitHub Actions](.github/workflows/rust.yml): Rust/frontend quality and Linux AMD64/ARM64 browser regressions with isolated workers. The local Docker test image remains optional tooling. These checks do not establish production readiness or support for a particular VPS size. Stage 2 will target a production Docker image with Docker Compose and test that deployment image. Deployment implementation, target-host resource validation, backup/restore exercises, and comprehensive system testing remain later stages. There is no supported Rust production deployment flow yet.
+[Contributing](CONTRIBUTING.md), [Rhai/Preact SDK](docs/rhai/sdk.md), [implementation status and release limits](docs/rhai/status.md), [agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md).
 
-## Docs
-
-- [Rust architecture, applet SDK and verification](docs/rust-migration.md)
-- [Contributing](CONTRIBUTING.md) · [Repository structure and next quality round](docs/repository-structure.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
-- Preserved Node/SvelteKit guides: [setup](docs/get-started.md), [self-hosting](docs/self-hosting.md), [project reference](docs/project-reference.md), [backend API](docs/applet-backends.md), [diagnostics](docs/diagnostics.md)
-
-[MIT License](LICENSE) © 2026 weatherjean
-
-## Legacy browser tests
-
-Install the test browsers once with `npx playwright install chromium webkit`, then run
-`npm run test:e2e`. The suite builds the app and checks iPhone (WebKit), Android,
-320px phones, and desktop layouts. Each worker starts a private local server with a
-temporary database, synthetic login, and mock model provider; it never uses your
-workspace or ChatGPT account. Temporary data is removed when the worker exits.
-
-Use `npm run test:e2e:ui` for Playwright's interactive runner, or
-`npx playwright show-report` to inspect the latest results. Screenshots are attached
-for each reviewed screen; failures also include traces. These are behavioral and
-layout checks, not pixel-baseline comparisons. Device emulation does not reproduce
-the iOS software keyboard or installed-PWA safe areas, so those still need a real
-phone check before release.
+Routine checks run in GitHub Actions on Linux AMD64 and ARM64. Local focused checks and the development browser workflow are documented in Contributing. Production Docker/Compose and comprehensive system testing remain later stages. Native-callback preemption and a hard action-memory ceiling are not established; the application is ready for development testing, not release sign-off.

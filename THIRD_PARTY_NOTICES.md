@@ -1,15 +1,9 @@
 # Third-party notices
 
-LittleSpaces source is licensed under [MIT](LICENSE). Third-party components retain their own licenses.
+LittleSpaces source is MIT licensed. The frontend bundles Preact and HTM; their MIT notices are retained in [licenses/PREACT.txt](licenses/PREACT.txt) and [licenses/HTM.txt](licenses/HTM.txt). Esbuild builds these assets; Node, esbuild and Playwright are development dependencies, not application runtime processes.
 
-| Component                  | Current source                                             | Notice                                                                         |
-| -------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Preact                     | npm `preact` 10.29.8, used by the shell and applet runtime | [MIT license](licenses/PREACT.txt)                                             |
-| HTM                        | npm `htm` 3.1.1, used by the applet runtime                | [Apache 2.0 license](licenses/HTM.txt)                                         |
-| rquickjs                   | Cargo `rquickjs` 0.9.0                                     | [MIT license](licenses/RQUICKJS.txt)                                           |
-| QuickJS                    | QuickJS source bundled by `rquickjs-sys` 0.9.0             | [MIT license and upstream copyrights](licenses/QUICKJS.txt)                    |
-| Playwright seccomp profile | Adapted profile in `deploy/docker/seccomp.json`            | [Apache 2.0 license and upstream copyrights](deploy/docker/PLAYWRIGHT-LICENSE) |
+The Rust executable uses Rhai (MIT OR Apache-2.0); both licenses are retained in [licenses/RHAI-MIT.txt](licenses/RHAI-MIT.txt) and [licenses/RHAI-APACHE.txt](licenses/RHAI-APACHE.txt). SQLite is bundled by rusqlite and is public domain. Other Rust dependencies include Axum/Tokio, reqwest/rustls/ring, serde, jsonschema, RustCrypto AES-GCM/scrypt/SHA-256, jsonwebtoken, chrono/croner, UUID and zeroize. Exact versions and transitive dependencies are locked in `rust/Cargo.lock`; the frontend dependency graph is locked in `web/package-lock.json`.
 
-The seccomp profile's upstream location and modifications are recorded in [the Rust guide](docs/rust-migration.md#docker-and-real-chatgpt-testing). License texts are retained from the installed locked packages; update the notices when changing their versions. `build:rust:web` copies these notices and the LittleSpaces license to `build-rust/web/licenses/` so they accompany bundled assets. Retain them when distributing the executable and web assets together.
+There is no QuickJS, rquickjs, Codex executable, Bubblewrap or Svelte runtime in this implementation. Their superseded source/dependency notices were removed with the old implementation. Public branding assets remain repository-owned source assets.
 
-This is a focused notice inventory, not a complete dependency audit. npm and Cargo lockfiles describe the remaining direct and transitive dependencies. The pinned Codex executable, browser binaries, container base images, and other dependencies require their applicable notices and distribution terms when packaged. Complete that inventory for the chosen release artifact before publishing binaries or images; the regression image is test tooling.
+Before distributing a release, generate and review a complete notice bundle for the selected target's transitive dependency graph, including bundled native libraries. This source notice is not a claim that release-packaging review has been completed; production packaging remains a later stage in the agreed plan.

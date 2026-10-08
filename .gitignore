@@ -10,7 +10,7 @@ build/
 playwright-report/
 test-results/
 
-# Rust / Preact migration artifacts
+# Rust / Preact build artifacts and private workspaces
 rust/target/
 build-rust/
 .data-rust*/

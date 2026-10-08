@@ -1,33 +1,51 @@
 # Contributing to LittleSpaces
 
-The clean rewrite lives on `rework/rust-monolith-rhai`. Read [the agreed implementation sequence](docs/monolith-rework.md) and [terminology](CONTEXT.md). LittleSpaces has no users; we support only the new implementation. Do not introduce importers, old database support, grants or a second runtime. Never delete local databases, vault keys or authentication files during source cleanup.
+Read [the agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md) and [implementation status](docs/rhai/status.md). This is a clean rewrite on `rework/rust-monolith-rhai`; no old formats, importers, grants, runtime fallbacks or maintained legacy implementation exist. Never delete local databases, vault keys or authentication files during source cleanup.
 
-The compiled Rust crate uses `src/main.rs`, `src/lib.rs` and `src/core/`. Superseded Rust/Svelte/web files still await step 4 cleanup and are not part of this core. Existing npm startup and legacy browser-test commands do not exercise the rewrite. The current executable is a local authoring/action CLI; owner HTTP sessions, direct ChatGPT integration and the Preact shell remain to be implemented. No unauthenticated HTTP endpoint is exposed by this interim executable.
-
-## Core development
-
-Rust 1.84+ is the target minimum. Use a fresh workspace directory:
+## Development
 
 ```sh
+npm ci --prefix web
+npm run build --prefix web
 cargo build --manifest-path rust/Cargo.toml --locked
-rust/target/debug/little-spaces init .data-monolith
-rust/target/debug/little-spaces create .data-monolith Tasks examples/tasks-rhai.json
+rust/target/debug/little-spaces init .data-monolith-rework
+rust/target/debug/little-spaces serve .data-monolith-rework
 ```
 
-`create` prints app/draft/revision IDs. Pass the app and revision to `test`, then `publish`. Run `run <workspace> <app> <revision> <action> '<input JSON>'` or `dry-run` with the same arguments. `secrets <workspace>` lists only names and configured status. `secret-put <workspace> <name>` reads the exact value from stdin (including any newline); use a private input source. Do not place credentials in argv, scripts or checked-in files. `secret-delete` removes the named value. `evidence <workspace> <app> <invocation>` reports durable external-operation evidence. `effect-resolve <workspace> <app> <operation> <applied|not_applied|accept_unknown>` records an explicit owner decision after inspecting the remote service; it preserves the original evidence. Agent tools cannot acknowledge effects.
+Rust 1.84+; Node 24+ for builds/browser tests only. Frontend assets are embedded by `rust/build.rs`. Cargo can compile core tests without assets, but `serve` requires a frontend build. The CLI never imports previous workspace files. If an unreleased schema version changes, initialize another fresh directory; there is no migration machinery.
 
-This local CLI relies on the workspace owner's OS account and restricted workspace/key files. It is not a remotely authenticated product server. Published revisions currently require exact backend assertions and contracts; frontend verification is a distinct upcoming gate. See [the SDK and execution limits](docs/rhai/sdk.md).
+The owner-setup link is private. Never commit passwords, OAuth tokens, owner databases, encryption keys, account screenshots or generated output. The PEM under `rust/tests/fixtures/` is an intentionally generated synthetic signing key, trusted only by its matching fixture JWKS; production identity validation fetches OpenAI's JWKS.
 
-## Checks
+## Focused checks
 
 ```sh
+npm run format:check --prefix web
+npm run build --prefix web
 cargo fmt --manifest-path rust/Cargo.toml --check
-cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --locked
+cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --locked --all-features
 cargo build --manifest-path rust/Cargo.toml --locked
 python3 scripts/monolith-smoke.py
+cargo build --manifest-path rust/Cargo.toml --locked --features development-fixtures
+cd web
+npx playwright install chromium
+npm test
 ```
 
-Tests bind temporary loopback servers for slow HTTP; they never contact ChatGPT or public services. GitHub Actions runs the focused core suite and CLI smoke on AMD64 and ARM64, plus formatting and Clippy. Do not invoke real ChatGPT tests routinely, read private Codex auth caches, or expose authentication values. Real-account experiments require fresh supported sign-in and explicit opt-in because they consume usage.
+The `development-fixtures` feature permits only a loopback synthetic model endpoint, selected by the browser test driver. Ordinary builds do not contain this override. The driver starts its own temporary workspace, fake streamed provider and authenticated browser harness, and removes only its own files. Tests never contact ChatGPT/public services or read private auth caches. GitHub Actions runs this workflow on Linux AMD64/ARM64, plus formatting/Clippy and locked builds. Real-account tests remain explicit opt-in.
 
-Node is allowed for frontend builds and browser testing when step 2 introduces them; it must remain absent from the application runtime. Docker/Compose, comprehensive system testing, release resource measurements and backup/recovery exercises belong to later stages. Source cleanup must preserve upstream notices.
+## Browser verification
+
+Without the development service, the agent tests the backend and asks the owner to review an isolated preview. Owner approval records its own verification kind. Runtime diagnostics/owner review are not automated browser assertions.
+
+To provide the agent's browser tool during development, start `web/browser-harness.mjs` with a private `LITTLESPACES_BROWSER_TOKEN` (at least 32 characters), then start the ordinary Rust executable with the same token and `LITTLESPACES_BROWSER_HARNESS=http://127.0.0.1:5176`. The token belongs only to local development processes; do not paste it into model messages or source. The harness uses Node/Playwright outside the application runtime. It drives declared frontend tests and returns assertions, errors, a bounded snapshot and synthetic screenshot filename.
+
+## CLI and recovery
+
+`create <workspace> <title> <code.json>` prints app/draft/revision IDs. `test <workspace> <app> <revision>` runs isolated backend assertions. `publish` requires exact backend evidence and frontend verification when a UI exists. `run`/`dry-run <workspace> <app> <revision> <action> '<input JSON>'` use the shared executor. UI/chat/schedules use that same pipeline.
+
+`secrets <workspace>` lists only names/configured status. `secret-put <workspace> <name>` reads the exact value from stdin; use a private input source. `secret-delete` removes a value. `owner-reset <workspace>` reads a replacement password from stdin and revokes sessions. These commands rely on the local owner's OS account and restricted workspace files; stop the server before administrative CLI writes.
+
+`evidence <workspace> <app> <invocation>` reports durable external effects. `effect-resolve <workspace> <app> <operation> <applied|not_applied|accept_unknown>` records an explicit owner decision after inspecting the remote service, preserving original evidence. Scripts and agent tools cannot acknowledge effects. Restart marks unfinished work interrupted; no model request, tool call or potentially dispatched write is automatically replayed. The server takes an OS workspace lock before recovery.
+
+Docker/Compose, backup/recovery drills, comprehensive system testing, adversarial memory measurements and release packaging/notices review belong to later stages. Preserve upstream notices and keep authentication values out of diagnostics.
