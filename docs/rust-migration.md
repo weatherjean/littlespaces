@@ -6,7 +6,7 @@ The migration branch is `migration/rust-preact-quickjs`. The existing SvelteKit 
 
 A Rust/Axum server serves a Preact launcher, a sandboxed Preact/HTM journal applet, and an isolated QuickJS backend worker. Entries persist in SQLite and survive server restarts. The launcher reuses the original theme, shared CSS, liquid-glass treatments, Orbit mark, launcher markup and responsive navigation. Settings includes device speech selection and playback controls.
 
-This is a local migration preview, not the production replacement. The built-in journal is a fixture for exercising the new architecture. ChatGPT sign-in, chat, generated app publication, revision history, photos, schedules, notifications, production owner authentication, and existing workspace migration are still provided by the original application. The preview's Chat and Voice routes explain that their migration is pending.
+The Rust implementation now includes owner authentication, ChatGPT sign-in and chat, generated app publication, revision history, photos, schedules, notifications, voice confirmation and workspace import. The built-in journal remains an authoring fixture. The original SvelteKit implementation is preserved; switching production data or deployment requires an explicit, verified migration. Docker and real ChatGPT verification are described below.
 
 ## Run
 
@@ -21,7 +21,7 @@ cargo build --manifest-path rust/Cargo.toml --locked
 npm run start:rust
 ```
 
-Open the private sign-in URL printed in the terminal. The preview binds only to IPv4 loopback (`127.0.0.1:5180` by default). It refuses public binding until production authentication and proxy handling are ported. The temporary sign-in capability changes on restart; it becomes an HttpOnly, SameSite=Strict session cookie. Mutating API requests require the exact configured origin.
+On the first run, open the private setup URL printed in the terminal and configure the owner account. The server binds to IPv4 loopback (`127.0.0.1:5180` by default). Non-loopback binding requires an HTTPS `APP_ORIGIN` and a trusted TLS proxy. Owner sessions use HttpOnly, SameSite=Strict cookies, and mutating API requests require the configured origin.
 
 `RUST_LISTEN` can select another loopback address/port. `RUST_DATA_DIR` defaults to `.data-rust`. This database is separate from the current `.data` workspace; there is no automatic import or modification of existing data.
 
@@ -31,7 +31,7 @@ After building, the server needs only its executable and `build-rust/web`. It ru
 
 Applet frontends use plain JavaScript and HTM tagged templates with Preact. They use `window.appletUI` (`html`, `h`, `render`, `useState`, `useEffect`) and the scoped `window.applet.call(action, input)` capability. The shared runtime is bundled once when releasing LittleSpaces. There is no JSX transformation, TypeScript stripping, dependency installation, Tailwind compilation, or bundling when opening this applet.
 
-The release includes a finite Tailwind utility vocabulary: common layout, spacing, sizes, eight color palettes, typography, and `sm`, `md`, `lg`, `hover`, `focus`, and `disabled` variants. The exact vocabulary is generated as `build-rust/web/applet-utilities.json` by `scripts/migration/build-web.mjs`. Arbitrary-value utilities, arbitrary variants, and combinations not in that manifest are unsupported. Use inline styles or custom CSS for those cases. Future publication must validate utilities against this manifest and provide useful feedback; that validator is not yet implemented.
+The release includes a finite Tailwind utility vocabulary: common layout, spacing, sizes, eight color palettes, typography, and `sm`, `md`, `lg`, `hover`, `focus`, and `disabled` variants. The exact vocabulary is generated as `build-rust/web/applet-utilities.json` by `scripts/migration/build-web.mjs`. Arbitrary-value utilities, arbitrary variants, and combinations not in that manifest are unsupported. Use inline styles or custom CSS for those cases. Publication validates literal utility classes against this manifest and reports unsupported names. Dynamically assembled classes cannot always be checked statically.
 
 The first build generated 4,396 classes, approximately 37 KB gzipped CSS and a 6 KB gzipped Preact/HTM runtime. Re-run the build to measure after changes. The stylesheet includes applet-local Preflight; it does not reset the host page.
 
@@ -39,9 +39,29 @@ Applet documents retain an opaque-origin iframe with `sandbox="allow-scripts all
 
 ## Backend execution
 
-The same Rust executable supports a private `--worker` mode. Each action gets a fresh QuickJS runtime in a separate OS-isolated process. No Node globals, browser APIs, module loader, filesystem bindings, or networking bindings are installed. The initial action context offers `db.get/list/set/remove`, `uuid`, and `now`; each `uuid()` call generates a fresh random identifier through a host binding. The host-brokered HTTP integration API is pending.
+The Rust executable supports a private `--worker` mode. Every invocation gets a fresh QuickJS runtime in a separate OS-isolated process. Rust owns storage, credentials, HTTP permissions, input/output validation and commits. Applet backends remain plain JavaScript with a small versioned SDK; generated Rust, dependencies and ambient filesystem/network access are unavailable.
 
-One action is admitted at a time; excess requests receive 429 instead of accumulating in an unbounded queue. The worker has a 16 MiB QuickJS allocation budget, 256 KiB stack budget, a two-second interpreter deadline, and a three-second parent watchdog. On Linux it additionally applies a 96 MiB address-space limit. IPC is bounded to 1 MB. The host independently enforces read-only behavior and record shape/count, and commits writes in a SQLite transaction only after successful execution. External HTTP capabilities and full action schemas/catalogs are pending.
+All worker paths—including inspection, tests and debugging—share a four-worker admission limit and fail busy rather than queueing without bounds. Each worker has a 32 MiB QuickJS allocation budget, a 256 KiB stack budget, a bounded interpreter deadline and a parent watchdog. Calls have thirty seconds, tests/debugging ten seconds, and Linux additionally applies a 96 MiB address-space limit. IPC is bounded to 4 MB, including reads before allocation can exceed that limit. OS isolation remains mandatory.
+
+Published revisions contain a validated SDK-v1 action contract bound to the backend source hash. Actions declare input and optional output JSON Schemas, local read/write intent and HTTP capabilities. Older revisions get a content-addressed catalog cache without rewriting their source. Ordinary published action calls use the saved contract rather than launching another inspection worker. Frontend calls carry their mounted revision; stale calls fail instead of silently executing new code.
+
+Actions receive an app-scoped record snapshot and return only changed/deleted records. Rust checks limits and read-only behavior, then applies incremental SQL updates inside a transaction after checking the revision and original snapshot. Existing records are not deleted and reinserted. Failed actions commit nothing. This still copies the input snapshot; paginated database access is not implemented.
+
+HTTP requests need both the action's declaration and owner-managed per-app grants in Settings → Apps → API access. Credential origin restrictions apply in addition. Grants default to empty, live outside code revisions, and cannot be changed by app code or AI tools. Public HTTPS requests also need grants. Older integrations need an ordinary update to declare their HTTP access and owner grants; workspace secret permissions alone no longer authorize applet HTTP. Existing app data and local-only actions remain usable.
+
+For example, an action declares `http: [{ origin: 'https://api.example.com', methods: ['GET'], secrets: ['SERVICE_KEY'] }]`. The host enforces those declarations independently of JavaScript. The broker blocks private destinations, redirects and routing overrides, pins DNS results, bounds DNS/network time and request/response sizes, and keeps credentials out of workers. Read-only actions can use only GET/HEAD; authors must still choose endpoints that actually have no side effects.
+
+External writes are recorded before dispatch, with an operation ID, action, origin, method, timestamps and response status when available. No request bodies, credential values or credential-bearing paths are stored in this ledger. Interrupted requests retain an uncertain outcome; receiving an HTTP response is not proof of a business outcome or a local commit. External effects cannot be rolled back with SQLite. Use provider idempotency keys where supported and inspect outcomes before considering a retry.
+
+### AI debugging
+
+`read_applet_sdk` supplies the supported JavaScript contract and reference type declarations. TypeScript syntax is not compiled or executed. Test calls use the same Rust JSON Schema validation as production, including optional output schemas. Read-only writes fail immediately, and failed calls restore their temporary records.
+
+`debug_action` dry-runs a published action using empty records by default, or its app's record snapshot with `useRecords:true`. `debug_draft_action` uses fresh records from an exact draft revision and requires current build approval and skill loading. Both return results, proposed changes/deletions, bounded console messages, duration and errors; neither commits data or uses live HTTP/credentials. Ordered mocks have the shape `{url, method, response:{status,ok,data}}`; unmatched requests fail. Separate read-only connection probes remain available for real verification with permissions.
+
+`read_app_diagnostics` retrieves bounded sanitized current-revision action and frontend reports. `inspect_frontend` retrieves the last captured rendered text, control labels/states, viewport and overflow with its capture time. Initial render, subsequent DOM changes, errors, unhandled rejections and console warn/error messages are captured within limits. Frontends may report additional context through `window.applet.debug.report(message, context)` or request a snapshot through `debug.snapshot()`. Captures omit input values; authors must not include credentials or private blobs in diagnostic context. Reports are untrusted historical evidence, not a live browser inspection or proof of browser testing. `read_external_operations` exposes external-write outcomes for the scoped app. Voice and scheduled turns cannot access debugging tools.
+
+Per-app diagnostics retain at most 100 reports, each bounded to 32 KB; reads are limited to thirty reports and filtered by revision. Frontend reports from a stale mounted revision are rejected. OS and interpreter protections remain host responsibilities and are tested independently of generated behavioral tests.
 
 ## Verification
 
@@ -68,3 +88,23 @@ The preview is not yet evidence that the complete application fits a 512 MiB Dig
 5. Package immutable releases and DigitalOcean provisioning, backup, update, recovery and resource verification.
 
 Rolling back this source branch does not migrate data between implementations. Keep the two data directories separate until a tested import/rollback procedure exists.
+
+## Docker and real ChatGPT testing
+
+Run `npm run test:rust:docker` to build the disposable Linux test image and run the Rust unit executable, frontend static checks and browser regression suite. The container uses two CPUs, a 2 GiB memory limit, a PID limit, a non-root test user, and no published ports. The compiler stays in a separate build stage. `.dockerignore` allows only required source and excludes local workspaces, credential files and build artifacts. Results and screenshots are copied to `build-rust/docker-tests/<run>/` before the test container is removed. Use `-- --skip-build` only when the existing image already contains the core changes being tested.
+
+The test seccomp profile is based on [Playwright's v1.63.0 profile](https://github.com/microsoft/playwright/blob/v1.63.0/utils/docker/seccomp_profile.json), with the mount operations needed for unprivileged Bubblewrap namespaces and an ENOSYS response for `clone3` so libc can use its supported `clone` fallback. The container does not use `--privileged`, `SYS_ADMIN`, host PID/network namespaces, or an unconfined seccomp profile. The backend sandbox no longer mounts procfs: QuickJS does not need it, and Docker's masked proc paths prevent that nested mount. Mandatory worker isolation remains enabled; a failed sandbox prevents publication and execution.
+
+Live tests are explicit opt-in and consume real ChatGPT plan usage:
+
+```sh
+export LIVE_CHATGPT_AUTH_FILE=/private/path/to/codex/auth.json
+export LIVE_CHATGPT_EMAIL=your-account-email
+npm run test:rust:docker -- --live
+```
+
+Use the app's existing private test login, or sign in privately first. Do not paste tokens into chat or add them to source. The supported [Codex auth-cache method](https://learn.chatgpt.com/docs/auth#fallback-authenticate-locally-and-copy-your-auth-cache) lets a headless environment reuse a ChatGPT login. The runner mounts only that file read-only, copies it with private permissions in the disposable container, and drops to the non-root test user before starting the real app/server/agent workflow. Existing app records and owner databases are not copied or modified. The test driver's current source is mounted read-only for live runs; the application executable and frontend assets come from the built image.
+
+The live driver has real ChatGPT propose, test and publish **Pocket Tasks** and **Ljubljana Weather**. It drives the generated task UI, writes another task through scoped chat, exercises frontend diagnostics and action dry runs without committing, then requests a scoped UI update and checks that records survive. The weather app uses a granted public Open-Meteo GET endpoint and a real read-only connection probe. No external API key is required. Reports include the selected model, turn durations, tool outcomes, assertions and screenshots. No tokens or copied auth files are included in exported artifacts. An optional `LIVE_TEST_MODEL` selects an available account model; otherwise the account's first available model is used.
+
+`npm run test:rust:live` runs the same live driver directly on the host with those environment variables. All app data lives in a fresh temporary workspace and is removed after the run. Browser snapshots and console reports remain historical evidence; the browser driver separately verifies UI interactions. The regression suite also checks four concurrent isolated read actions and rejection of an excess request. These tests do not establish that the complete service fits a 512 MiB VPS or validate a particular production host's kernel/AppArmor configuration.

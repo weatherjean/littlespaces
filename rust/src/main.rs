@@ -3,6 +3,7 @@ mod auth;
 mod automation;
 mod backend;
 mod broker;
+mod capabilities;
 mod cli;
 mod codex;
 mod diagnostics;
@@ -155,7 +156,7 @@ async fn server() -> Result<(), Box<dyn std::error::Error>> {
         origin: origin.trim_end_matches('/').into(),
         secure,
         auth,
-        actions: Arc::new(Semaphore::new(1)),
+        actions: Arc::new(Semaphore::new(4)),
         turns: Arc::new(Semaphore::new(1)),
         codex: Arc::new(AsyncMutex::new(None)),
         account: Arc::new(Mutex::new(Value::Null)),

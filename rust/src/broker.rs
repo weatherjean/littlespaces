@@ -77,10 +77,14 @@ pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Va
             url.query_pairs_mut().append_pair(key, &value);
         }
     }
-    let addresses = tokio::net::lookup_host((host.as_str(), 443))
-        .await
-        .map_err(|_| "API DNS lookup failed")?
-        .collect::<Vec<_>>();
+    let addresses = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), 443)),
+    )
+    .await
+    .map_err(|_| "API DNS lookup timed out")?
+    .map_err(|_| "API DNS lookup failed")?
+    .collect::<Vec<_>>();
     if addresses.is_empty()
         || addresses.iter().any(|addr| match addr.ip() {
             IpAddr::V4(ip) => !public(ip),
@@ -130,7 +134,7 @@ pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Va
         }
     }
     if !input["body"].is_null() {
-        if input["body"].to_string().len() > 256000 {
+        if input["body"].to_string().len() > 128 * 1024 {
             return Err("API body is too large".into());
         }
         req = req.json(&input["body"]);

@@ -248,3 +248,230 @@ fn cron_preserves_day_of_week_and_extended_weekday_semantics() {
         );
     }
 }
+
+#[test]
+fn app_http_grants_are_private_persistent_and_independent_of_code_restore() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let a = crate::random_uuid();
+    let b = crate::random_uuid();
+    let space_a = store.create_space("A", "grid").unwrap();
+    let space_b = store.create_space("B", "grid").unwrap();
+    let content = json!({"title":"App","description":"","source":"one","bundle":"one"});
+    let revision = store
+        .publish(text(&space_a, "id"), &a, &content, None)
+        .unwrap();
+    store
+        .publish(text(&space_b, "id"), &b, &content, None)
+        .unwrap();
+    assert_eq!(crate::capabilities::grants(store, &a).unwrap(), json!([]));
+    let policy =
+        json!([{"origin":"https://api.example.com","methods":["GET"],"secrets":["SERVICE_KEY"]}]);
+    crate::capabilities::save(store, &a, &policy).unwrap();
+    assert_eq!(crate::capabilities::grants(store, &b).unwrap(), json!([]));
+    let request = json!({"url":"https://api.example.com/items","headers":{"Authorization":{"secret":"SERVICE_KEY","prefix":"Bearer "}}});
+    assert!(crate::capabilities::check(&policy, &request).is_ok());
+    assert!(
+        crate::capabilities::check(&crate::capabilities::grants(store, &b).unwrap(), &request)
+            .is_err()
+    );
+    assert!(crate::capabilities::check(
+        &policy,
+        &json!({"url":"https://api.example.com/items","method":"POST"})
+    )
+    .is_err());
+    assert!(crate::capabilities::check(&policy,&json!({"url":"https://api.example.com/items","headers":{"Authorization":{"secret":"OTHER_KEY"}}})).is_err());
+    crate::capabilities::save(store, &a, &json!([])).unwrap();
+    store
+        .publish(text(&space_a, "id"), &a, &revision, Some(1))
+        .unwrap();
+    assert_eq!(crate::capabilities::grants(store, &a).unwrap(), json!([]));
+    assert!(crate::capabilities::normalize(
+        &json!([{"origin":"http://api.example.com","methods":["GET"],"secrets":[]}])
+    )
+    .is_err());
+}
+
+#[test]
+fn diagnostics_are_bounded_sanitized_and_partitioned_by_app_and_revision() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let a = crate::random_uuid();
+    let b = crate::random_uuid();
+    store.applet(&a, true).unwrap();
+    store.applet(&b, true).unwrap();
+    for i in 0..105 {
+        crate::diagnostics::record(
+            store,
+            &a,
+            1,
+            "frontend.error",
+            &json!({"message":i,"password":"private"}),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        query(
+            &store.applet(&a, false).unwrap(),
+            "SELECT COUNT(*) AS n FROM app_diagnostics",
+            &[]
+        )
+        .unwrap()[0]["n"],
+        100
+    );
+    let reports = crate::diagnostics::read(store, &a, 1, None, 30).unwrap();
+    assert_eq!(reports["reports"].as_array().unwrap().len(), 30);
+    assert!(!reports.to_string().contains("private"));
+    assert_eq!(
+        crate::diagnostics::read(store, &a, 2, None, 30).unwrap()["reports"],
+        json!([])
+    );
+    assert_eq!(
+        crate::diagnostics::read(store, &b, 1, None, 30).unwrap()["reports"],
+        json!([])
+    );
+}
+
+#[test]
+fn incremental_commits_touch_only_changed_rows_and_reject_stale_snapshots() {
+    use std::collections::BTreeMap;
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let space = store.create_space("Journal", "grid").unwrap();
+    let id = crate::random_uuid();
+    let content = json!({"title":"Journal","description":"","source":"one","bundle":"one"});
+    let revision = store
+        .publish(text(&space, "id"), &id, &content, None)
+        .unwrap();
+    let db = store.applet(&id, false).unwrap();
+    db.execute_batch("INSERT INTO records VALUES('untouched','1'),('changed','2'),('removed','3'); CREATE TABLE audit(operation TEXT,key TEXT); CREATE TRIGGER audit_delete AFTER DELETE ON records BEGIN INSERT INTO audit VALUES('delete',old.key); END; CREATE TRIGGER audit_insert AFTER INSERT ON records BEGIN INSERT INTO audit VALUES('insert',new.key); END; CREATE TRIGGER audit_update AFTER UPDATE ON records BEGIN INSERT INTO audit VALUES('update',new.key); END;").unwrap();
+    let old = BTreeMap::from([
+        ("untouched".into(), json!(1)),
+        ("changed".into(), json!(2)),
+        ("removed".into(), json!(3)),
+    ]);
+    let changed = BTreeMap::from([
+        ("untouched".into(), json!(1)),
+        ("changed".into(), json!(4)),
+        ("added".into(), json!(5)),
+    ]);
+    crate::backend::commit_records(store, &id, &revision["version"], &old, &changed, false)
+        .unwrap();
+    let audit = query(&db, "SELECT * FROM audit ORDER BY key", &[]).unwrap();
+    assert_eq!(audit,json!([{"operation":"insert","key":"added"},{"operation":"update","key":"changed"},{"operation":"delete","key":"removed"}]).as_array().unwrap().clone());
+    let before = store.records(&id).unwrap();
+    assert!(
+        crate::backend::commit_records(store, &id, &revision["version"], &old, &old, false)
+            .is_err()
+    );
+    store
+        .publish(text(&space, "id"), &id, &content, None)
+        .unwrap();
+    let error =
+        crate::backend::commit_records(store, &id, &revision["version"], &changed, &old, true)
+            .unwrap_err();
+    assert!(error.contains("External changes may already have occurred"));
+    assert_eq!(store.records(&id).unwrap(), before);
+}
+
+#[tokio::test]
+async fn action_contracts_are_bound_to_source_and_effects_are_host_checked() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let space = store.create_space("App", "grid").unwrap();
+    let id = crate::random_uuid();
+    let source = "const actions={list:{readOnly:true,run:()=>[]}}";
+    let action = json!({"name":"list","description":"List","parameters":{"type":"object"},"output":true,"readOnly":true,"http":[],"effects":{"records":"read","http":"none"}});
+    let actions = vec![action.clone()];
+    let content = json!({"title":"App","description":"","source":"ui","bundle":"ui","backend":source,"actionContract":crate::backend::contract(source,&actions).to_string()});
+    let mut revision = store
+        .publish(text(&space, "id"), &id, &content, None)
+        .unwrap();
+    assert_eq!(
+        crate::backend::catalog(store, &id, &revision)
+            .await
+            .unwrap(),
+        actions
+    );
+    revision["backend"] = json!("different source");
+    assert!(crate::backend::catalog(store, &id, &revision)
+        .await
+        .unwrap_err()
+        .contains("does not match"));
+    let mut forged = action;
+    forged["effects"]["records"] = json!("write");
+    assert!(crate::backend::validate_catalog(&[forged.clone()]).is_err());
+    forged["effects"]["records"] = json!("read");
+    forged["effects"]["http"] = json!("write");
+    forged["http"] = json!([{"origin":"https://api.example.com","methods":["POST"],"secrets":[]}]);
+    assert!(crate::backend::validate_catalog(&[forged]).is_err());
+}
+
+#[tokio::test]
+async fn debugging_tools_do_not_grant_permissions_or_bypass_turn_restrictions() {
+    use std::sync::{Arc, Mutex};
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let space = store.create_space("App", "grid").unwrap();
+    let id = crate::random_uuid();
+    store
+        .publish(
+            text(&space, "id"),
+            &id,
+            &json!({"title":"App","description":"","source":"ui","bundle":"ui"}),
+            None,
+        )
+        .unwrap();
+    let app = crate::App {
+        store: store.clone(),
+        assets: std::path::PathBuf::new(),
+        origin: "http://localhost".into(),
+        secure: false,
+        auth: Arc::new(Auth::new(store).unwrap()),
+        actions: Arc::new(tokio::sync::Semaphore::new(4)),
+        turns: Arc::new(tokio::sync::Semaphore::new(1)),
+        codex: Arc::new(tokio::sync::Mutex::new(None)),
+        account: Arc::new(Mutex::new(json!({}))),
+        models: Arc::new(Mutex::new(json!([]))),
+        cancellations: Arc::new(Mutex::new(std::collections::HashMap::new())),
+    };
+    let mut tools = crate::tools::Tools {
+        app,
+        space: text(&space, "id").into(),
+        chat: crate::random_uuid(),
+        mode: "knowledge".into(),
+        model: "fixture".into(),
+        approved: None,
+        skill_loaded: false,
+    };
+    assert_eq!(
+        tools.execute("read_applet_sdk", json!({})).await.unwrap()["sdkVersion"],
+        1
+    );
+    assert!(!tools.skill_loaded);
+    assert!(tools
+        .execute("save_app_permissions", json!({"grants":[]}))
+        .await
+        .is_err());
+    assert!(tools
+        .execute("debug_draft_action", json!({}))
+        .await
+        .is_err());
+    for mode in ["voice", "scheduled"] {
+        tools.mode = mode.into();
+        for tool in [
+            "debug_action",
+            "inspect_frontend",
+            "read_app_diagnostics",
+            "debug_draft_action",
+            "read_external_operations",
+        ] {
+            assert!(tools
+                .execute(tool, json!({}))
+                .await
+                .unwrap_err()
+                .contains("unavailable"));
+        }
+    }
+    assert_eq!(crate::capabilities::grants(store, &id).unwrap(), json!([]));
+}

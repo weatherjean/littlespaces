@@ -13,6 +13,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tower_http::{
     compression::CompressionLayer,
     services::{ServeDir, ServeFile},
@@ -403,7 +404,7 @@ async fn dispatch(
             let source = include_str!("../../web/applets/plants.js");
             backend::validate_frontend(source)?;
             let tests = backend::test(include_str!("plants-backend.js")).await?;
-            let content = json!({"title":"Plant care","description":"A watering journal for your indoor jungle.","source":source,"bundle":source,"backend":include_str!("plants-backend.js"),"backendBundle":include_str!("plants-backend.js"),"testReport":json!(tests.report).to_string(),"chatInstructions":include_str!("plants-chat.txt"),"frontendFormat":"preact-htm"});
+            let content = json!({"title":"Plant care","description":"A watering journal for your indoor jungle.","source":source,"bundle":source,"backend":include_str!("plants-backend.js"),"backendBundle":include_str!("plants-backend.js"),"testReport":json!(tests.report).to_string(),"actionContract":backend::contract(include_str!("plants-backend.js"),&tests.catalog).to_string(),"chatInstructions":include_str!("plants-chat.txt"),"frontendFormat":"preact-htm"});
             return Ok(
                 json!({"applet":store.publish(text(&space,"id"),&crate::random_uuid(),&content,None)?,"spaceId":space["id"]}),
             );
@@ -754,14 +755,14 @@ async fn dispatch(
         match parts[3] {
             "actions" => {
                 if method == Method::GET {
-                    return Ok(json!({"actions":backend::inspect(backend::source(&rev)).await?}));
+                    return Ok(json!({"actions":backend::catalog(store, id, &rev).await?}));
                 }
                 let _permit = app
                     .actions
                     .try_acquire()
                     .map_err(|_| "App server is busy running actions")?;
                 return Ok(
-                    json!({"result":backend::call(store,id,text(&input,"action"),input.get("input").cloned().unwrap_or(json!({})),false,None,true).await?}),
+                    json!({"result":backend::call(store,id,text(&input,"action"),input.get("input").cloned().unwrap_or(json!({})),false,input["version"].as_i64(),true).await?}),
                 );
             }
             "records" => {
@@ -800,16 +801,41 @@ async fn dispatch(
                 }
                 return Ok(json!({"records":store.records(id)?}));
             }
+            "permissions" => {
+                let grants = if method == Method::GET {
+                    crate::capabilities::grants(store, id)?
+                } else {
+                    crate::capabilities::save(store, id, &input["grants"])?
+                };
+                return Ok(
+                    json!({"grants":grants,"actions":backend::catalog(store,id,&rev).await?}),
+                );
+            }
             "diagnostics" => {
-                static REPORTS: std::sync::Mutex<(i64, u32)> = std::sync::Mutex::new((0, 0));
+                if method == Method::GET {
+                    return crate::diagnostics::read(
+                        store,
+                        id,
+                        rev["version"].as_i64().unwrap_or(0),
+                        None,
+                        10,
+                    );
+                }
+                if input["version"] != rev["version"] {
+                    return Err("Diagnostic report belongs to an older app revision".into());
+                }
+                static REPORTS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (i64, u32)>>> =
+                    std::sync::OnceLock::new();
                 {
-                    let mut reports = REPORTS.lock().map_err(|_| "Diagnostic state unavailable")?;
+                    let mut reports = REPORTS
+                        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+                        .lock()
+                        .map_err(|_| "Diagnostic state unavailable")?;
                     let now = chrono::Utc::now().timestamp();
-                    if now - reports.0 > 60 {
-                        *reports = (now, 0);
-                    }
-                    reports.1 += 1;
-                    if reports.1 > 60 {
+                    reports.retain(|_, (since, _)| now - *since <= 60);
+                    let count = reports.entry(id.to_string()).or_insert((now, 0));
+                    count.1 += 1;
+                    if count.1 > 60 {
                         return Err("Too many diagnostic reports. Try again later.".into());
                     }
                 }
@@ -820,6 +846,18 @@ async fn dispatch(
                 {
                     return Err("Invalid diagnostic report".into());
                 }
+                let kind = match text(&input, "kind") {
+                    "snapshot" => "frontend.snapshot",
+                    "console" => "frontend.console",
+                    _ => "frontend.error",
+                };
+                crate::diagnostics::record(
+                    store,
+                    id,
+                    rev["version"].as_i64().unwrap_or(0),
+                    kind,
+                    &json!({"message":input["message"],"stack":input["stack"],"context":input["context"],"source":"untrusted applet report"}),
+                )?;
                 crate::diagnostics::log(
                     store,
                     "frontend.error",

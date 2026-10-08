@@ -146,6 +146,7 @@ impl Store {
             "changeSummary",
             "requestedChange",
             "frontendFormat",
+            "actionContract",
         ] {
             if !columns.iter().any(|row| text(row, "name") == column) {
                 db.execute_batch(&format!(
@@ -159,6 +160,7 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS photos(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,bytes INTEGER NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))").map_err(|e|e.to_string())?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS backend_contracts(hash TEXT PRIMARY KEY,contract TEXT NOT NULL); CREATE TABLE IF NOT EXISTS http_grants(id INTEGER PRIMARY KEY CHECK(id=1),grants TEXT NOT NULL); CREATE TABLE IF NOT EXISTS external_operations(id TEXT PRIMARY KEY,action TEXT NOT NULL,origin TEXT NOT NULL,method TEXT NOT NULL,status TEXT NOT NULL,http_status INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS app_diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,version INTEGER NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL);").map_err(|e| e.to_string())?;
         Ok(db)
     }
     pub fn import_legacy(&self) -> Result<()> {
@@ -367,7 +369,7 @@ impl Store {
         let summary = restored
             .map(|v| format!("Restored code and chat guidance from v{v}. Current data kept."))
             .unwrap_or_else(|| "Published app revision.".into());
-        execute(&db,"INSERT INTO revisions(title,description,source,bundle,backend,backendBundle,testReport,chatInstructions,changeSummary,requestedChange,restoredFrom,frontendFormat) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",&[content["title"].clone(),content["description"].clone(),content["source"].clone(),content["bundle"].clone(),json!(text(content,"backend")),json!(text(content,"backendBundle")),json!(text(content,"testReport")),json!(text(content,"chatInstructions")),json!(summary),json!(text(content,"requestedChange")),json!(restored),json!(text(content,"frontendFormat"))])?;
+        execute(&db,"INSERT INTO revisions(title,description,source,bundle,backend,backendBundle,testReport,chatInstructions,changeSummary,requestedChange,restoredFrom,frontendFormat,actionContract) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",&[content["title"].clone(),content["description"].clone(),content["source"].clone(),content["bundle"].clone(),json!(text(content,"backend")),json!(text(content,"backendBundle")),json!(text(content,"testReport")),json!(text(content,"chatInstructions")),json!(summary),json!(text(content,"requestedChange")),json!(restored),json!(text(content,"frontendFormat")),json!(text(content,"actionContract"))])?;
         execute(
             &self.workspace()?,
             "INSERT OR IGNORE INTO space_applets VALUES(?,?)",

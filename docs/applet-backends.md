@@ -1,5 +1,7 @@
 # App backends
 
+This page describes the preserved SvelteKit/Node implementation. For the Rust/QuickJS core, its permission model and AI debugging tools, see [Rust backend execution](rust-migration.md#backend-execution).
+
 An app revision contains a Svelte UI, a TypeScript backend, and the backend's test report. The UI uses `window.applet.call(action, input)`. The app-scoped chat agent discovers and invokes the same actions. The local HTTP API is `/api/applets/:id/actions` (GET for schemas, POST with `{ action, input }` to execute); it requires the local browser session and same-origin POSTs. This is an internal action API, not an externally exposed MCP server.
 
 The backend exports `actions` and `tests`. No imports or package installation are available to generated backends. Each action describes its input with JSON Schema and declares whether it is read-only. The host validates inputs; action implementations should also validate domain constraints.

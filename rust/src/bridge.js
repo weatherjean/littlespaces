@@ -71,6 +71,14 @@ window.applet = Object.freeze({
       call('photos.analyze', { photoIds, prompt, format: options.format || 'text' }),
   }),
   call: (action, input = {}) => call('action', { action, input }),
+  debug: Object.freeze({
+    report: (message, context = null) =>
+      call('diagnostics.report', {
+        message: String(message).slice(0, 4000),
+        context,
+      }).then(() => undefined),
+    snapshot: () => captureSnapshot(),
+  }),
   list: () => call('list', {}),
   set: (key, value) => call('set', { key, value }),
   remove: (key) => call('remove', { key }),
@@ -80,7 +88,90 @@ const report = (error) => {
     message: String(error?.message || error || 'Unknown frontend error').slice(0, 4000),
     stack: String(error?.stack || '').slice(0, 8000),
   }).catch(() => {});
+  captureSnapshot().catch(() => {});
 };
+
+// Historical rendered state, not form values, credentials, or a browser test.
+let snapshots = 0;
+const captureSnapshot = async () => {
+  if (snapshots++ >= 30) return;
+  const root = document.getElementById('app');
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const text = [];
+  let node,
+    length = 0;
+  while ((node = walker.nextNode()) && length < 6000) {
+    const element = node.parentElement;
+    if (
+      !element ||
+      element.closest('input,textarea,select,script,style,[data-private]') ||
+      !element.getClientRects().length ||
+      getComputedStyle(element).visibility === 'hidden'
+    )
+      continue;
+    const value = node.textContent.trim();
+    if (value) {
+      text.push(value);
+      length += value.length + 1;
+    }
+  }
+  const controls = [...root.querySelectorAll('button,input,select,textarea,a,[role="button"]')]
+    .filter((node) => node.getClientRects().length && !node.closest('[data-private]'))
+    .slice(0, 30)
+    .map((node) => ({
+      tag: node.tagName.toLowerCase(),
+      role: node.getAttribute('role'),
+      label: (
+        node.getAttribute('aria-label') ||
+        (node.matches('input,textarea,select')
+          ? node.getAttribute('name') || node.id
+          : node.textContent) ||
+        ''
+      ).slice(0, 160),
+      type: node.getAttribute('type'),
+      disabled: !!node.disabled,
+    }));
+  await call('diagnostics.report', {
+    kind: 'snapshot',
+    message: 'Rendered app state',
+    context: {
+      text: text.join('\n').slice(0, 6000),
+      controls,
+      viewport: { width: innerWidth, height: innerHeight },
+      overflow: root.scrollWidth > innerWidth,
+    },
+  });
+};
+let consoleReports = 0;
+for (const level of ['warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    original(...args);
+    if (consoleReports++ < 20)
+      call('diagnostics.report', {
+        kind: 'console',
+        message: args
+          .map((value) => String(value))
+          .join(' ')
+          .slice(0, 4000),
+        context: { level },
+      }).catch(() => {});
+  };
+}
+addEventListener('DOMContentLoaded', () => {
+  let timer;
+  const observer = new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => captureSnapshot().catch(() => {}), 2000);
+  });
+  observer.observe(document.getElementById('app'), {
+    childList: true,
+    subtree: true,
+    attributes: true,
+  });
+  captureSnapshot().catch(() => {});
+});
 let runtimeBanner;
 const showError = (error) => {
   report(error);

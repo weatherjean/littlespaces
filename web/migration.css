@@ -305,3 +305,53 @@
   max-height: 45%;
   overflow: auto;
 }
+
+.app-permissions {
+  margin-top: 16px;
+}
+.app-permissions form {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  min-width: 0;
+}
+.app-permissions fieldset {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 16px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.app-permissions legend {
+  padding: 0 8px;
+  font-size: 13px;
+}
+.app-permissions label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.app-permissions input,
+.app-permissions select {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 12px 14px;
+  background-color: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+}
+.shell .app-permissions select {
+  padding-right: 40px;
+}
+.app-permissions button {
+  justify-self: start;
+}
+.app-permissions details {
+  overflow-wrap: anywhere;
+}

@@ -121,7 +121,7 @@ export function AppletFrame({ id, version, spaceId, oncontext, dataRevision = 0 
             });
             break;
           case 'action':
-            reply(await api(`/api/applets/${id}/actions`, params));
+            reply(await api(`/api/applets/${id}/actions`, { ...params, version }));
             break;
           case 'list':
             reply({ result: (await api(`/api/applets/${id}/records`)).records });
@@ -132,7 +132,7 @@ export function AppletFrame({ id, version, spaceId, oncontext, dataRevision = 0 
             reply({ result: { saved: true } });
             break;
           case 'diagnostics.report':
-            await api(`/api/applets/${id}/diagnostics`, params);
+            await api(`/api/applets/${id}/diagnostics`, { ...params, version });
             reply({ result: { logged: true } });
             break;
           default: {

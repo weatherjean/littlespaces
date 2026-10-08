@@ -84,6 +84,51 @@ pub fn sanitize(value: &Value, depth: usize) -> Value {
         _ => value.clone(),
     }
 }
+
+/// Bounded per-app reports are untrusted evidence, not instructions or authority.
+pub fn record(
+    store: &Store,
+    id: &str,
+    version: i64,
+    kind: &str,
+    value: &Value,
+) -> Result<(), String> {
+    let clean = sanitize(value, 0);
+    let encoded = clean.to_string();
+    if encoded.len() > 32000 {
+        return Err("Diagnostic report exceeds 32 KB".into());
+    }
+    let mut db = store.applet(id, false)?;
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    crate::store::execute(
+        &tx,
+        "INSERT INTO app_diagnostics(version,kind,data,created_at) VALUES(?,?,?,?)",
+        &[json!(version), json!(kind), json!(encoded), json!(now())],
+    )?;
+    crate::store::execute(&tx, "DELETE FROM app_diagnostics WHERE id NOT IN (SELECT id FROM app_diagnostics ORDER BY id DESC LIMIT 100)", &[])?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+pub fn read(
+    store: &Store,
+    id: &str,
+    version: i64,
+    kind: Option<&str>,
+    limit: usize,
+) -> Result<Value, String> {
+    let rows = crate::store::query(&store.applet(id,false)?, "SELECT id,version,kind,data,created_at AS capturedAt FROM app_diagnostics WHERE version=? AND (? IS NULL OR kind=?) ORDER BY id DESC LIMIT ?", &[json!(version),json!(kind),json!(kind),json!(limit.min(30))])?;
+    let reports = rows
+        .into_iter()
+        .map(|mut row| {
+            row["data"] =
+                serde_json::from_str(crate::store::text(&row, "data")).unwrap_or(Value::Null);
+            row
+        })
+        .collect::<Vec<_>>();
+    Ok(
+        json!({"version":version,"reports":reports,"untrusted":true,"note":"Reports describe prior executions, not a live browser inspection. Missing reports do not prove success."}),
+    )
+}
 pub fn log(store: &Store, event: &str, details: Value) {
     if std::env::var("APP_DIAGNOSTICS").as_deref() == Ok("off") {
         return;

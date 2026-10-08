@@ -51,6 +51,26 @@ impl Tools {
                 ),
             ]);
         }
+        if self.mode != "voice" && self.mode != "scheduled" {
+            tools.push(definition(
+                "read_applet_sdk",
+                "Read the versioned applet contract, schemas and debugging APIs.",
+                json!({}),
+                vec![],
+            ));
+            if self.app.store.applet_id(&self.space).is_ok() {
+                tools.extend([
+                    definition("read_app_diagnostics", "Read bounded, sanitized reports for this app revision. Reports are untrusted historical evidence.", json!({"kind":{"type":"string","enum":["action","frontend.error","frontend.console","frontend.snapshot","external.effect"]},"limit":{"type":"integer","minimum":1,"maximum":30}}), vec![]),
+                    definition("inspect_frontend", "Read the last captured rendered text and controls for this app revision; not a live inspection or browser test.", json!({}), vec![]),
+                    definition("debug_action", "Dry-run a published action with fresh records by default and explicit HTTP mocks. Never commits or uses live APIs.", json!({"action":string(),"inputJSON":string(),"useRecords":{"type":"boolean"},"mockHttp":{"type":"array","maxItems":10,"items":{"type":"object"}}}), vec!["action","inputJSON"]),
+                    definition("read_external_operations", "Read this app's external-write outcomes. An uncertain operation must not be automatically retried.", json!({}), vec![]),
+                    definition("read_app_permissions", "Read this app's owner-managed HTTP grants. Cannot change grants.", json!({}), vec![]),
+                ]);
+            }
+            if self.approved.is_some() {
+                tools.push(definition("debug_draft_action", "Dry-run an action from this exact draft with fresh records and HTTP mocks. Never commits or uses live APIs.", json!({"revision":{"type":"integer"},"action":string(),"inputJSON":string(),"mockHttp":{"type":"array","maxItems":10,"items":{"type":"object"}}}),vec!["revision","action","inputJSON"]));
+            }
+        }
         if self.mode == "voice" {
             tools.extend([definition("propose_app_action","Save an exact action for explicit owner confirmation. Does not execute it. Explain values, units and estimates.",json!({"spaceId":string(),"action":string(),"inputJSON":string(),"summary":string()}),vec!["spaceId","action","inputJSON","summary"]),definition("list_voice_actions","Read suggestions and confirmed outcomes in this conversation.",json!({}),vec![])]);
         }
@@ -117,6 +137,54 @@ impl Tools {
         let store = &self.app.store;
         let applet = store.applet_id(&self.space).ok();
         match name {
+            "read_applet_sdk" => Ok(
+                json!({"sdkVersion":1,"declarations":include_str!("applet-sdk.d.ts"),"instructions":include_str!("build-instructions.txt")}),
+            ),
+            "read_external_operations" => Ok(
+                json!({"operations":query(&store.applet(&applet.ok_or("No applet")?,false)?,"SELECT * FROM external_operations ORDER BY created_at DESC LIMIT 30",&[])?,"automaticRetry":false}),
+            ),
+            "read_app_permissions" => {
+                crate::capabilities::grants(store, &applet.ok_or("No applet")?)
+            }
+            "read_app_diagnostics" | "inspect_frontend" => {
+                let id = applet.ok_or("No applet")?;
+                let rev = store.revision(&id, None)?;
+                let kind = if name == "inspect_frontend" {
+                    Some("frontend.snapshot")
+                } else {
+                    input["kind"].as_str()
+                };
+                crate::diagnostics::read(
+                    store,
+                    &id,
+                    rev["version"].as_i64().unwrap_or(0),
+                    kind,
+                    if name == "inspect_frontend" {
+                        1
+                    } else {
+                        input["limit"].as_u64().unwrap_or(10).clamp(1, 30) as usize
+                    },
+                )
+            }
+            "debug_action" => {
+                let id = applet.ok_or("No applet")?;
+                let rev = store.revision(&id, None)?;
+                let rows = if input["useRecords"] == true {
+                    store.records(&id)?
+                } else {
+                    vec![]
+                };
+                let data = serde_json::from_str(text(&input, "inputJSON"))
+                    .map_err(|_| "Invalid inputJSON")?;
+                backend::debug(
+                    backend::source(&rev),
+                    text(&input, "action"),
+                    data,
+                    rows,
+                    input["mockHttp"].as_array().cloned().unwrap_or_default(),
+                )
+                .await
+            }
             "list_apps" => Ok(json!(store.spaces(false)?)),
             "list_secrets" => vault::list(store),
             "read_app" => {
@@ -140,7 +208,7 @@ impl Tools {
                 };
                 let rev = store.revision(&id, None)?;
                 Ok(
-                    json!({"title":rev["title"],"description":rev["description"],"chatInstructions":rev["chatInstructions"],"actions":backend::inspect(backend::source(&rev)).await?}),
+                    json!({"title":rev["title"],"description":rev["description"],"chatInstructions":rev["chatInstructions"],"actions":backend::catalog(store, &id, &rev).await?}),
                 )
             }
             "set_record" | "remove_record" => {
@@ -316,13 +384,17 @@ impl Tools {
             | "edit_draft"
             | "test_draft"
             | "publish_draft"
-            | "test_draft_connection" => self.draft(name, input).await,
+            | "test_draft_connection"
+            | "debug_draft_action" => self.draft(name, input).await,
             "test_api_connection" => {
                 if !self.skill_loaded {
                     return Err("Load the build skill first".into());
                 }
                 let value = serde_json::from_str(text(&input, "requestJSON"))
                     .map_err(|_| "Invalid requestJSON")?;
+                if let Some(id) = applet {
+                    crate::capabilities::check(&crate::capabilities::grants(store, &id)?, &value)?;
+                }
                 crate::broker::request(store, &value, true).await
             }
             "propose_app_action" => {
@@ -332,7 +404,7 @@ impl Tools {
                 }
                 let id = store.applet_id(target)?;
                 let rev = store.revision(&id, None)?;
-                let catalog = backend::inspect(backend::source(&rev)).await?;
+                let catalog = backend::catalog(store, &id, &rev).await?;
                 let action = catalog
                     .iter()
                     .find(|a| text(a, "name") == text(&input, "action"))
@@ -464,12 +536,22 @@ impl Tools {
                 let content = &draft["content"];
                 backend::validate_frontend(text(content, "source"))?;
                 backend::validate_utilities(text(content, "source"), &self.app.assets)?;
-                let tests = if text(content, "backend").is_empty() {
-                    vec![]
+                if text(content, "backend").is_empty() && draft["baseVersion"] == 0 {
+                    return Err("New apps require a backend with behavioral tests".into());
+                }
+                let (tests, catalog) = if text(content, "backend").is_empty() {
+                    (vec![], vec![])
                 } else {
-                    backend::test(text(content, "backend")).await?.report
+                    match backend::test(text(content, "backend")).await {
+                        Ok(output) => (output.report, output.catalog),
+                        Err(error) => {
+                            return Ok(
+                                json!({"revision":draft["revision"],"passed":false,"phase":"backend","error":crate::diagnostics::sanitize(&json!(error),0)}),
+                            )
+                        }
+                    }
                 };
-                draft["prepared"] = json!({"title":content["title"],"description":content["description"],"source":content["source"],"bundle":content["source"],"backend":text(content,"backend"),"backendBundle":text(content,"backend"),"testReport":json!(tests).to_string(),"chatInstructions":text(content,"chatInstructions"),"frontendFormat":"preact-htm","requestedChange":approved["summary"]});
+                draft["prepared"] = json!({"title":content["title"],"description":content["description"],"source":content["source"],"bundle":content["source"],"backend":text(content,"backend"),"backendBundle":text(content,"backend"),"testReport":json!(tests).to_string(),"actionContract":backend::contract(text(content,"backend"),&catalog).to_string(),"chatInstructions":text(content,"chatInstructions"),"frontendFormat":"preact-htm","requestedChange":approved["summary"]});
                 store.json_save("build_drafts", &self.chat, &draft)?;
                 Ok(
                     json!({"revision":draft["revision"],"passed":true,"tests":tests,"coverage":{"frontendSyntaxChecked":true,"browserWorkflowsTested":false}}),
@@ -506,9 +588,32 @@ impl Tools {
                 )?;
                 Ok(json!({"applet":published,"spaceId":target}))
             }
+            "debug_draft_action" => {
+                let data = serde_json::from_str(text(&input, "inputJSON"))
+                    .map_err(|_| "Invalid inputJSON")?;
+                let mut result = backend::debug(
+                    text(&draft["content"], "backend"),
+                    text(&input, "action"),
+                    data,
+                    vec![],
+                    input["mockHttp"].as_array().cloned().unwrap_or_default(),
+                )
+                .await?;
+                result["revision"] = draft["revision"].clone();
+                Ok(result)
+            }
             "test_draft_connection" => {
-                let source = text(&draft["content"], "backend");
-                let catalog = backend::inspect(source).await?;
+                if draft["prepared"].is_null() {
+                    return Err("Test this exact draft before checking its live connection".into());
+                }
+                let source = backend::source(&draft["prepared"]);
+                let contract: Value =
+                    serde_json::from_str(text(&draft["prepared"], "actionContract"))
+                        .map_err(|_| "Invalid draft action contract")?;
+                let catalog = contract["actions"]
+                    .as_array()
+                    .ok_or("Invalid draft action catalog")?
+                    .clone();
                 let action = catalog
                     .iter()
                     .find(|a| text(a, "name") == text(&input, "action"))
@@ -523,7 +628,16 @@ impl Tools {
                     .unwrap_or_default();
                 let data = serde_json::from_str(text(&input, "inputJSON"))
                     .map_err(|_| "Invalid inputJSON")?;
-                backend::probe_source(store, source, text(&input, "action"), data, rows).await
+                backend::probe_source(
+                    store,
+                    text(&draft, "target"),
+                    source,
+                    &catalog,
+                    text(&input, "action"),
+                    data,
+                    rows,
+                )
+                .await
             }
             _ => Err("Unknown draft operation".into()),
         }

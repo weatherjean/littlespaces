@@ -6,6 +6,14 @@ use tokio::{
     time::{timeout, Duration},
 };
 
+pub struct Authority<'a> {
+    pub store: &'a crate::store::Store,
+    pub applet_id: &'a str,
+    pub http: &'a serde_json::Value,
+    pub read_only: bool,
+}
+static WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
 fn command(executable: &Path) -> Result<Command, String> {
     #[cfg(target_os = "macos")]
     {
@@ -43,8 +51,7 @@ fn command(executable: &Path) -> Result<Command, String> {
             "--ro-bind",
         ]);
         cmd.arg(executable).args([
-            "/worker", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--chdir", "/tmp",
-            "/worker", "--worker",
+            "/worker", "--dev", "/dev", "--tmpfs", "/tmp", "--chdir", "/tmp", "/worker", "--worker",
         ]);
         Ok(cmd)
     }
@@ -56,15 +63,14 @@ fn command(executable: &Path) -> Result<Command, String> {
 }
 
 pub async fn run(request: &Request) -> Result<Output, String> {
-    run_with(request, None, true).await
+    run_with(request, None).await
 }
 pub async fn run_with(
     request: &Request,
-    store: Option<&crate::store::Store>,
-    read_only: bool,
+    authority: Option<Authority<'_>>,
 ) -> Result<Output, String> {
     let mut diagnostics = Vec::new();
-    let result = run_with_trace(request, store, read_only, &mut diagnostics).await;
+    let result = run_with_trace(request, authority, &mut diagnostics).await;
     result.map(|mut output| {
         output.requests = diagnostics;
         output
@@ -72,10 +78,12 @@ pub async fn run_with(
 }
 pub async fn run_with_trace(
     request: &Request,
-    store: Option<&crate::store::Store>,
-    read_only: bool,
+    authority: Option<Authority<'_>>,
     diagnostics: &mut Vec<serde_json::Value>,
 ) -> Result<Output, String> {
+    let _permit = WORKERS
+        .try_acquire()
+        .map_err(|_| "Backend workers are busy; retry later")?;
     let mut input = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     if input.len() > MAX_BYTES {
         return Err("App data exceeds execution limit".into());
@@ -120,8 +128,49 @@ pub async fn run_with_trace(
                 if requests > 10 {
                     return Err("HTTP request limit exceeded".into());
                 }
-                let result = match store {
-                    Some(store) => crate::broker::request(store, &value["input"], read_only).await,
+                let result = match &authority {
+                    Some(auth) if request.mode == "call" => {
+                        let grants = crate::capabilities::grants(auth.store, auth.applet_id);
+                        match grants.and_then(|grants| {
+                            crate::capabilities::check(&grants, &value["input"])?;
+                            crate::capabilities::check(auth.http, &value["input"])
+                        }) {
+                            Ok(()) => {
+                                let method = value["input"]["method"]
+                                    .as_str()
+                                    .unwrap_or("GET")
+                                    .to_uppercase();
+                                let operation = if !matches!(method.as_str(), "GET" | "HEAD") {
+                                    let id = crate::random_uuid();
+                                    let origin = url::Url::parse(
+                                        value["input"]["url"].as_str().unwrap_or(""),
+                                    )
+                                    .map_err(|_| "Invalid API URL")?
+                                    .origin()
+                                    .ascii_serialization();
+                                    crate::store::execute(&auth.store.applet(auth.applet_id,false)?, "INSERT INTO external_operations VALUES(?,?,?,?,'uncertain',NULL,?,?)", &[serde_json::json!(id),serde_json::json!(request.action),serde_json::json!(origin),serde_json::json!(method),serde_json::json!(crate::store::now()),serde_json::json!(crate::store::now())])?;
+                                    Some(id)
+                                } else {
+                                    None
+                                };
+                                let result = crate::broker::request(
+                                    auth.store,
+                                    &value["input"],
+                                    auth.read_only,
+                                )
+                                .await;
+                                if let Some(id) = operation {
+                                    if let Ok(response) = &result {
+                                        crate::store::execute(&auth.store.applet(auth.applet_id,false)?, "UPDATE external_operations SET status='response_received',http_status=?,updated_at=? WHERE id=?", &[response["status"].clone(),serde_json::json!(crate::store::now()),serde_json::json!(id)])?;
+                                    }
+                                    diagnostics.push(serde_json::json!({"operationId":id,"code":"external_write","outcome":if result.is_ok(){"response_received"}else{"uncertain"},"automaticRetry":false}));
+                                }
+                                result
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Some(_) => Err("Live HTTP is unavailable in tests and debug runs".into()),
                     None => Err("HTTP unavailable".into()),
                 };
                 let url = url::Url::parse(value["input"]["url"].as_str().unwrap_or(""));
@@ -134,7 +183,6 @@ pub async fn run_with_trace(
                 let mut diagnostic = diagnostic;
                 if let Ok(url) = url {
                     diagnostic["origin"] = serde_json::json!(url.origin().ascii_serialization());
-                    diagnostic["path"] = serde_json::json!(url.path());
                 }
                 diagnostics.push(diagnostic);
                 let frame = match result {
@@ -154,7 +202,11 @@ pub async fn run_with_trace(
             if !status.success() {
                 return Err("Isolated backend worker failed".into());
             }
-            if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            if let Some(error) = value
+                .get("error")
+                .and_then(|v| v.as_str())
+                .filter(|_| request.mode != "debug")
+            {
                 return Err(error.into());
             }
             return serde_json::from_value(value).map_err(|e| e.to_string());
@@ -164,7 +216,7 @@ pub async fn run_with_trace(
         Ok(value) => value,
         Err(_) => {
             let _ = child.kill().await;
-            Err("Backend execution timed out".into())
+            Err("Backend execution timed out. Inspect external-write outcomes before retrying a write.".into())
         }
     }
 }

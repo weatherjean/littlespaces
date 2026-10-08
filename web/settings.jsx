@@ -142,6 +142,170 @@ function DeviceSettings() {
     </>
   );
 }
+function AppPermissions({ app }) {
+  const [open, setOpen] = useState(false),
+    [id, setId] = useState(''),
+    [grants, setGrants] = useState([]),
+    [actions, setActions] = useState([]),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    [status, setStatus] = useState('');
+  async function load() {
+    setBusy(true);
+    setError('');
+    try {
+      const view = await api(`/api/spaces/${app.id}/view`);
+      const result = await api(`/api/applets/${view.applet.id}/permissions`);
+      setId(view.applet.id);
+      setGrants(result.grants);
+      setActions(result.actions);
+      setOpen(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function edit(index, field, value) {
+    setStatus('');
+    setGrants((current) =>
+      current.map((grant, i) => (i === index ? { ...grant, [field]: value } : grant)),
+    );
+  }
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api(`/api/applets/${id}/permissions`, {
+        grants: grants.map((grant) => ({
+          origin: grant.origin,
+          methods: grant.methods,
+          secrets:
+            grant.secretsText === undefined
+              ? grant.secrets
+              : grant.secretsText
+                  .split(',')
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+        })),
+      });
+      setGrants(result.grants);
+      setStatus('API access saved.');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div class="app-permissions">
+      <button
+        class="secondary-button"
+        disabled={busy}
+        onClick={() => (open ? setOpen(false) : load())}
+      >
+        {open ? 'Close API access' : `API access for ${app.name}`}
+      </button>
+      {open && (
+        <form onSubmit={save}>
+          <p>
+            Allow only services you trust with this app’s data. Secret origin permissions also
+            apply. Removing access takes effect on the next request.
+          </p>
+          <details>
+            <summary>Access requested by app actions</summary>
+            {actions
+              .filter((action) => action.http?.length)
+              .map((action) => (
+                <p key={action.name}>
+                  <strong>{action.name}</strong>:{' '}
+                  {action.http
+                    .map(
+                      (permission) =>
+                        `${permission.origin} · ${permission.methods.join(', ')}${permission.secrets.length ? ' · ' + permission.secrets.join(', ') : ''}`,
+                    )
+                    .join('; ')}
+                </p>
+              ))}
+            {!actions.some((action) => action.http?.length) && (
+              <p>This app declares no API access.</p>
+            )}
+          </details>
+          {grants.map((grant, index) => (
+            <fieldset key={index} disabled={busy}>
+              <legend>Service {index + 1}</legend>
+              <label>
+                HTTPS origin
+                <input
+                  required
+                  type="url"
+                  value={grant.origin}
+                  placeholder="https://api.example.com"
+                  onInput={(event) => edit(index, 'origin', event.currentTarget.value)}
+                />
+              </label>
+              <label>
+                Allowed methods
+                <select
+                  value={
+                    grant.methods.some((method) => !['GET', 'HEAD'].includes(method))
+                      ? 'write'
+                      : 'read'
+                  }
+                  onChange={(event) =>
+                    edit(
+                      index,
+                      'methods',
+                      event.currentTarget.value === 'read'
+                        ? ['GET', 'HEAD']
+                        : ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
+                    )
+                  }
+                >
+                  <option value="read">Read (GET, HEAD)</option>
+                  <option value="write">Read and write</option>
+                </select>
+              </label>
+              <label>
+                Secret names (comma separated; leave empty for public access)
+                <input
+                  value={grant.secretsText ?? grant.secrets.join(', ')}
+                  onInput={(event) => edit(index, 'secretsText', event.currentTarget.value)}
+                />
+              </label>
+              <button
+                type="button"
+                class="secondary-button"
+                onClick={() => setGrants((current) => current.filter((_, i) => i !== index))}
+              >
+                Remove service
+              </button>
+            </fieldset>
+          ))}
+          <button
+            type="button"
+            class="secondary-button"
+            disabled={busy || grants.length >= 20}
+            onClick={() =>
+              setGrants((current) => [
+                ...current,
+                { origin: '', methods: ['GET', 'HEAD'], secrets: [] },
+              ])
+            }
+          >
+            Add service
+          </button>
+          <button class="primary-button" disabled={busy}>
+            {busy ? 'Saving…' : 'Save API access'}
+          </button>
+          {status && <p role="status">{status}</p>}
+        </form>
+      )}
+      <ErrorText error={error} />
+    </div>
+  );
+}
 function Apps() {
   const { data, refresh } = useWorkspace();
   const [pending, setPending] = useState(''),
@@ -207,6 +371,11 @@ function Apps() {
         </p>
       )}
       <ErrorText error={error} />
+      {data.apps
+        .filter((app) => app.appletCount)
+        .map((app) => (
+          <AppPermissions key={app.id} app={app} />
+        ))}
     </section>
   );
 }
