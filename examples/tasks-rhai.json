@@ -1,0 +1,12 @@
+{
+  "backend": "fn add(input) { let task = #{title:input.title, done:false}; db_set(input.key, task); task } fn list(input) { db_list() }",
+  "frontend": "const {html, render} = appletUI; render(html`<p>Task app backend example; interactive UI pending.</p>`, document.body);",
+  "actions": [
+    {"name":"add","read_only":false,"input":{"type":"object","required":["key","title"],"properties":{"key":{"type":"string","minLength":1,"maxLength":64},"title":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false},"output":{"type":"object","required":["title","done"],"properties":{"title":{"type":"string"},"done":{"type":"boolean"}},"additionalProperties":false}},
+    {"name":"list","read_only":true,"input":{"type":"object","additionalProperties":false},"output":{"type":"array"}}
+  ],
+  "tests": [
+    {"action":"add","input":{"key":"sample","title":"First task"},"expected":{"title":"First task","done":false}},
+    {"action":"list","input":{},"expected":[{"key":"sample","value":{"title":"First task","done":false}}]}
+  ]
+}

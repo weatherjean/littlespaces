@@ -296,6 +296,38 @@ mod tests {
         );
     }
     #[test]
+    fn competing_snapshots_have_exactly_one_winner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let app = store.create_app("Concurrent").unwrap();
+        let before = store.snapshot(&app).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let threads: Vec<_> = (1..=2)
+            .map(|n| {
+                let store = store.clone();
+                let before = before.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut records = before.records.clone();
+                    records.insert("winner".into(), json!(n));
+                    store.commit(&before, &records, || Ok(()))
+                })
+            })
+            .collect();
+        barrier.wait();
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| **r == Err(Error::Conflict))
+                .count(),
+            1
+        );
+        assert_eq!(store.snapshot(&app).unwrap().records.len(), 1);
+    }
+    #[test]
     fn foreign_database_is_never_modified() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("foreign.sqlite");
@@ -306,5 +338,35 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         assert!(Store::create(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ExternalEvidence {
+    pub id: String,
+    pub method: String,
+    pub state: String,
+    pub status: Option<u16>,
+}
+impl Store {
+    /// No URLs, headers, request bodies or credentials appear in persisted diagnostics.
+    pub fn external_evidence(
+        &self,
+        app: &AppId,
+        invocation: &InvocationId,
+    ) -> Result<Vec<ExternalEvidence>> {
+        let db = self.open()?;
+        let mut stmt=db.prepare("SELECT e.id,e.method,e.state,e.status FROM external_operations e JOIN invocations i ON i.id=e.invocation WHERE i.app=? AND i.id=? ORDER BY e.rowid")?;
+        let rows = stmt
+            .query_map(params![app.0, invocation.0], |r| {
+                Ok(ExternalEvidence {
+                    id: r.get(0)?,
+                    method: r.get(1)?,
+                    state: r.get(2)?,
+                    status: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }

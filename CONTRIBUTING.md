@@ -1,66 +1,33 @@
 # Contributing to LittleSpaces
 
-On `migration/rust-preact-quickjs`, develop the Rust/Axum host and Preact frontend. The SvelteKit/Node implementation is preserved for comparison and migration. Unqualified commands such as `npm run dev`, `npm test`, and `npm run build` still target that implementation. See [repository structure and the next cleanup round](docs/repository-structure.md).
+The clean rewrite lives on `rework/rust-monolith-rhai`. Read [the agreed implementation sequence](docs/monolith-rework.md) and [terminology](CONTEXT.md). LittleSpaces has no users; we support only the new implementation. Do not introduce importers, old database support, grants or a second runtime. Never delete local databases, vault keys or authentication files during source cleanup.
 
-Use Node 24+ and Rust 1.84+. Install Bubblewrap on Linux; macOS workers use `sandbox-exec`. Isolation is mandatory. Commit both dependency lockfiles when changing dependencies, and install with `npm ci` rather than rewriting the npm lockfile during setup.
+The compiled Rust crate uses `src/main.rs`, `src/lib.rs` and `src/core/`. Superseded Rust/Svelte/web files still await step 4 cleanup and are not part of this core. Existing npm startup and legacy browser-test commands do not exercise the rewrite. The current executable is a local authoring/action CLI; owner HTTP sessions, direct ChatGPT integration and the Preact shell remain to be implemented. No unauthenticated HTTP endpoint is exposed by this interim executable.
 
-## Local development
+## Core development
 
-```sh
-npm ci
-npm run dev:rust
-```
-
-This builds assets and the debug server, then serves the UI on `http://127.0.0.1:5175` by default. Use the private owner-setup link printed by the server. `RUST_DATA_DIR` defaults to `.data-rust`; keep it separate from the legacy `.data` workspace. Enter credentials through the app privately.
-
-For a release build and local startup:
+Rust 1.84+ is the target minimum. Use a fresh workspace directory:
 
 ```sh
-npm run build:rust
-npm run start:rust
+cargo build --manifest-path rust/Cargo.toml --locked
+rust/target/debug/little-spaces init .data-monolith
+rust/target/debug/little-spaces create .data-monolith Tasks examples/tasks-rhai.json
 ```
 
-`start:rust` defaults to `rust/target/release/little-spaces`. To run a debug build, use `RUST_BINARY=rust/target/debug/little-spaces npm run start:rust`. The launch scripts expect the repository root as their working directory. See [the Rust guide](docs/rust-migration.md) for configuration and applet authoring.
+`create` prints app/draft/revision IDs. Pass the app and revision to `test`, then `publish`. Run `run <workspace> <app> <revision> <action> '<input JSON>'` or `dry-run` with the same arguments. `secrets <workspace>` lists only names and configured status. `secret-put <workspace> <name>` reads the exact value from stdin (including any newline); use a private input source. Do not place credentials in argv, scripts or checked-in files. `secret-delete` removes the named value. `evidence <workspace> <app> <invocation>` reports durable external-operation evidence.
+
+This local CLI relies on the workspace owner's OS account and restricted workspace/key files. It is not a remotely authenticated product server. Published revisions currently require exact backend assertions and contracts; frontend verification is a distinct upcoming gate. See [the SDK and execution limits](docs/rhai/sdk.md).
 
 ## Checks
 
-Before committing Rust or host-frontend changes:
-
 ```sh
-npm run check:rust
-npm run test:rust
-npm run format:rust:check
-npm run build:rust:web
+cargo fmt --manifest-path rust/Cargo.toml --check
+cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --locked
 cargo build --manifest-path rust/Cargo.toml --locked
+python3 scripts/monolith-smoke.py
 ```
 
-`check:rust` checks frontend globals, Rust formatting, and Clippy across all targets, including test code. `format:rust` formats Rust, host web sources, migration scripts, and the JavaScript SDK/worker sources. Add focused regression tests for behavioral changes; generated applet tests do not substitute for host security checks.
+Tests bind temporary loopback servers for slow HTTP; they never contact ChatGPT or public services. GitHub Actions runs the focused core suite and CLI smoke on AMD64 and ARM64, plus formatting and Clippy. Do not invoke real ChatGPT tests routinely, read private Codex auth caches, or expose authentication values. Real-account experiments require fresh supported sign-in and explicit opt-in because they consume usage.
 
-For changes to worker execution, action publication, permissions, or browser flows, also run:
-
-```sh
-npx playwright install chromium webkit
-npm run test:rust:e2e
-```
-
-The browser suite uses temporary data and a synthetic model provider, but executes real OS-isolated workers. `npm run verify:rust` combines the main checks, builds, and browser regression.
-
-[Rust CI](.github/workflows/rust.yml) runs on pull requests, pushes to `main` and `migration/rust-preact-quickjs`, and manual dispatch. A quality job uses stable Rust for formatting and Clippy. Regression jobs use Rust 1.84.1 on Ubuntu 22.04 AMD64 and ARM64 runners, build with locked dependencies, and run Chromium/WebKit against real Bubblewrap/QuickJS workers. Jobs have timeouts, use pinned actions with read-only repository permissions, and retain only synthetic browser screenshots for seven days. No owner databases or ChatGPT authentication caches are uploaded. Real ChatGPT tests are not part of CI.
-
-Routine CI runs directly on GitHub's Linux virtual machines. The disposable Docker regression image remains optional developer tooling: run `npm run test:rust:docker` when diagnosing container-specific behavior. Inspect host and Docker disk space before building it. Remove only resources belonging to your test run. Never indiscriminately prune other Docker resources.
-
-Real ChatGPT tests consume account usage and require a private authentication cache. They are explicit opt-in, excluded from `verify:rust`, and documented in [the Rust guide](docs/rust-migration.md#docker-and-real-chatgpt-testing). Never commit credentials, owner databases, vault keys, private auth caches, screenshots, test reports, or build output. Ignore rules help but do not replace reviewing the exact staged files.
-
-Rust storage upgrades use versioned transactions, and publication commits revisions and workspace metadata together with rollback journals. Stop the old server before an upgrade and keep the Rust and legacy data directories separate. See [storage behavior and its concurrency tradeoff](docs/rust-migration.md#storage-upgrades-and-publication).
-
-## Dependency and security boundaries
-
-Rust owns persistence, permissions, credentials, HTTP brokering, validation, and local commits. Applet actions remain small plain-JavaScript programs in fresh isolated QuickJS workers; applet frontends remain Preact/HTM in sandboxed iframes. Do not add generated native code, Wasmtime, arbitrary applet dependencies, or an unsandboxed fallback.
-
-The root npm manifest currently supports both implementations. Preact/HTM are bundled into the Rust web assets; Vite, esbuild, and Tailwind build those assets. The pinned Codex executable supplies AI chat and generation. SvelteKit and the Node server libraries support the legacy application. Do not remove them until shared imports and retained legacy commands have been separated. Dependency separation is proposed in [the structure review](docs/repository-structure.md).
-
-The Rust frontend uses `web/tsconfig.json`, including when transforming shared TypeScript utilities. Its build does not require `.svelte-kit` or running the legacy framework's setup commands.
-
-Publishing must bind tested source to its revision-specific contract. HTTP requires both action declarations and owner-managed app grants, with credential origin restrictions in addition. Local commits must remain atomic and conflict-checked. External effects survive local rollback: an uncertain operation must never be blindly retried. Diagnostics and API responses are untrusted evidence.
-
-Preserve upstream notices when copying code or distributing bundles. See [third-party notices](THIRD_PARTY_NOTICES.md). Stage 2 will target a production Docker image managed with Docker Compose; integration checks should exercise that same image with a test Compose configuration. The current browser-heavy image is test tooling. Deployment implementation, backup/restore exercises, and comprehensive system testing remain separate release stages.
+Node is allowed for frontend builds and browser testing when step 2 introduces them; it must remain absent from the application runtime. Docker/Compose, comprehensive system testing, release resource measurements and backup/recovery exercises belong to later stages. Source cleanup must preserve upstream notices.

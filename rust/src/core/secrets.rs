@@ -72,6 +72,14 @@ impl Secrets {
         if value.is_empty() || value.len() > 16000 {
             return Err(Error::Validation);
         }
+        let count: i64 = self.store.open()?.query_row(
+            "SELECT COUNT(*) FROM secrets WHERE name<>?",
+            [name],
+            |r| r.get(0),
+        )?;
+        if count >= 128 {
+            return Err(Error::Limit);
+        }
         let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| Error::Storage)?;
         let mut nonce = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -138,7 +146,26 @@ impl Secrets {
             String::from_utf8(plain.to_vec()).map_err(|_| Error::Storage)?,
         ))
     }
-    pub(crate) fn resolve(&self, value: &Value, mock: bool) -> Result<Value> {
+    pub(crate) fn scope(&self) -> Result<HostSecrets> {
+        let values = self
+            .list()?
+            .into_iter()
+            .map(|s| Ok((s.name.clone(), self.plaintext(&s.name)?)))
+            .collect::<Result<_>>()?;
+        Ok(HostSecrets {
+            values: std::sync::Arc::new(values),
+        })
+    }
+    pub(crate) fn redact(&self, value: Value) -> Result<Value> {
+        self.scope()?.redact(value)
+    }
+}
+#[derive(Clone)]
+pub(crate) struct HostSecrets {
+    values: std::sync::Arc<std::collections::BTreeMap<String, Zeroizing<String>>>,
+}
+impl HostSecrets {
+    pub fn resolve(&self, value: &Value, mock: bool) -> Result<Value> {
         match value {
             Value::Object(o) if o.contains_key("$secret") => {
                 if o.len() != 1 {
@@ -149,7 +176,12 @@ impl Secrets {
                 if mock {
                     Ok(Value::String(format!("synthetic-{name}")))
                 } else {
-                    Ok(Value::String(self.plaintext(name)?.to_string()))
+                    Ok(Value::String(
+                        self.values
+                            .get(name)
+                            .ok_or(Error::MissingSecret)?
+                            .to_string(),
+                    ))
                 }
             }
             Value::Object(o) => Ok(Value::Object(
@@ -165,13 +197,9 @@ impl Secrets {
             v => Ok(v.clone()),
         }
     }
-    pub(crate) fn redact(&self, value: Value) -> Result<Value> {
-        let secrets = self
-            .list()?
-            .into_iter()
-            .map(|s| self.plaintext(&s.name))
-            .collect::<Result<Vec<_>>>()?;
-        fn walk(value: Value, secrets: &[Zeroizing<String>]) -> Value {
+    pub fn redact(&self, value: Value) -> Result<Value> {
+        let secrets = self.values.values().collect::<Vec<_>>();
+        fn walk(value: Value, secrets: &[&Zeroizing<String>]) -> Value {
             match value {
                 Value::String(mut s) => {
                     for secret in secrets {
@@ -190,7 +218,14 @@ impl Secrets {
                         })
                         .collect(),
                 ),
-                v => v,
+                v => {
+                    let encoded = v.to_string();
+                    if secrets.iter().any(|s| encoded == s.as_str()) {
+                        Value::String("[redacted]".into())
+                    } else {
+                        v
+                    }
+                }
             }
         }
         Ok(walk(value, &secrets))
@@ -222,11 +257,19 @@ mod tests {
             json!([{"name":"TOKEN","configured":true}])
         );
         assert_eq!(
-            secrets.resolve(&json!({"$secret":"TOKEN"}), false).unwrap(),
+            secrets
+                .scope()
+                .unwrap()
+                .resolve(&json!({"$secret":"TOKEN"}), false)
+                .unwrap(),
             json!("private-synthetic-value")
         );
         assert_eq!(
-            secrets.resolve(&json!({"$secret":"TOKEN"}), true).unwrap(),
+            secrets
+                .scope()
+                .unwrap()
+                .resolve(&json!({"$secret":"TOKEN"}), true)
+                .unwrap(),
             json!("synthetic-TOKEN")
         );
         assert_eq!(
@@ -237,8 +280,14 @@ mod tests {
         );
         assert!(!std::fs::read(dir.path().join("workspace.sqlite"))
             .unwrap()
-            .windows(23)
+            .windows(b"private-synthetic-value".len())
             .any(|w| w == b"private-synthetic-value"));
+        let inflight = secrets.scope().unwrap();
+        secrets.put("TOKEN", "replacement-value").unwrap();
+        assert_eq!(
+            inflight.redact(json!("private-synthetic-value")).unwrap(),
+            json!("[redacted]")
+        );
         secrets.delete("TOKEN").unwrap();
         assert!(secrets.list().unwrap().is_empty());
     }

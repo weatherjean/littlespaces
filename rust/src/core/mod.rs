@@ -3,3 +3,8 @@ pub mod secrets;
 pub mod store;
 pub use model::*;
 pub use store::Store;
+pub mod control;
+pub mod http;
+pub mod runtime;
+pub use control::Cancellation;
+pub use runtime::{ExecutionMode, Invocation, Outcome, Runtime};
