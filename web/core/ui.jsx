@@ -27,6 +27,7 @@ export function BrandMark({ size = 36 }) {
   );
 }
 const paths = {
+  mic: 'M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8',
   search: 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
   chevron: 'm6 9 6 6 6-6',
   back: 'm12 5-7 7 7 7M5 12h15',

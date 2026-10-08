@@ -9,6 +9,9 @@ use serde_json::{json, Value};
 pub enum AuthoringTool {
     ReadSdk,
     ReadDraft,
+    NameApp {
+        title: String,
+    },
     SecretNames,
     TestFrontend {
         revision: RevisionId,
@@ -139,6 +142,18 @@ impl AuthoringSession {
                 self.runtime.store.diagnostics(&app, revision)
             }
             _ if !approved => Err(Error::ApprovalRequired),
+            AuthoringTool::NameApp { title } => {
+                if title.trim().is_empty() || title.len() > 200 {
+                    Err(Error::Validation)
+                } else {
+                    let _gate = cancel.commit_gate()?;
+                    self.runtime
+                        .store
+                        .open()?
+                        .execute("UPDATE apps SET title=? WHERE id=?", params![title, app.0])?;
+                    Ok(json!({"name":title}))
+                }
+            }
             AuthoringTool::EditDraft {
                 expected_version,
                 code,

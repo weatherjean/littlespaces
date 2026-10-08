@@ -12,6 +12,8 @@ pub mod agent;
 pub mod authoring;
 pub mod browser;
 pub mod chatgpt;
+pub mod host;
+pub mod interactions;
 pub mod owner;
 pub mod schedules;
 pub mod server;

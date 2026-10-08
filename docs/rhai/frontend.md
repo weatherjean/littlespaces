@@ -1,6 +1,6 @@
 # Binding frontend reference
 
-The TypeScript application on `main` at `ee2a9ed` is the binding design and interaction guide for the Preact host. The rewrite changes the runtime and storage, not the product's visual identity. Do not replace it with an unrelated dashboard or a new palette.
+The updated TypeScript application on `experiment/liquid-glass@331326b` is the preferred visual guide, including its gradient background and frosted surfaces. The underlying `main@ee2a9ed` is the interaction guide for the Preact host. The rewrite changes the runtime and storage, not the product's visual identity. Do not replace it with an unrelated dashboard or a new palette.
 
 The host reuses the original Orbit tokens from `src/lib/theme.css`, shared page/chat geometry from `style.css`, `polish.css` and `mobile.css`, and the actual SVG geometry from BrandMark/Icon. Component-scoped launcher, login/setup, primary navigation, connection notice and app-dock rules were ported into ordinary CSS. Unused legacy feature selectors were removed. Build CSS through esbuild so the shared token file is bundled into the executable's single stylesheet.
 
@@ -15,6 +15,6 @@ The host reuses the original Orbit tokens from `src/lib/theme.css`, shared page/
 
 Retain minimum 44 px touch targets, 16 px phone inputs, safe-area spacing, keyboard/visual-viewport sizing, native dialog focus trapping, Escape closing only the top sheet, ordinary pinch zoom and reduced-motion support. Pending jobs survive closing chat or disconnecting the browser; conversation selection reconnects to them.
 
-Voice/photos/notifications remain deferred and do not get dummy controls. The supported launcher's quick actions are Create an app and Start a chat. Creating an app asks for its name, then opens the approved persisted build conversation. Model choices load only when an active chat needs them, not from an invisible modal on every app launch.
+Voice dictation/read-aloud and owner-confirmed voice write suggestions are restored. Photos/notifications remain deferred and do not get dummy controls. The supported launcher’s quick actions are Let’s talk and Start a chat. App creation is conversation-led: the agent chooses the name and purpose, and the owner approves the build. Creating an app opens a conversation without requiring an upfront name. Approval opens the persisted build conversation with the original request preserved. Model choices load only when an active chat needs them, not from an invisible modal on every app launch.
 
 The browser regression verifies computed reference colors and grid geometry, captures setup/login/launcher/settings/app/chat desktop/phone screenshots with synthetic data, checks nested modal Escape, a simulated software-keyboard viewport and the real shared iframe/action path. This is frontend evidence, separate from the pending real-account model test.

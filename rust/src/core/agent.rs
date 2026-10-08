@@ -13,6 +13,12 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+struct DispatchScope<'a> {
+    conversation: &'a ConversationId,
+    app: Option<&'a AppId>,
+    build: bool,
+    voice: bool,
+}
 #[derive(Clone)]
 pub struct Agent {
     runtime: Runtime,
@@ -93,6 +99,16 @@ impl Agent {
         message: String,
         model: String,
     ) -> Result<String> {
+        self.start_with_voice(conversation, message, model, false)
+            .await
+    }
+    pub async fn start_with_voice(
+        &self,
+        conversation: ConversationId,
+        message: String,
+        model: String,
+        voice: bool,
+    ) -> Result<String> {
         if message.trim().is_empty()
             || message.len() > 32768
             || model.is_empty()
@@ -115,7 +131,7 @@ impl Agent {
         let id = super::owner::token();
         let job = id.clone();
         let conv = conversation.clone();
-        let payload = json!({"model":model,"text":"","startedAt":now()});
+        let payload = json!({"model":model,"text":"","startedAt":now(),"voice":voice});
         self.runtime.store.blocking(move|store|{let mut db=store.open()?;let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let app:Option<String>=tx.query_row("SELECT app FROM conversations WHERE id=?",[&conv.0],|r|r.get(0)).optional()?.ok_or(Error::NotFound)?;
             let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE conversation=? AND state IN ('running','queued'))",[&conv.0],|r|r.get(0))?;if active{return Err(Error::Conflict);}
@@ -132,7 +148,7 @@ impl Agent {
             let _permit = permit;
             let result = tokio::time::timeout(
                 Duration::from_secs(600),
-                agent.run_job(&job, &conversation, &model, cancel.clone()),
+                agent.run_job(&job, &conversation, &model, voice, cancel.clone()),
             )
             .await
             .unwrap_or(Err(Error::Deadline));
@@ -214,6 +230,7 @@ impl Agent {
         job: &str,
         conversation: &ConversationId,
         model: &str,
+        voice: bool,
         cancel: Cancellation,
     ) -> Result<()> {
         let (app, build) = self.scope(conversation).await?;
@@ -229,7 +246,7 @@ impl Agent {
         let instructions = if build {
             include_str!("agent-prompt.txt")
         } else {
-            "You are LittleSpaces, the owner's personal workspace assistant. Use app_info to inspect the app's published actions before invoking them. Do not retry ambiguous external writes. No arbitrary host tools or plaintext secrets are available. Ask the owner to open an app's build conversation for code changes."
+            "You are LittleSpaces, the owner's personal workspace assistant. Use list_apps to discover apps and app_info (app ID) to inspect published actions. For app creation requests, pick a thoughtful concise name yourself and call propose_app with title and purpose; do not require the user to name it. The owner confirms that build proposal. In voice conversations write actions produce confirmation cards; explain that no change is applied until the owner confirms. Never retry uncertain writes. No arbitrary host tools or plaintext secrets are available."
         };
         let mut seen = BTreeSet::new();
         let mut dispatched = 0;
@@ -247,6 +264,14 @@ impl Agent {
                 )]
             } else {
                 vec![
+                    tool_definition(
+                        "list_apps",
+                        "List workspace app IDs, names and publication status.",
+                    ),
+                    tool_definition(
+                        "propose_app",
+                        "Suggest an app name and purpose for owner build approval.",
+                    ),
                     tool_definition("app_info", "Read published app actions and contracts."),
                     tool_definition(
                         "invoke_action",
@@ -311,9 +336,12 @@ impl Agent {
                     .await?;
                 let result = self
                     .dispatch(
-                        conversation,
-                        app.as_ref(),
-                        build,
+                        DispatchScope {
+                            conversation,
+                            app: app.as_ref(),
+                            build,
+                            voice,
+                        },
                         call["name"].as_str().ok_or(Error::Model)?,
                         args,
                         cancel.clone(),
@@ -340,13 +368,17 @@ impl Agent {
     }
     async fn dispatch(
         &self,
-        conversation: &ConversationId,
-        app: Option<&AppId>,
-        build: bool,
+        scope: DispatchScope<'_>,
         name: &str,
         args: Value,
         cancel: Cancellation,
     ) -> Result<Value> {
+        let DispatchScope {
+            conversation,
+            app,
+            build,
+            voice,
+        } = scope;
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -363,8 +395,15 @@ impl Agent {
                     serde_json::from_value(args).map_err(|_| Error::Validation)?;
                 session.dispatch(tool, MockHttp::default(), cancel).await
             }
+            "list_apps" if !build=>self.runtime.store.blocking(|store|{let db=store.open()?;let mut q=db.prepare("SELECT id,title,published_revision FROM apps ORDER BY rowid LIMIT 128")?;let rows=q.query_map([],|r|Ok(json!({"app":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"revision":r.get::<_,Option<String>>(2)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!(rows))}).await,
+            "propose_app" if !build=>super::interactions::propose(&self.runtime.store,conversation.clone(),super::interactions::Proposal::App{title:args["title"].as_str().ok_or(Error::Validation)?.into(),purpose:args["purpose"].as_str().ok_or(Error::Validation)?.into()}).await,
             "app_info" if !build => {
-                let app = app.cloned().ok_or(Error::NotFound)?;
+                let app=match(app,args["app"].as_str()){
+                    (Some(bound),Some(other)) if bound.0!=other=>return Err(Error::Validation),
+                    (Some(bound),_)=>bound.clone(),
+                    (None,Some(id))=>AppId(id.into()),
+                    _=>return Err(Error::Validation),
+                };
                 self.runtime
                     .store
                     .blocking(move |store| {
@@ -376,13 +415,23 @@ impl Agent {
                     .await
             }
             "invoke_action" if !build => {
-                let app = app.cloned().ok_or(Error::NotFound)?;
+                let app=match(app,args["app"].as_str()){
+                    (Some(bound),Some(other)) if bound.0!=other=>return Err(Error::Validation),
+                    (Some(bound),_)=>bound.clone(),
+                    (None,Some(id))=>AppId(id.into()),
+                    _=>return Err(Error::Validation),
+                };
                 let a = app.clone();
                 let id = self
                     .runtime
                     .store
                     .blocking(move |store| store.snapshot(&a)?.revision.ok_or(Error::NotFound))
                     .await?;
+                if voice {
+                    let a=app.clone();let r=id.clone();let action=args["action"].as_str().ok_or(Error::Validation)?.to_owned();let name=action.clone();
+                    let readonly=self.runtime.store.blocking(move|store|store.revision(&a,&r)?.code.actions.into_iter().find(|c|c.name==name).map(|c|c.read_only).ok_or(Error::NotFound)).await?;
+                    if !readonly {return super::interactions::propose(&self.runtime.store,conversation.clone(),super::interactions::Proposal::Action{app,revision:id,action,input:args["input"].clone(),summary:args["summary"].as_str().unwrap_or("Review this requested change before applying it.").into()}).await;}
+                }
                 let outcome = self
                     .runtime
                     .invoke(
@@ -459,7 +508,26 @@ impl Agent {
     }
 }
 fn tool_definition(name: &str, description: &str) -> Value {
-    json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","additionalProperties":true},"strict":false})
+    let properties = match name {
+        "authoring" => {
+            json!({"tool":{"type":"string","enum":["read_sdk","read_draft","name_app","secret_names","read_diagnostics","edit_draft","test_draft","test_frontend","dry_run","publish"]},"title":{"type":"string","maxLength":200},"expected_version":{"type":"integer"},"revision":{"type":"string"},"action":{"type":"string"},"input":{},"code":{"type":"object","properties":{"backend":{"type":"string"},"frontend":{"type":"string"},"actions":{"type":"array","items":{"type":"object"}},"tests":{"type":"array","items":{"type":"object"}},"frontend_tests":{"type":"array","items":{"type":"object"}}},"required":["backend","frontend","actions","tests"],"additionalProperties":false}})
+        }
+        "invoke_action" => {
+            json!({"app":{"type":"string"},"action":{"type":"string"},"input":{},"summary":{"type":"string"}})
+        }
+        "app_info" => json!({"app":{"type":"string"}}),
+        "propose_app" => {
+            json!({"title":{"type":"string","maxLength":200},"purpose":{"type":"string","maxLength":8000}})
+        }
+        _ => json!({}),
+    };
+    let required = match name {
+        "authoring" => vec!["tool"],
+        "invoke_action" => vec!["action", "input"],
+        "propose_app" => vec!["title", "purpose"],
+        _ => vec![],
+    };
+    json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"strict":false})
 }
 #[derive(Default)]
 pub(crate) struct ResponseStream {

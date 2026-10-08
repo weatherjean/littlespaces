@@ -54,6 +54,13 @@ export function Settings({
           </span>
           <div>
             <h3>ChatGPT</h3>
+            {connection?.requiresLocalCallback && (
+              <p class="callback-note">
+                For this VPS connection, first forward local port {connection.callbackPort} to the
+                server over SSH. OpenAI will return to that local callback; tokens stay on the
+                server.
+              </p>
+            )}
             <p>
               {connection?.connected
                 ? `Connected${connection.email ? ' as ' + connection.email : ''}`

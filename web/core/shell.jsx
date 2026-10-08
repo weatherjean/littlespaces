@@ -4,6 +4,10 @@ import { BrandMark, Icon, appEmoji, ConnectionNotice } from './ui.jsx';
 import { ChatPanel, Modal, useChatViewport } from './chat.jsx';
 import { Settings } from './settings.jsx';
 const errors = {
+  limit:
+    'This request exceeded a workspace safety limit. Your draft is kept; you can edit it or start a new conversation.',
+  model_catalog_limit:
+    'ChatGPT returned an unusually large model catalog. Your message draft is kept. Retry model loading or reconnect ChatGPT.',
   authentication: 'Reconnect ChatGPT and confirm permission to use your plan.',
   model: 'ChatGPT could not complete this request. Check your connection and account settings.',
   usage_limit: 'Your ChatGPT usage limit has been reached. Check Usage in ChatGPT Settings.',
@@ -36,15 +40,17 @@ async function api(path, body) {
 function initialRoute() {
   const p = location.pathname;
   return {
-    view: p.startsWith('/apps/')
-      ? 'app'
-      : p.startsWith('/chat')
-        ? 'chat'
-        : p === '/settings'
-          ? 'settings'
-          : 'home',
+    view: p.startsWith('/voice')
+      ? 'voice'
+      : p.startsWith('/apps/')
+        ? 'app'
+        : p.startsWith('/chat')
+          ? 'chat'
+          : p === '/settings'
+            ? 'settings'
+            : 'home',
     app: p.startsWith('/apps/') ? decodeURIComponent(p.slice(6)) : null,
-    conversation: p.startsWith('/chat/') ? decodeURIComponent(p.slice(6)) : null,
+    conversation: /^\/(chat|voice)\//.test(p) ? decodeURIComponent(p.split('/')[2]) : null,
   };
 }
 function readPreference(name, fallback = '') {
@@ -80,14 +86,15 @@ function App() {
     [setupToken, setSetupToken] = useState(
       () => new URLSearchParams(location.hash.slice(1)).get('setup') || '',
     ),
-    [createOpen, setCreateOpen] = useState(false),
     [chatOpen, setChatOpen] = useState(false),
     [optionsOpen, setOptionsOpen] = useState(false),
     [versionsOpen, setVersionsOpen] = useState(false),
     [versions, setVersions] = useState([]),
     [search, setSearch] = useState(''),
     [frameEpoch, setFrameEpoch] = useState(0),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [proposals, setProposals] = useState([]),
+    [proposalBusy, setProposalBusy] = useState(false);
   const frame = useRef(null),
     context = useRef(null),
     bridgeCount = useRef(0),
@@ -128,9 +135,13 @@ function App() {
           ? '/settings'
           : next === 'app'
             ? `/apps/${app}`
-            : chat
-              ? `/chat/${chat}`
-              : '/chat';
+            : next === 'voice'
+              ? chat
+                ? `/voice/${chat}`
+                : '/voice'
+              : chat
+                ? `/chat/${chat}`
+                : '/chat';
     history.pushState(null, '', path);
     setView(next);
     setError('');
@@ -201,11 +212,14 @@ function App() {
     const epoch = ++chatEpoch.current;
     attempt(async () => {
       const values = await api(`/api/conversations/${conversation}`);
-      if (chatEpoch.current === epoch) setMessages(values);
+      if (chatEpoch.current === epoch) {
+        setMessages(values);
+        setProposals(await api(`/api/conversations/${conversation}/proposals`));
+      }
     });
   }, [conversation, session?.authenticated]);
   useEffect(() => {
-    if (view === 'chat' && conversation && !selected) {
+    if ((view === 'chat' || view === 'voice') && conversation && !selected) {
       const current = conversations.find((c) => c.id === conversation);
       if (current?.app) setSelected(current.app);
       if (current?.job && !job) attempt(async () => setJob(await api(`/api/jobs/${current.job}`)));
@@ -224,7 +238,10 @@ function App() {
         setJob(value);
         if (value.state !== 'running') {
           const values = await api(`/api/conversations/${conversation}`);
-          if (active) setMessages(values);
+          if (active) {
+            setMessages(values);
+            setProposals(await api(`/api/conversations/${conversation}/proposals`));
+          }
           await refresh();
         }
       } catch (e) {
@@ -315,7 +332,7 @@ function App() {
     if (overlay) setChatOpen(true);
     else navigate('chat', { app: c.app, chat: c.id });
   }
-  async function newChat(app = null, overlay = false) {
+  async function newChat(app = null, overlay = false, voice = false) {
     const value = await api('/api/conversations', { app });
     setMessages([]);
     setPrompt('');
@@ -323,7 +340,7 @@ function App() {
     setConversation(value.conversation);
     setSelected(app);
     if (overlay) setChatOpen(true);
-    else navigate('chat', { app, chat: value.conversation });
+    else navigate(voice ? 'voice' : 'chat', { app, chat: value.conversation });
     await refresh();
   }
   async function openAppChat() {
@@ -350,24 +367,49 @@ function App() {
     navigate('chat', { app: selected, chat: value.conversation });
     await refresh();
   }
-  async function send() {
+  async function send(voiceText) {
     if (busy) return;
     setBusy(true);
+    const sentPrompt = typeof voiceText === 'string' ? voiceText : prompt;
     await attempt(async () => {
       let id = conversation;
       if (!id) {
         const value = await api('/api/conversations', { app: selected });
         id = value.conversation;
         setConversation(id);
-        if (view === 'chat') history.replaceState(null, '', `/chat/${id}`);
+        if (view === 'chat' || view === 'voice')
+          history.replaceState(null, '', `${view === 'voice' ? '/voice' : '/chat'}/${id}`);
       }
-      const value = await api(`/api/conversations/${id}/send`, { message: prompt, model });
+      const value = await api(`/api/conversations/${id}/send`, {
+        message: sentPrompt,
+        model,
+        voice: view === 'voice',
+      });
       setJob({ id: value.job, state: 'running', payload: { text: '' } });
-      setPrompt('');
+      setPrompt((current) => (current === sentPrompt ? '' : current));
       setMessages(await api(`/api/conversations/${id}`));
       await refresh();
     });
     setBusy(false);
+  }
+  async function decideProposal(id, confirm) {
+    if (proposalBusy) return;
+    setProposalBusy(true);
+    await attempt(async () => {
+      const result = await api(`/api/conversations/${conversation}/proposals/${id}`, { confirm });
+      setProposals(await api(`/api/conversations/${conversation}/proposals`));
+      if (result.app && confirm) {
+        setSelected(result.app);
+        setConversation(result.conversation);
+        navigate('chat', { app: result.app, chat: result.conversation });
+        await refresh();
+        await api(`/api/conversations/${result.conversation}/send`, {
+          message: `Build the approved app: ${result.purpose}`,
+          model,
+        }).then((v) => setJob({ id: v.job, state: 'running', payload: { text: '' } }));
+      }
+    });
+    setProposalBusy(false);
   }
   async function previewRevision(id) {
     const value = await api(`/api/owner-preview/${selected}/${id}`, {});
@@ -509,9 +551,16 @@ function App() {
     onBack: () => navigate('home'),
     onSettings: () => navigate('settings'),
     onNew: () =>
-      attempt(() => (active?.build ? startNewBuild() : newChat(active?.app || null, chatOpen))),
+      attempt(() =>
+        active?.build ? startNewBuild() : newChat(active?.app || null, chatOpen, view === 'voice'),
+      ),
     onSelect: (c) => openConversation(c, chatOpen),
-    onSend: send,
+    onSend: () => send(),
+    onVoiceSend: send,
+    proposals,
+    proposalBusy,
+    onDecide: decideProposal,
+    voiceMode: view === 'voice',
     onCancel: () => attempt(() => api(`/api/jobs/${job.id}/cancel`, {})),
     onPreview: (id) => attempt(() => previewRevision(id)),
   };
@@ -554,13 +603,16 @@ function App() {
               />
             )}
             <div class="quick-actions">
-              <button class="quick-action voice-action" onClick={() => setCreateOpen(true)}>
+              <button
+                class="quick-action voice-action"
+                onClick={() => attempt(() => newChat(null, false, true))}
+              >
                 <span class="action-icon">
-                  <Icon name="plus" size={24} />
+                  <Icon name="mic" size={24} />
                 </span>
                 <span>
-                  <strong>Create an app</strong>
-                  <small>Make something for your everyday</small>
+                  <strong>Let’s talk</strong>
+                  <small>Start with your voice</small>
                 </span>
                 <Icon name="plus" />
               </button>
@@ -615,7 +667,7 @@ function App() {
                   </button>
                 ))}
               {!!apps.length && (
-                <button class="app-tile create-tile" onClick={() => setCreateOpen(true)}>
+                <button class="app-tile create-tile" onClick={() => attempt(() => newChat())}>
                   <span class="app-icon">
                     <Icon name="plus" size={28} />
                   </span>
@@ -633,7 +685,7 @@ function App() {
                   A plant tracker, a meal planner, a place for your ideas. What would make your day
                   easier?
                 </p>
-                <button class="primary-button" onClick={() => setCreateOpen(true)}>
+                <button class="primary-button" onClick={() => attempt(() => newChat())}>
                   <Icon name="plus" size={18} />
                   Create your first app
                 </button>
@@ -750,7 +802,7 @@ function App() {
           )}
         </main>
       )}
-      {view === 'chat' && (
+      {(view === 'chat' || view === 'voice') && (
         <main class="builtin-app mobile-chat">
           <ChatPanel {...chatProps} standalone />
         </main>
@@ -794,6 +846,7 @@ function App() {
         <nav class="primary-nav" aria-label="Main navigation">
           {[
             ['home', 'Apps', 'grid', '/'],
+            ['voice', 'Voice', 'mic', '/voice'],
             ['chat', 'Chat', 'chat', '/chat'],
             ['settings', 'Settings', 'settings', '/settings'],
           ].map(([next, label, icon, url]) => (
@@ -803,7 +856,8 @@ function App() {
               aria-current={view === next ? 'page' : undefined}
               onClick={(e) => {
                 e.preventDefault();
-                if (next === 'chat') attempt(() => newChat());
+                if (next === 'chat' || next === 'voice')
+                  attempt(() => newChat(null, false, next === 'voice'));
                 else navigate(next);
               }}
             >
@@ -813,64 +867,6 @@ function App() {
           ))}
         </nav>
       )}
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        className="form-dialog phone-chat-sheet"
-        titleId="create-title"
-      >
-        <header class="picker-header">
-          <div>
-            <h2 id="create-title">Create an app</h2>
-            <p>A little space for something you need.</p>
-          </div>
-          <button
-            class="icon-button"
-            aria-label="Close app form"
-            onClick={() => setCreateOpen(false)}
-          >
-            <Icon name="close" />
-          </button>
-        </header>
-        <form
-          class="dialog-body stack"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (busy) return;
-            const title = new FormData(e.currentTarget).get('title');
-            setBusy(true);
-            attempt(async () => {
-              const value = await api('/api/apps', { title });
-              setCreateOpen(false);
-              setSelected(value.app);
-              setConversation(value.conversation);
-              setJob(null);
-              navigate('chat', { app: value.app, chat: value.conversation });
-              await refresh();
-            }).finally(() => setBusy(false));
-          }}
-        >
-          <label>
-            App name
-            <input
-              data-autofocus="true"
-              name="title"
-              placeholder="For example, Plant care"
-              required
-              maxLength={200}
-            />
-          </label>
-          <p class="muted">Describe what it should do in the build conversation.</p>
-          {error && (
-            <p class="error" role="alert">
-              {error}
-            </p>
-          )}
-          <button class="primary-button" disabled={busy}>
-            {busy ? 'Creating…' : 'Create and build'}
-          </button>
-        </form>
-      </Modal>
       <Modal
         open={optionsOpen}
         onClose={() => setOptionsOpen(false)}

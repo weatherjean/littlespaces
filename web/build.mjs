@@ -18,7 +18,7 @@ for (const [entry, name] of [
   });
 }
 await build({
-  entryPoints: [new URL('core/style.css', import.meta.url).pathname],
+  entryPoints: [new URL('core/host.css', import.meta.url).pathname],
   outfile: new URL('style.css', out).pathname,
   bundle: true,
   minify: true,

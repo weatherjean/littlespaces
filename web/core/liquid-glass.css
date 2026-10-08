@@ -1,0 +1,426 @@
+/* Binding visual reference: experiment/liquid-glass@331326b. */
+:root {
+  --bg: #101827;
+  --panel: #202e46;
+  --surface: #334360;
+  --ink: #f3f7ff;
+  --muted: #b4c3da;
+  --accent: #c3deff;
+  --on-accent: #132039;
+  --line: #dbeaff26;
+  --accent-soft: #b5d8ff14;
+  --hover: #dbeaff0d;
+  --radius: 18px;
+  --app-radius: 26px;
+  --shadow: 0 12px 32px #02081730, inset 0 1px 0 #ffffff26;
+  --shadow-hover: 0 18px 40px #02081750, inset 0 1px 0 #ffffff40;
+  --modal-shadow: 0 32px 100px #02081780, inset 0 1px 0 #ffffff30;
+  --glass: linear-gradient(135deg, #ffffff12, #ffffff03 55%, #b6d7ff0a);
+}
+
+/* A fixed, quiet color field gives the translucent surfaces depth as you scroll. */
+body {
+  background:
+    radial-gradient(ellipse at 8% 12%, #365e7880, transparent 48%),
+    radial-gradient(ellipse at 92% 45%, #66538955, transparent 48%),
+    radial-gradient(ellipse at 50% 100%, #284a6855, transparent 55%), var(--bg);
+  background-attachment: fixed;
+}
+.shell {
+  background: transparent;
+}
+
+.shell .setting-card,
+.shell .notification-card,
+.shell .composer,
+.shell .app-chat-modal,
+.shell .conversation-picker,
+.shell .host-photo-modal,
+.shell .notification-dialog,
+.primary-nav,
+.shell .app-dock {
+  background: var(--glass), #202e46b3;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(145%);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+
+.shell .settings-content {
+  margin-top: 32px;
+}
+.shell .setting-card {
+  padding: 22px;
+  margin-bottom: 14px;
+  border-radius: 24px;
+}
+/* Component-scoped card rules otherwise win over the shared card padding. */
+.shell .settings-content .setting-card {
+  padding: 24px;
+}
+.shell .settings-content .automation-card {
+  padding: 28px;
+}
+.shell .automation-card > h3,
+.shell .automation-card .secrets-heading h3 {
+  font-size: 17px;
+  letter-spacing: -0.25px;
+  margin-bottom: 8px;
+}
+.shell .automation-card > p {
+  max-width: 58ch;
+}
+.shell .automation-card form {
+  margin-top: 24px;
+  padding: 24px 0 0;
+  gap: 20px 24px;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid #dbeaff18;
+  border-radius: 0;
+}
+.shell .automation-card label {
+  color: var(--ink);
+  font-weight: 450;
+}
+.shell .automation-card input {
+  background: #0b162b45;
+  border: 1px solid #dbeaff20;
+  border-radius: 12px;
+  min-height: 48px;
+  box-shadow: inset 0 2px 4px #02081712;
+  font-weight: 400;
+}
+.shell .automation-card input::placeholder {
+  color: #a5b4ca;
+}
+.shell .automation-card .secret-visibility {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.shell .automation-card .secret-visibility > .secondary-button {
+  flex-shrink: 0;
+  padding: 0 12px;
+  color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+  border-color: #dbeaff20;
+  font-size: 12px;
+}
+.shell .automation-card .secret-visibility p {
+  max-width: 48ch;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.shell .automation-card .form-footer {
+  margin-top: 4px;
+  padding-top: 20px;
+  border-top: 1px solid #dbeaff12;
+}
+.shell .automation-card .form-footer p {
+  max-width: 42ch;
+  line-height: 1.6;
+}
+.shell .primary-button:disabled {
+  opacity: 1;
+  background: #dbeaff12;
+  color: #a5b4ca;
+  box-shadow: none;
+  border: 1px solid #dbeaff14;
+}
+.shell .setting-card h3 {
+  font-weight: 550;
+}
+.shell .setting-icon,
+.shell .app-symbol {
+  background: linear-gradient(145deg, #c1e0ff24, #b5bfff08);
+  border: 1px solid #dbeaff24;
+  box-shadow:
+    inset 0 1px 0 #ffffff20,
+    0 4px 12px #02081718;
+}
+.shell .app-row,
+.shell .saved-row {
+  background: #dbeaff08;
+  border-color: #dbeaff18;
+  box-shadow: inset 0 1px 0 #ffffff0c;
+}
+.shell .secondary-button,
+.shell .notification-trigger {
+  background: linear-gradient(160deg, #ffffff12, #ffffff04);
+  border-color: #dbeaff30;
+  box-shadow:
+    inset 0 1px 0 #ffffff18,
+    0 3px 8px #02081718;
+  color: var(--ink);
+  border-radius: 14px;
+}
+.shell .app-dock :is(.dock-home, .dock-more) {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  background: linear-gradient(160deg, #ffffff12, #ffffff04);
+  border: 1px solid #dbeaff30;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 #ffffff18,
+    0 3px 8px #02081718;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.shell .app-dock :is(.dock-home, .dock-more):hover {
+  background: linear-gradient(160deg, #ffffff26, #ffffff0e);
+  border-color: #dbeaff60;
+}
+.shell .app-dock :is(.dock-home, .dock-more):active {
+  background: #dbeaff24;
+}
+.shell .primary-button,
+.shell .send-button {
+  background: linear-gradient(160deg, #e1efff, #accdfa);
+  box-shadow:
+    inset 0 1px 0 #ffffffa6,
+    0 4px 16px #080f2930;
+}
+.shell .secondary-button:hover:not(:disabled),
+.shell .notification-trigger:hover {
+  background: linear-gradient(160deg, #ffffff20, #ffffff0a);
+  border-color: #dbeaff50;
+}
+.shell :is(input:not([type='checkbox']), textarea, select) {
+  background-color: #101b2a99;
+  border-color: #dbeaff26;
+}
+.shell :is(button, a, input, textarea, select):focus-visible,
+.primary-nav a:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.shell .chat-view .composer {
+  padding: 16px;
+  border-radius: 24px;
+}
+.shell .chat-view .composer textarea {
+  display: block;
+  padding: 12px 14px;
+  min-height: 56px;
+  border-radius: 14px;
+  background: #101b2a66;
+  margin-bottom: 12px;
+}
+.shell .chat-view .composer-controls {
+  gap: 12px;
+  padding: 0 2px;
+}
+.shell .chat-view .composer-controls > div:last-child {
+  gap: 8px;
+}
+@media (max-width: 700px) {
+  .shell .chat-view .composer {
+    padding: 12px;
+    border-radius: 22px;
+  }
+  .shell .chat-view .composer textarea {
+    min-height: 48px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    border-radius: 12px;
+  }
+  .shell .chat-view .composer-controls > div:last-child {
+    gap: 4px;
+  }
+}
+
+.primary-nav {
+  border-radius: 26px;
+  box-shadow:
+    0 14px 44px #02081770,
+    inset 0 1px 0 #ffffff30;
+}
+.primary-nav a[aria-current='page'] {
+  background: linear-gradient(145deg, #d8eaff24, #d8eaff0c);
+  box-shadow:
+    inset 0 1px 0 #ffffff20,
+    0 3px 12px #02081725;
+  color: var(--ink);
+}
+.shell .app-icon {
+  background-image: linear-gradient(145deg, #ffffff25, #ffffff00 60%, #ffffff0a);
+  border-color: #dbeaff30;
+}
+.shell .app-chat-modal,
+.shell .conversation-picker,
+.shell .host-photo-modal,
+.shell .notification-dialog {
+  /* Keep dialog text legible over busy applets. */
+  background: var(--glass), #202e46ed;
+  box-shadow: var(--modal-shadow);
+}
+
+@media (max-width: 700px) {
+  .shell .settings-content .setting-card {
+    padding: 20px;
+    gap: 12px;
+    border-radius: 22px;
+  }
+  .shell .automation-card form {
+    gap: 18px;
+    padding: 20px 0 0;
+  }
+  .shell .automation-card .form-footer {
+    align-items: stretch;
+  }
+  .shell .automation-card .secret-visibility {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .shell .settings-page > .builtin-header {
+    background: #142237df;
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+  }
+  .primary-nav {
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    padding: 6px;
+    border: 1px solid var(--line);
+  }
+  .settings-page {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom));
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .shell .setting-card,
+  .shell .notification-card,
+  .shell .composer,
+  .primary-nav,
+  .shell .app-dock {
+    background: var(--panel);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .shell .setting-card,
+  .shell .notification-card,
+  .shell .composer,
+  .shell .app-chat-modal,
+  .shell .conversation-picker,
+  .shell .host-photo-modal,
+  .shell .notification-dialog,
+  .shell .settings-page > .builtin-header,
+  .primary-nav,
+  .shell .app-dock {
+    background: var(--panel);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.login-card,
+.setup-card,
+.form-dialog,
+.versions-dialog,
+.chat-options-dialog,
+.app-options {
+  background: var(--glass), #202e46ed;
+  border: 1px solid var(--line);
+  box-shadow: var(--modal-shadow);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+.login-page,
+.setup-page {
+  background: transparent;
+}
+.primary-nav {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.proposal-card {
+  padding: 22px;
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--glass), #202e46b3;
+  box-shadow: var(--shadow);
+}
+.proposal-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.proposal-card header > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 550;
+}
+.proposal-card header small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.proposal-card p {
+  font-size: 14px;
+  margin: 16px 0;
+}
+.proposal-card pre {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.proposal-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.voice-controls {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+.voice-talk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px;
+  border-radius: 28px;
+  background: linear-gradient(160deg, #e1efff, #accdfa);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.voice-talk.listening {
+  background: var(--danger-solid);
+  color: var(--on-danger);
+}
+.voice-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.voice-controls p {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+@media (max-width: 700px) {
+  .primary-nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .proposal-card {
+    padding: 16px;
+  }
+}

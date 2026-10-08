@@ -13,8 +13,9 @@ const root = new URL('../', import.meta.url).pathname;
 const token = randomBytes(32).toString('hex');
 const harness = await startHarness({ token });
 let code = JSON.parse(await readFile(path.join(root, 'examples/tasks-rhai.json'), 'utf8'));
+let appForVoice = '';
 let turn = 0,
-  mode = 'build',
+  mode = 'proposal',
   testedRevision;
 const provider = http.createServer(async (req, res) => {
   try {
@@ -28,7 +29,46 @@ const provider = http.createServer(async (req, res) => {
     let output;
     const previous = request.input.filter((v) => v.type === 'function_call_output').at(-1);
     const report = previous ? JSON.parse(previous.output) : null;
-    if (mode === 'chat')
+    if (mode === 'voice')
+      output =
+        turn++ === 0
+          ? [
+              call('invoke_action', {
+                app: appForVoice,
+                action: 'add',
+                input: { key: 'voice-confirm', title: 'Voice requested task' },
+                summary: 'Add Voice requested task',
+              }),
+            ]
+          : [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Review and confirm the task suggestion.' }],
+              },
+            ];
+    else if (mode === 'proposal')
+      output =
+        turn++ === 0
+          ? [
+              call('propose_app', {
+                title: 'Task app',
+                purpose: 'Track tasks and mark them complete.',
+              }),
+            ]
+          : [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: 'I suggest Task app. Approve the plan to build it.',
+                  },
+                ],
+              },
+            ];
+    else if (mode === 'chat')
       output =
         turn++ === 0
           ? [call('app_info', {})]
@@ -159,11 +199,11 @@ try {
   await authPage.getByRole('heading', { name: 'Set up LittleSpaces' }).waitFor();
   assert.equal(
     await authPage.locator('body').evaluate((n) => getComputedStyle(n).backgroundColor),
-    'rgba(0, 0, 0, 0)',
+    'rgb(16, 24, 39)',
   );
   assert.equal(
     await authPage.locator('html').evaluate((n) => getComputedStyle(n).backgroundColor),
-    'rgb(20, 27, 48)',
+    'rgb(16, 24, 39)',
   );
   await authPage.screenshot({ path: path.join(snapshots, 'monolith-orbit-setup.png') });
 
@@ -193,24 +233,51 @@ try {
     401,
   );
   const creating = await context.newPage();
+  await creating.route('**/api/chatgpt', (route) =>
+    route.fulfill({ json: { connected: true, planUsage: true, email: 'synthetic@example.test' } }),
+  );
+  await creating.route('**/api/models', (route) =>
+    route.fulfill({ json: [{ slug: 'fixture', display_name: 'Fixture model' }] }),
+  );
   await creating.goto(origin);
   await creating.getByRole('button', { name: 'Create your first app', exact: true }).click();
-  await creating.getByRole('dialog', { name: 'Create an app', exact: true }).waitFor();
-  await creating.getByLabel('App name', { exact: true }).fill('Task app');
-  await creating.getByRole('button', { name: 'Create and build', exact: true }).click();
   await creating.waitForURL(/\/chat\//);
+  assert.equal(await creating.getByLabel('App name', { exact: true }).count(), 0);
+  await creating.getByLabel('Message', { exact: true }).fill('Create a task tracker');
+  await creating.getByRole('button', { name: 'Send message', exact: true }).click();
+  await creating.getByRole('button', { name: 'Build this app', exact: true }).waitFor();
+  for (
+    let i = 0;
+    i < 100 &&
+    !(await creating.getByRole('button', { name: 'Build this app', exact: true }).isEnabled());
+    i++
+  )
+    await creating.waitForTimeout(100);
+  assert.equal((await api('/api/apps')).length, 0);
+  mode = 'build';
+  turn = 0;
+  const proposalConversation = new URL(creating.url()).pathname.slice(6);
+  await creating.getByRole('button', { name: 'Build this app', exact: true }).click();
+  await creating.waitForURL(
+    (url) => url.pathname.startsWith('/chat/') && url.pathname.slice(6) !== proposalConversation,
+  );
   const app = {
     app: (await api('/api/apps')).find((a) => a.title === 'Task app').id,
     conversation: new URL(creating.url()).pathname.slice(6),
   };
-  await creating.getByRole('button', { name: 'New chat', exact: true }).click();
-  await creating.waitForURL(
-    (url) => url.pathname.startsWith('/chat/') && url.pathname.slice(6) !== app.conversation,
-  );
-  const builds = await api('/api/conversations');
-  assert.equal(builds.find((c) => c.id === new URL(creating.url()).pathname.slice(6)).build, true);
+  let firstJob;
+  for (let i = 0; i < 100 && !firstJob; i++) {
+    firstJob = (await api('/api/conversations')).find((c) => c.id === app.conversation).job;
+    if (!firstJob) await creating.waitForTimeout(100);
+  }
+  assert.ok(firstJob, 'Approved build did not start');
+  for (let i = 0; i < 250; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const j = await api(`/api/jobs/${firstJob}`);
+    if (j.state === 'completed') break;
+    if (j.state === 'failed') throw Error(JSON.stringify(j));
+  }
   await creating.close();
-
   async function runAgent(conversation) {
     const { job } = await api(`/api/conversations/${conversation}/send`, {
       message: mode === 'chat' ? 'List my tasks' : 'Create and test the task app',
@@ -234,7 +301,7 @@ try {
     }
     throw Error('Agent fixture timed out');
   }
-  await runAgent(app.conversation);
+  assert.ok((await api(`/api/apps/${app.app}`)).revision);
   console.log('Fixture author/test/browser/publish passed');
   const detail = await api(`/api/apps/${app.app}`);
   assert.ok(detail.revision);
@@ -371,6 +438,71 @@ try {
   const history = await api(`/api/conversations/${chat.conversation}`);
   assert.ok(history.some((m) => m.name === 'invoke_action' && m.result.ok.result.length === 1));
   assert.deepEqual(errors, []);
+  appForVoice = app.app;
+  mode = 'voice';
+  turn = 0;
+  await page.addInitScript(() => {
+    window.SpeechRecognition = class {
+      start() {
+        setTimeout(() => {
+          this.onresult?.({
+            results: [[{ transcript: 'Add a task called Voice requested task' }]],
+          });
+          this.onend?.();
+        }, 20);
+      }
+      stop() {
+        this.onend?.();
+      }
+    };
+  });
+  await page.goto(`${origin}/voice`);
+  await page.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Tap to talk', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm change', exact: true }).waitFor();
+  assert.equal((await api(`/api/apps/${app.app}`)).records['voice-confirm'], undefined);
+  for (
+    let i = 0;
+    i < 100 &&
+    !(await page.getByRole('button', { name: 'Confirm change', exact: true }).isEnabled());
+    i++
+  )
+    await page.waitForTimeout(100);
+  await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
+  await page.getByText('Done.', { exact: true }).waitFor();
+  assert.equal(
+    (await api(`/api/apps/${app.app}`)).records['voice-confirm'].title,
+    'Voice requested task',
+  );
+  const afterVoice = (await api(`/api/apps/${app.app}`)).records;
+  await page.screenshot({ path: path.join(snapshots, 'monolith-glass-voice.png') });
+  await page.unroute('**/api/models');
+  await page.route('**/api/models', (route) =>
+    route.fulfill({ status: 400, json: { error: 'limit' } }),
+  );
+  await page.goto(`${origin}/chat`);
+  await page.getByRole('alert').filter({ hasText: 'workspace safety limit' }).waitFor();
+  await page
+    .getByLabel('Message', { exact: true })
+    .fill('Keep my draft after the model-list error');
+  assert.equal(
+    await page.getByLabel('Message', { exact: true }).inputValue(),
+    'Keep my draft after the model-list error',
+  );
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: 'Chat options', exact: true })
+    .getByRole('alert')
+    .waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(
+    await page.getByLabel('Message', { exact: true }).inputValue(),
+    'Keep my draft after the model-list error',
+  );
+  await page.unroute('**/api/models');
+  await page.route('**/api/models', (route) =>
+    route.fulfill({ json: [{ slug: 'fixture', display_name: 'Fixture model' }] }),
+  );
   const ownerBuild = await api(`/api/build/${app.app}`, {});
   const ownerCode = { ...code, frontend: code.frontend.replace('Tasks updated', 'Owner preview') };
   await api(`/api/authoring/${ownerBuild.conversation}`, {
@@ -397,13 +529,13 @@ try {
   await preview.getByLabel('Task title').fill('Isolated owner preview');
   await preview.getByRole('button', { name: 'Add task' }).click();
   await preview.locator('li').filter({ hasText: 'Isolated owner preview' }).waitFor();
-  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, saved);
+  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
   await api(`/api/owner-publish/${ownerBuild.conversation}`, {
     confirmed: true,
     revision: ownerTest.revision,
     expected_version: 2,
   });
-  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, saved);
+  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
   console.log(
     'Rust agent fixture, failure/fix, browser-tested and owner-reviewed publication, real UI/chat invocation and record-preserving updates passed. No real-model milestone claimed.',
   );

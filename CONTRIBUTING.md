@@ -2,7 +2,7 @@
 
 Read [the agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md) and [implementation status](docs/rhai/status.md). This is a clean rewrite on `rework/rust-monolith-rhai`; no old formats, importers, grants, runtime fallbacks or maintained legacy implementation exist. Never delete local databases, vault keys or authentication files during source cleanup.
 
-The TypeScript frontend on `main` at `ee2a9ed` is the binding visual and interaction reference. Read [the frontend guide](docs/rhai/frontend.md) before changing the shell. Port its Orbit tokens, page structure and phone/dialog behavior into Preact; the backend rewrite does not authorize an unrelated redesign.
+The TypeScript frontend on `experiment/liquid-glass` at `331326b` (updated main with gradient/glass styling) is the preferred visual reference; `main@ee2a9ed` supplies the underlying interaction structure. Read [the frontend guide](docs/rhai/frontend.md) before changing the shell. Port its Orbit tokens, page structure and phone/dialog behavior into Preact; the backend rewrite does not authorize an unrelated redesign.
 
 ## Development
 

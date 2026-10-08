@@ -1,6 +1,8 @@
 import { h, Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Icon, ConnectionNotice } from './ui.jsx';
+import { Proposals } from './proposals.jsx';
+import { canDictate, dictate, speak } from './voice.js';
 import { MessageText } from './message.jsx';
 export function Modal({ open, onClose, className = '', titleId, children }) {
   const dialog = useRef(null);
@@ -166,6 +168,11 @@ export function ConversationPicker({
 }
 export function ChatPanel({
   standalone,
+  voiceMode = false,
+  proposals = [],
+  proposalBusy = false,
+  onDecide,
+  onVoiceSend,
   appName,
   build,
   conversation,
@@ -197,6 +204,49 @@ export function ChatPanel({
     [following, setFollowing] = useState(true);
   const transcript = useRef(null),
     input = useRef(null);
+  const [listening, setListening] = useState(false),
+    [voiceError, setVoiceError] = useState(''),
+    [readReplies, setReadReplies] = useState(false);
+  const stopVoice = useRef(null),
+    lastSpoken = useRef('');
+  useEffect(
+    () => () => {
+      stopVoice.current?.();
+      window.speechSynthesis?.cancel();
+    },
+    [],
+  );
+  useEffect(() => {
+    const reply = messages.filter((m) => m.role === 'assistant').at(-1)?.content;
+    if (voiceMode && readReplies && reply && reply !== lastSpoken.current) {
+      lastSpoken.current = reply;
+      speak(reply);
+    }
+  }, [messages, voiceMode, readReplies]);
+  function voice() {
+    if (listening) {
+      stopVoice.current?.();
+      return;
+    }
+    setVoiceError('');
+    setListening(true);
+    try {
+      stopVoice.current = dictate(
+        (text) => {
+          if (voiceMode) onVoiceSend(text);
+          else setPrompt((current) => [current, text].filter(Boolean).join(' '));
+        },
+        () => setListening(false),
+        (error) => {
+          setVoiceError(error);
+          setListening(false);
+        },
+      );
+    } catch (e) {
+      setVoiceError(e.message);
+      setListening(false);
+    }
+  }
   const busy = job?.state === 'running';
   const plan = connection?.connected && connection?.planUsage !== false;
   const active = conversations.find((c) => c.id === conversation);
@@ -221,7 +271,7 @@ export function ChatPanel({
               <Icon name="back" />
             </button>
             <div class="chat-header-copy">
-              <h1>{build ? `Build ${appName || 'app'}` : 'Chat'}</h1>
+              <h1>{voiceMode ? 'Voice' : build ? `Build ${appName || 'app'}` : 'Chat'}</h1>
               <button
                 class="conversation-picker-trigger"
                 aria-label={`Choose conversation: ${active ? conversationLabel(active, apps) : 'New conversation'}`}
@@ -338,6 +388,12 @@ export function ChatPanel({
                   </article>
                 );
               })}
+              <Proposals
+                items={proposals}
+                busy={busy || proposalBusy}
+                onDecide={onDecide}
+                apps={apps}
+              />
               {busy && (
                 <article class="message streaming-message">
                   <span class="message-label">ChatGPT</span>
@@ -390,6 +446,39 @@ export function ChatPanel({
                 to start chatting.
               </p>
             )}
+            {voiceError && (
+              <p class="error" role="alert">
+                {voiceError}
+              </p>
+            )}
+            {voiceMode && (
+              <div class="voice-controls">
+                <button
+                  type="button"
+                  class={`voice-talk ${listening ? 'listening' : ''}`}
+                  disabled={!busy && (!canDictate() || !plan || !model)}
+                  onClick={() => (busy ? onCancel() : voice())}
+                  aria-pressed={listening}
+                >
+                  <Icon name={busy || listening ? 'stop' : 'mic'} size={26} />
+                  {busy ? 'Stop reply' : listening ? 'Listening… tap to finish' : 'Tap to talk'}
+                </button>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={readReplies}
+                    onChange={(e) => setReadReplies(e.currentTarget.checked)}
+                  />
+                  Read replies aloud
+                </label>
+                {!canDictate() && (
+                  <p>
+                    Voice input is unavailable in this browser. Try Chrome or Edge, or type below.
+                  </p>
+                )}
+                <p>App changes appear as suggestions for you to confirm.</p>
+              </div>
+            )}
             <form class="composer" onSubmit={send}>
               <textarea
                 ref={input}
@@ -408,7 +497,6 @@ export function ChatPanel({
                       ? 'Ask your app anything…'
                       : 'What’s on your mind?'
                 }
-                disabled={busy}
                 onKeyDown={(e) => {
                   if (
                     e.key === 'Enter' &&
@@ -433,6 +521,18 @@ export function ChatPanel({
                   <span>{models.find((m) => m.slug === model)?.display_name || 'Options'}</span>
                 </button>
                 <div>
+                  {!voiceMode && (
+                    <button
+                      type="button"
+                      class="icon-button"
+                      aria-label={listening ? 'Stop dictation' : 'Dictate message'}
+                      aria-pressed={listening}
+                      disabled={!canDictate() || busy}
+                      onClick={voice}
+                    >
+                      <Icon name={listening ? 'stop' : 'mic'} />
+                    </button>
+                  )}
                   {busy ? (
                     <button
                       type="button"
@@ -490,6 +590,11 @@ export function ChatPanel({
           </button>
         </header>
         <div class="chat-options-body">
+          {error && (
+            <p class="error" role="alert">
+              {error}
+            </p>
+          )}
           <label>
             Model
             <select

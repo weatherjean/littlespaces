@@ -31,6 +31,7 @@ pub struct Server {
     pub agent: Agent,
     pub origin: String,
     pub directory: PathBuf,
+    pub host: super::host::Host,
 }
 #[derive(Debug)]
 pub struct ApiError(pub Error);
@@ -110,19 +111,12 @@ async fn security_headers(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let expected = url::Url::parse(&server.origin)
-        .ok()
-        .and_then(|u| {
-            u.host_str()
-                .map(|h| format!("{h}:{}", u.port_or_known_default().unwrap_or(80)))
-        })
-        .unwrap_or_default();
     let host = request
         .headers()
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if host != expected {
+    if !server.host.accepts(host, request.uri().path()) {
         return ApiError(Error::Unauthorized).into_response();
     }
     let mut response = next.run(request).await;
@@ -152,6 +146,11 @@ pub fn router(server: Arc<Server>) -> Router {
         )
         .route("/api/conversations/:id", get(history))
         .route("/api/conversations/:id/send", post(send))
+        .route("/api/conversations/:id/proposals", get(proposals))
+        .route(
+            "/api/conversations/:id/proposals/:proposal",
+            post(decide_proposal),
+        )
         .route("/api/jobs/:id", get(job))
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/secrets", get(secret_names).post(secret_put))
@@ -176,6 +175,8 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/settings", get(index))
         .route("/chat", get(index))
         .route("/chat/:id", get(index))
+        .route("/voice", get(index))
+        .route("/voice/:id", get(index))
         .route("/apps/:id", get(index))
         .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
@@ -245,7 +246,12 @@ async fn login(
     response.headers_mut().insert(
         "set-cookie",
         HeaderValue::from_str(&format!(
-            "little_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400"
+            "little_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{}",
+            if s.origin.starts_with("https:") {
+                "; Secure"
+            } else {
+                ""
+            }
         ))
         .map_err(|_| ApiError(Error::Authentication))?,
     );
@@ -396,12 +402,17 @@ async fn secret_delete(State(s): State<Arc<Server>>, Path(name): Path<String>) -
     Ok(Json(json!({"deleted":true})))
 }
 async fn chatgpt_status(State(s): State<Arc<Server>>) -> Api<Value> {
-    Ok(Json(s.chatgpt.status().await?))
+    let mut status = s.chatgpt.status().await?;
+    status["requiresLocalCallback"] = json!(s.origin.starts_with("https:"));
+    status["callbackPort"] = json!(url::Url::parse(&s.host.callback)
+        .map_err(|_| Error::Validation)?
+        .port_or_known_default());
+    Ok(Json(status))
 }
 async fn chatgpt_start(State(s): State<Arc<Server>>, h: HeaderMap) -> Api<Value> {
     let owner = hash_token(&cookie(&h));
     Ok(Json(
-        json!({"url":s.chatgpt.begin(owner,format!("{}/auth/callback",s.origin)).await?}),
+        json!({"url":s.chatgpt.begin(owner,s.host.callback.clone()).await?}),
     ))
 }
 async fn callback(
@@ -409,11 +420,13 @@ async fn callback(
     h: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
-    if owner_session(&s, &h).await.is_err() {
-        return ApiError(Error::Unauthorized).into_response();
-    }
-    match s.chatgpt.callback(&hash_token(&cookie(&h)), query).await {
-        Ok(()) => axum::response::Redirect::to("/").into_response(),
+    let result = if owner_session(&s, &h).await.is_ok() {
+        s.chatgpt.callback(&hash_token(&cookie(&h)), query).await
+    } else {
+        s.chatgpt.tunnel_callback(query).await
+    };
+    match result {
+        Ok(()) => axum::response::Redirect::to(&s.origin).into_response(),
         Err(e) => ApiError(e).into_response(),
     }
 }
@@ -473,18 +486,22 @@ async fn preview(
         .store
         .blocking(move |store| Ok(store.revision(&AppId(app), &RevisionId(id))?.code.frontend))
         .await?;
-    let html = frame_html(&code);
+    let html = frame_html(&code, &s.origin);
     let mut response = axum::response::Html(html).into_response();
-    response.headers_mut().insert("content-security-policy",HeaderValue::from_static("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"));
+    let policy=format!("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {}; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",s.origin);
+    response.headers_mut().insert(
+        "content-security-policy",
+        HeaderValue::from_str(&policy).map_err(|_| Error::Validation)?,
+    );
     Ok(response)
 }
-pub fn frame_html(code: &str) -> String {
+pub fn frame_html(code: &str, origin: &str) -> String {
     let encoded = serde_json::to_string(code)
         .unwrap_or_default()
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026");
-    format!("<!doctype html><html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\"><meta name=viewport content='width=device-width,initial-scale=1'><style>body{{margin:0;padding:16px;font:16px system-ui;color:#23332f}}button,input{{font:inherit;padding:8px}}</style><div id=app></div><script src=/applet.js></script><script>{FRAME_BRIDGE}\ntry{{new Function({encoded})();}}catch(e){{parent.postMessage({{kind:'diagnostic',message:String(e)}},'*');}}</script></html>")
+    format!("<!doctype html><html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {origin}; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\"><meta name=viewport content='width=device-width,initial-scale=1'><style>body{{margin:0;padding:16px;font:16px system-ui;color:#23332f}}button,input{{font:inherit;padding:8px}}</style><div id=app></div><script src=/applet.js></script><script>{FRAME_BRIDGE}\ntry{{new Function({encoded})();}}catch(e){{parent.postMessage({{kind:'diagnostic',message:String(e)}},'*');}}</script></html>")
 }
 const FRAME_BRIDGE: &str = r#"let serial=0;const pending=new Map();window.applet=Object.freeze({call:(action,input={})=>new Promise((resolve,reject)=>{if(pending.size>=16)return reject(Error('Too many calls'));const id=++serial;const timer=setTimeout(()=>{pending.delete(id);reject(Error('Action timed out'));},15000);pending.set(id,{resolve,reject,timer});parent.postMessage({kind:'action',id,action,input},'*');})});addEventListener('message',e=>{if(e.source!==parent||e.data?.kind!=='result')return;const p=pending.get(e.data.id);if(!p)return;clearTimeout(p.timer);pending.delete(e.data.id);e.data.error?p.reject(Error(e.data.error)):p.resolve(e.data.result);});addEventListener('error',e=>parent.postMessage({kind:'diagnostic',message:String(e.message)},'*'));addEventListener('unhandledrejection',e=>parent.postMessage({kind:'diagnostic',message:String(e.reason)},'*'));"#;
 async fn conversations(State(s): State<Arc<Server>>) -> Api<Value> {
@@ -504,7 +521,7 @@ async fn send(
     Json(v): Json<Value>,
 ) -> Api<Value> {
     Ok(Json(
-        json!({"job":s.agent.start(ConversationId(id),text(&v,"message")?,text(&v,"model")?).await?}),
+        json!({"job":s.agent.start_with_voice(ConversationId(id),text(&v,"message")?,text(&v,"model")?,v["voice"].as_bool().unwrap_or(false)).await?}),
     ))
 }
 async fn job(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
@@ -561,7 +578,12 @@ pub async fn serve(
     let chatgpt = ChatGpt::new(store.clone(), secrets.clone())?;
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let port = listener.local_addr()?.port();
-    let origin = format!("http://127.0.0.1:{port}");
+    let origin = std::env::var("LITTLESPACES_PUBLIC_URL")
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
+    let callback = std::env::var("LITTLESPACES_OAUTH_CALLBACK")
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{port}/auth/callback"));
+    let host = super::host::Host::new(origin, callback)?;
+    let origin = host.origin.clone();
     runtime.browser = super::browser::BrowserConfig::from_environment(origin.clone())?;
     let agent = Agent::new(runtime.clone(), chatgpt.clone(), origin.clone());
     agent.recover().await?;
@@ -578,6 +600,7 @@ pub async fn serve(
         agent,
         origin,
         directory,
+        host,
     });
     let scheduler = tokio::spawn(super::schedules::run(runtime));
     let result = axum::serve(listener, router(server))
@@ -602,7 +625,7 @@ async fn preview_test(
         .store
         .blocking(move |store| Ok(store.revision(&app, &id)?.code.frontend))
         .await?;
-    let frame = serde_json::to_string(&frame_html(&code))
+    let frame = serde_json::to_string(&frame_html(&code, &s.origin))
         .map_err(|_| Error::Validation)?
         .replace('<', "\\u003c");
     let html=format!("<!doctype html><meta charset=utf-8><iframe id=frame sandbox='allow-scripts allow-forms' style='width:100%;height:600px;border:0'></iframe><script>const frame=document.getElementById('frame');frame.srcdoc={frame};addEventListener('message',async e=>{{if(e.source!==frame.contentWindow)return;if(e.data.kind==='diagnostic'){{window.errors.push(String(e.data.message));parent.postMessage({{kind:'diagnostic',message:String(e.data.message)}},'*');return;}}if(e.data.kind!=='action')return;try{{let r=await fetch('/preview-test/{ticket}/action',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify(e.data)}});let v=await r.json();frame.contentWindow.postMessage({{kind:'result',id:e.data.id,result:v.result,error:v.error}},'*');}}catch(error){{frame.contentWindow.postMessage({{kind:'result',id:e.data.id,error:String(error)}},'*');}}}});window.errors=[];</script>");
@@ -732,4 +755,21 @@ async fn frontend_diagnostic(
 
 async fn revisions(State(s): State<Arc<Server>>, Path(app): Path<String>) -> Api<Value> {
     Ok(Json(s.runtime.store.blocking(move|store|{let app=AppId(app);let current=store.snapshot(&app)?.revision;let db=store.open()?;let mut q=db.prepare("SELECT r.id,r.code,EXISTS(SELECT 1 FROM revision_tests t WHERE t.revision=r.id AND t.digest=r.digest),(SELECT report FROM frontend_checks f WHERE f.revision=r.id AND f.digest=r.digest) FROM revisions r WHERE r.app=? ORDER BY r.rowid DESC LIMIT 50")?;let rows=q.query_map([&app.0],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,bool>(2)?,r.get::<_,Option<String>>(3)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;let result=rows.into_iter().map(|(id,code,tested,report)|{let code:AppCode=serde_json::from_str(&code).map_err(|_|Error::Storage)?;let kind=report.and_then(|s|serde_json::from_str::<Value>(&s).ok()).and_then(|v|v["kind"].as_str().map(str::to_owned));Ok(json!({"current":current.as_ref().is_some_and(|r|r.0==id),"id":id,"testCount":code.tests.len(),"backendTested":tested,"frontendKind":kind}))}).collect::<Result<Vec<_>>>()?;Ok(json!(result))}).await?))
+}
+
+async fn proposals(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(
+        super::interactions::list(&s.runtime.store, ConversationId(id)).await?,
+    ))
+}
+async fn decide_proposal(
+    State(s): State<Arc<Server>>,
+    Path((id, proposal)): Path<(String, String)>,
+    Json(v): Json<Value>,
+) -> Api<Value> {
+    let confirm = v["confirm"].as_bool().ok_or(Error::Validation)?;
+    Ok(Json(
+        super::interactions::decide(s.runtime.clone(), ConversationId(id), proposal, confirm)
+            .await?,
+    ))
 }
