@@ -5,6 +5,7 @@ use crate::{
     vault,
 };
 use serde_json::json;
+mod storage;
 struct Fixture(Store);
 impl Fixture {
     fn new() -> Self {
@@ -85,7 +86,7 @@ fn restore_keeps_current_records_and_creates_new_version() {
     let id = crate::random_uuid();
     let content = json!({"title":"Journal","description":"","source":"source-one","bundle":"source-one","backend":"","backendBundle":"","testReport":"[]","frontendFormat":"preact-htm"});
     let first = store
-        .publish(text(&space, "id"), &id, &content, None)
+        .publish(text(&space, "id"), &id, &content, None, 0)
         .unwrap();
     execute(
         &store.applet(&id, false).unwrap(),
@@ -96,10 +97,10 @@ fn restore_keeps_current_records_and_creates_new_version() {
     let mut changed = content.clone();
     changed["source"] = json!("source-two");
     store
-        .publish(text(&space, "id"), &id, &changed, None)
+        .publish(text(&space, "id"), &id, &changed, None, 1)
         .unwrap();
     let restored = store
-        .publish(text(&space, "id"), &id, &first, Some(1))
+        .publish(text(&space, "id"), &id, &first, Some(1), 2)
         .unwrap();
     assert_eq!(restored["version"], 3);
     assert_eq!(
@@ -172,6 +173,7 @@ fn workspace_import_preserves_linked_app_identity() {
             &id,
             &json!({"title":"Existing","description":"","source":"legacy","bundle":"legacy"}),
             None,
+            0,
         )
         .unwrap();
     store.import_legacy().unwrap();
@@ -194,7 +196,7 @@ async fn importer_preserves_password_records_and_vault_without_modifying_source(
     auth.configure(source, &credentials).await.unwrap();
     let space = source.create_space("Original app", "leaf").unwrap();
     let id = crate::random_uuid();
-    source.publish(text(&space,"id"),&id,&json!({"title":"Original app","description":"","source":"legacy source","bundle":"legacy bundle"}),None).unwrap();
+    source.publish(text(&space,"id"),&id,&json!({"title":"Original app","description":"","source":"legacy source","bundle":"legacy bundle"}),None, 0).unwrap();
     execute(
         &source.applet(&id, false).unwrap(),
         "INSERT INTO records VALUES('original',?)",
@@ -259,10 +261,10 @@ fn app_http_grants_are_private_persistent_and_independent_of_code_restore() {
     let space_b = store.create_space("B", "grid").unwrap();
     let content = json!({"title":"App","description":"","source":"one","bundle":"one"});
     let revision = store
-        .publish(text(&space_a, "id"), &a, &content, None)
+        .publish(text(&space_a, "id"), &a, &content, None, 0)
         .unwrap();
     store
-        .publish(text(&space_b, "id"), &b, &content, None)
+        .publish(text(&space_b, "id"), &b, &content, None, 0)
         .unwrap();
     assert_eq!(crate::capabilities::grants(store, &a).unwrap(), json!([]));
     let policy =
@@ -283,7 +285,7 @@ fn app_http_grants_are_private_persistent_and_independent_of_code_restore() {
     assert!(crate::capabilities::check(&policy,&json!({"url":"https://api.example.com/items","headers":{"Authorization":{"secret":"OTHER_KEY"}}})).is_err());
     crate::capabilities::save(store, &a, &json!([])).unwrap();
     store
-        .publish(text(&space_a, "id"), &a, &revision, Some(1))
+        .publish(text(&space_a, "id"), &a, &revision, Some(1), 1)
         .unwrap();
     assert_eq!(crate::capabilities::grants(store, &a).unwrap(), json!([]));
     assert!(crate::capabilities::normalize(
@@ -341,7 +343,7 @@ fn incremental_commits_touch_only_changed_rows_and_reject_stale_snapshots() {
     let id = crate::random_uuid();
     let content = json!({"title":"Journal","description":"","source":"one","bundle":"one"});
     let revision = store
-        .publish(text(&space, "id"), &id, &content, None)
+        .publish(text(&space, "id"), &id, &content, None, 0)
         .unwrap();
     let db = store.applet(&id, false).unwrap();
     db.execute_batch("INSERT INTO records VALUES('untouched','1'),('changed','2'),('removed','3'); CREATE TABLE audit(operation TEXT,key TEXT); CREATE TRIGGER audit_delete AFTER DELETE ON records BEGIN INSERT INTO audit VALUES('delete',old.key); END; CREATE TRIGGER audit_insert AFTER INSERT ON records BEGIN INSERT INTO audit VALUES('insert',new.key); END; CREATE TRIGGER audit_update AFTER UPDATE ON records BEGIN INSERT INTO audit VALUES('update',new.key); END;").unwrap();
@@ -365,7 +367,7 @@ fn incremental_commits_touch_only_changed_rows_and_reject_stale_snapshots() {
             .is_err()
     );
     store
-        .publish(text(&space, "id"), &id, &content, None)
+        .publish(text(&space, "id"), &id, &content, None, 1)
         .unwrap();
     let error =
         crate::backend::commit_records(store, &id, &revision["version"], &changed, &old, true)
@@ -385,7 +387,7 @@ async fn action_contracts_are_bound_to_source_and_effects_are_host_checked() {
     let actions = vec![action.clone()];
     let content = json!({"title":"App","description":"","source":"ui","bundle":"ui","backend":source,"actionContract":crate::backend::contract(source,&actions).to_string()});
     let mut revision = store
-        .publish(text(&space, "id"), &id, &content, None)
+        .publish(text(&space, "id"), &id, &content, None, 0)
         .unwrap();
     assert_eq!(
         crate::backend::catalog(store, &id, &revision)
@@ -420,6 +422,7 @@ async fn debugging_tools_do_not_grant_permissions_or_bypass_turn_restrictions() 
             &id,
             &json!({"title":"App","description":"","source":"ui","bundle":"ui"}),
             None,
+            0,
         )
         .unwrap();
     let app = crate::App {
@@ -546,6 +549,7 @@ fn competing_record_commits_save_one_snapshot_and_report_the_conflict() {
             &id,
             &json!({"title":"App","description":"","source":"ui","bundle":"ui"}),
             None,
+            0,
         )
         .unwrap();
     let barrier = Arc::new(Barrier::new(3));

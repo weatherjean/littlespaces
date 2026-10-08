@@ -27,6 +27,16 @@ On the first run, open the private setup URL printed in the terminal and configu
 
 After building, the server serves the UI and runs applet actions with its executable and `build-rust/web`. AI chat and app creation additionally require the pinned Codex app-server executable installed by npm (or `CODEX_BINARY` pointing to a compatible executable). Applet execution needs no Node runtime, frontend compiler, or local speech model. This is not yet a standalone release package. See [contributor guidance](../CONTRIBUTING.md) for the release build and dependency boundaries.
 
+## Storage upgrades and publication
+
+Rust workspace and applet schemas use versioned additive migrations. An immediate transaction serializes an upgrade, rechecks the schema version after acquiring the write lock, and rolls back all DDL if an upgrade fails. Ordinary applet opens read the version without rerunning schema writes. Newer unknown schemas are rejected; incompatible legacy links are reported without deleting data.
+
+Rust storage uses SQLite rollback journals (`journal_mode=DELETE`) and `synchronous=FULL`. Publication attaches the applet database to the workspace connection and commits the new revision, app identity/name, and approved draft/plan outcome together. The expected published version, active approval and exact prepared draft are checked inside that transaction. New launcher spaces are also created there, so failed publication leaves no empty launcher tile. Notifications are best effort after the commit and cannot turn a completed publication into a reported failure. Record snapshots and existing records remain preserved during publication and restore.
+
+The journal choice is intentional: [SQLite cannot make a multi-file attached transaction atomic in WAL mode](https://www.sqlite.org/lang_attach.html). Rollback journals allow that atomic commit, with a concurrency tradeoff: readers may wait briefly during writes. Keep workspace files on a local filesystem. Stop the existing server before starting an upgraded binary; the Rust opener converts existing WAL files, with a bounded retry for journal configuration only. It never retries an app action or external request. Do not run the preserved Node implementation against the same files at the same time.
+
+Focused regressions cover competing upgrades/publications, stale drafts and revoked approval, data preservation, and injected SQL failures. These are not physical power-loss or target-filesystem validation; those remain part of later system testing and deployment validation.
+
 ## Applet authoring without a build step
 
 Applet frontends use plain JavaScript and HTM tagged templates with Preact. They use `window.appletUI` (`html`, `h`, `render`, `useState`, `useEffect`) and the scoped `window.applet.call(action, input)` capability. The shared runtime is bundled once when releasing LittleSpaces. There is no JSX transformation, TypeScript stripping, dependency installation, Tailwind compilation, or bundling when opening this applet.

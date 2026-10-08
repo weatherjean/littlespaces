@@ -357,7 +357,7 @@ async fn dispatch(
             let tests = backend::test(include_str!("plants-backend.js")).await?;
             let content = json!({"title":"Plant care","description":"A watering journal for your indoor jungle.","source":source,"bundle":source,"backend":include_str!("plants-backend.js"),"backendBundle":include_str!("plants-backend.js"),"testReport":json!(tests.report).to_string(),"actionContract":backend::contract(include_str!("plants-backend.js"),&tests.catalog).to_string(),"chatInstructions":include_str!("plants-chat.txt"),"frontendFormat":"preact-htm"});
             return Ok(
-                json!({"applet":store.publish(text(&space,"id"),&crate::random_uuid(),&content,None)?,"spaceId":space["id"]}),
+                json!({"applet":store.publish(text(&space,"id"),&crate::random_uuid(),&content,None,0)?,"spaceId":space["id"]}),
             );
         }
         "/api/spaces" => {
@@ -697,7 +697,15 @@ async fn dispatch(
                     "SELECT space_id FROM space_applets WHERE applet_id=?",
                     &[json!(id)],
                 )?;
-                store.publish(text(&owner, "space_id"), id, &old, Some(version))?;
+                store.publish(
+                    text(&owner, "space_id"),
+                    id,
+                    &old,
+                    Some(version),
+                    input["expectedVersion"]
+                        .as_i64()
+                        .ok_or("Choose expected version")?,
+                )?;
             }
             return Ok(
                 json!({"applet":store.revision(id,None)?,"versions":store.versions(id)?,"document":applet_document(app,id).await?,"spaceId":first(&store.workspace()?,"SELECT space_id FROM space_applets WHERE applet_id=?",&[json!(id)])?["space_id"]}),

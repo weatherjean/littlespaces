@@ -4,7 +4,13 @@ use rusqlite::{
     Connection,
 };
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+mod migrations;
+mod publication;
 
 pub const LAUNCHER: &str = "00000000-0000-4000-8000-000000000001";
 pub type Result<T> = std::result::Result<T, String>;
@@ -25,16 +31,44 @@ fn sql(value: &Value) -> Sql {
     }
 }
 pub fn open(path: &Path) -> Result<Connection> {
-    let db = Connection::open(path).map_err(|e| e.to_string())?;
-    db.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;")
-        .map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    loop {
+        let db = Connection::open(path).map_err(|error| error.to_string())?;
+        db.busy_timeout(Duration::from_secs(5))
+            .map_err(|error| error.to_string())?;
+        // Attached publications need rollback journals on both files. SQLite then uses
+        // its super-journal for an atomic commit, including after a host crash.
+        let mode = db.query_row("PRAGMA journal_mode=DELETE", [], |row| {
+            row.get::<_, String>(0)
+        });
+        match mode {
+            Ok(mode) if mode == "delete" => {}
+            Ok(_) => return Err("Local storage requires SQLite rollback journals".into()),
+            Err(rusqlite::Error::SqliteFailure(code, _))
+                if matches!(
+                    code.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && started.elapsed() < Duration::from_secs(5) =>
+            {
+                // Mode changes can bypass the busy handler. Reopen to release the old
+                // WAL connection's shared lock, so another opener can finish conversion.
+                // Only local configuration is retried; actions and HTTP are never replayed.
+                drop(db);
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        db.pragma_update(None, "synchronous", "FULL")
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| error.to_string())?;
+        }
+        return Ok(db);
     }
-    Ok(db)
 }
 pub fn query(db: &Connection, statement: &str, args: &[Value]) -> Result<Vec<Value>> {
     let mut prepared = db.prepare(statement).map_err(|e| e.to_string())?;
@@ -95,25 +129,8 @@ impl Store {
     pub fn new(directory: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(directory.join("applets")).map_err(|e| e.to_string())?;
         let store = Self { directory };
-        let db = store.workspace()?;
-        db.execute_batch(include_str!("schema.sql"))
-            .map_err(|e| e.to_string())?;
-        // Compatible additive upgrades for original workspaces.
-        for (table, column, definition) in [
-            ("spaces", "archived", "INTEGER NOT NULL DEFAULT 0"),
-            ("chats", "launch", "TEXT NOT NULL DEFAULT '{}'"),
-            ("messages", "photos", "TEXT NOT NULL DEFAULT '[]'"),
-            ("secrets", "origins", "TEXT NOT NULL DEFAULT '[]'"),
-            ("schedules", "revision", "INTEGER NOT NULL DEFAULT 1"),
-        ] {
-            let columns = query(&db, &format!("PRAGMA table_info({table})"), &[])?;
-            if !columns.iter().any(|r| text(r, "name") == column) {
-                db.execute_batch(&format!(
-                    "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-                ))
-                .map_err(|e| e.to_string())?;
-            }
-        }
+        let mut db = store.workspace()?;
+        migrations::workspace(&mut db)?;
         execute(
             &db,
             "INSERT OR IGNORE INTO spaces(id,name,icon) VALUES(?,'Chat','spark')",
@@ -135,32 +152,8 @@ impl Store {
         if !create && !path.exists() {
             return Err("Applet not found".into());
         }
-        let db = open(&path)?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS records(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS revisions(version INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,description TEXT NOT NULL,source TEXT NOT NULL,bundle TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));").map_err(|e|e.to_string())?;
-        let columns = query(&db, "PRAGMA table_info(revisions)", &[])?;
-        for column in [
-            "backend",
-            "backendBundle",
-            "testReport",
-            "chatInstructions",
-            "changeSummary",
-            "requestedChange",
-            "frontendFormat",
-            "actionContract",
-        ] {
-            if !columns.iter().any(|row| text(row, "name") == column) {
-                db.execute_batch(&format!(
-                    "ALTER TABLE revisions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
-                ))
-                .map_err(|e| e.to_string())?;
-            }
-        }
-        if !columns.iter().any(|r| text(r, "name") == "restoredFrom") {
-            db.execute_batch("ALTER TABLE revisions ADD COLUMN restoredFrom INTEGER")
-                .map_err(|e| e.to_string())?;
-        }
-        db.execute_batch("CREATE TABLE IF NOT EXISTS photos(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,bytes INTEGER NOT NULL,data BLOB NOT NULL,created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))").map_err(|e|e.to_string())?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS backend_contracts(hash TEXT PRIMARY KEY,contract TEXT NOT NULL); CREATE TABLE IF NOT EXISTS http_grants(id INTEGER PRIMARY KEY CHECK(id=1),grants TEXT NOT NULL); CREATE TABLE IF NOT EXISTS external_operations(id TEXT PRIMARY KEY,action TEXT NOT NULL,origin TEXT NOT NULL,method TEXT NOT NULL,status TEXT NOT NULL,http_status INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS app_diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,version INTEGER NOT NULL,kind TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL);").map_err(|e| e.to_string())?;
+        let mut db = open(&path)?;
+        migrations::applet(&mut db)?;
         Ok(db)
     }
     pub fn import_legacy(&self) -> Result<()> {
@@ -343,46 +336,6 @@ impl Store {
     pub fn tool(&self, chat: &str, call: &Value) -> Result<()> {
         execute(&self.workspace()?,"INSERT INTO chat_tools(id,thread,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",&[call["id"].clone(),json!(chat),json!(crate::diagnostics::sanitize(call,0).to_string())])?;
         Ok(())
-    }
-    pub fn publish(
-        &self,
-        space: &str,
-        id: &str,
-        content: &Value,
-        restored: Option<i64>,
-    ) -> Result<Value> {
-        self.space(space)?;
-        if let Ok(owner) = first(
-            &self.workspace()?,
-            "SELECT space_id FROM space_applets WHERE applet_id=?",
-            &[json!(id)],
-        ) {
-            if text(&owner, "space_id") != space {
-                return Err("Applet belongs to another app".into());
-            }
-        }
-        let existing = self.applet_id(space).ok();
-        if existing.as_deref().is_some_and(|other| other != id) {
-            return Err("An app has one applet".into());
-        }
-        let db = self.applet(id, true)?;
-        let summary = restored
-            .map(|v| format!("Restored code and chat guidance from v{v}. Current data kept."))
-            .unwrap_or_else(|| "Published app revision.".into());
-        execute(&db,"INSERT INTO revisions(title,description,source,bundle,backend,backendBundle,testReport,chatInstructions,changeSummary,requestedChange,restoredFrom,frontendFormat,actionContract) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",&[content["title"].clone(),content["description"].clone(),content["source"].clone(),content["bundle"].clone(),json!(text(content,"backend")),json!(text(content,"backendBundle")),json!(text(content,"testReport")),json!(text(content,"chatInstructions")),json!(summary),json!(text(content,"requestedChange")),json!(restored),json!(text(content,"frontendFormat")),json!(text(content,"actionContract"))])?;
-        execute(
-            &self.workspace()?,
-            "INSERT OR IGNORE INTO space_applets VALUES(?,?)",
-            &[json!(id), json!(space)],
-        )?;
-        execute(
-            &self.workspace()?,
-            "UPDATE spaces SET name=?,updated_at=? WHERE id=?",
-            &[content["title"].clone(), json!(now()), json!(space)],
-        )?;
-        let mut rev = self.revision(id, None)?;
-        rev["id"] = json!(id);
-        Ok(rev)
     }
     pub fn json_row(&self, table: &str, key: &str) -> Result<Value> {
         let column = if table == "build_plans" || table == "build_drafts" {

@@ -1,6 +1,6 @@
 use crate::{
     automation, backend, photos,
-    store::{execute, now, query, text, Result, LAUNCHER},
+    store::{execute, now, query, text, Result},
     vault, App,
 };
 use serde_json::{json, Value};
@@ -296,7 +296,9 @@ impl Tools {
                     return Err("That version is already current".into());
                 }
                 let rev = store.revision(&id, Some(version))?;
-                Ok(json!({"applet":store.publish(&self.space,&id,&rev,Some(version))?}))
+                Ok(
+                    json!({"applet":store.publish(&self.space,&id,&rev,Some(version),input["expectedVersion"].as_i64().ok_or("Choose expected version")?)?}),
+                )
             }
             "list_photos" => photos::list(store, &self.space),
             "read_photo" => photos::data_url(store, &self.space, text(&input, "id")),
@@ -558,35 +560,21 @@ impl Tools {
                 )
             }
             "publish_draft" => {
-                if draft["prepared"].is_null() {
-                    return Err("Test this exact draft revision before publishing".into());
-                }
-                if let Some(id) = applet {
-                    if store.revision(&id, None)?["version"] != draft["baseVersion"] {
-                        return Err("Published app changed while editing".into());
-                    }
-                }
-                let mut target = self.space.clone();
-                if target == LAUNCHER {
-                    let space =
-                        store.create_space(text(approved, "title"), text(approved, "emoji"))?;
-                    target = text(&space, "id").into();
-                }
-                let published =
-                    store.publish(&target, text(&draft, "target"), &draft["prepared"], None)?;
-                let mut plan = live_plan;
-                plan["status"] = json!("complete");
-                plan["publishedId"] = published["id"].clone();
-                plan["publishedSpaceId"] = json!(target);
-                store.json_save("build_plans", &self.chat, &plan)?;
-                draft["published"] = published.clone();
-                store.json_save("build_drafts", &self.chat, &draft)?;
-                automation::notify(
+                let result = store.publish_draft(&self.space, &self.chat, approved, &draft)?;
+                let target = text(&result, "spaceId");
+                if let Err(error) = automation::notify(
                     store,
-                    &target,
+                    target,
                     &json!({"key":"app:published","title":"Your app is ready","body":"Open your app from Home."}),
-                )?;
-                Ok(json!({"applet":published,"spaceId":target}))
+                ) {
+                    // Publication has committed. Notification failure must not claim it failed.
+                    crate::diagnostics::log(
+                        store,
+                        "publication.notification_failed",
+                        json!({"spaceId":target,"error":error}),
+                    );
+                }
+                Ok(result)
             }
             "debug_draft_action" => {
                 let data = serde_json::from_str(text(&input, "inputJSON"))

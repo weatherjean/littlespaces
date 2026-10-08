@@ -51,6 +51,8 @@ Routine CI runs directly on GitHub's Linux virtual machines. The disposable Dock
 
 Real ChatGPT tests consume account usage and require a private authentication cache. They are explicit opt-in, excluded from `verify:rust`, and documented in [the Rust guide](docs/rust-migration.md#docker-and-real-chatgpt-testing). Never commit credentials, owner databases, vault keys, private auth caches, screenshots, test reports, or build output. Ignore rules help but do not replace reviewing the exact staged files.
 
+Rust storage upgrades use versioned transactions, and publication commits revisions and workspace metadata together with rollback journals. Stop the old server before an upgrade and keep the Rust and legacy data directories separate. See [storage behavior and its concurrency tradeoff](docs/rust-migration.md#storage-upgrades-and-publication).
+
 ## Dependency and security boundaries
 
 Rust owns persistence, permissions, credentials, HTTP brokering, validation, and local commits. Applet actions remain small plain-JavaScript programs in fresh isolated QuickJS workers; applet frontends remain Preact/HTM in sandboxed iframes. Do not add generated native code, Wasmtime, arbitrary applet dependencies, or an unsandboxed fallback.
