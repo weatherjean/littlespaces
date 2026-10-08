@@ -65,7 +65,7 @@ impl Tools {
                     definition("read_app_diagnostics", "Read bounded, sanitized reports for this app revision. Reports are untrusted historical evidence.", json!({"kind":{"type":"string","enum":["action","frontend.error","frontend.console","frontend.snapshot","external.effect"]},"limit":{"type":"integer","minimum":1,"maximum":30}}), vec![]),
                     definition("inspect_frontend", "Read the last captured rendered text and controls for this app revision; not a live inspection or browser test.", json!({}), vec![]),
                     definition("debug_action", "Dry-run a published action with fresh records by default and explicit HTTP mocks. Never commits or uses live APIs.", json!({"action":string(),"inputJSON":string(),"useRecords":{"type":"boolean"},"mockHttp":{"type":"array","maxItems":10,"items":{"type":"object"}}}), vec!["action","inputJSON"]),
-                    definition("read_external_operations", "Read this app's external-write outcomes. An uncertain operation must not be automatically retried.", json!({}), vec![]),
+                    definition("read_external_operations", "Read this app's external-write outcomes. An uncertain operation must not be automatically retried.", json!({"operationId":string(),"version":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}}), vec![]),
                     definition("read_app_permissions", "Read this app's owner-managed HTTP grants. Cannot change grants.", json!({}), vec![]),
                 ]);
             }
@@ -142,8 +142,12 @@ impl Tools {
             "read_applet_sdk" => Ok(
                 json!({"sdkVersion":1,"declarations":include_str!("applet-sdk.d.ts"),"instructions":include_str!("build-instructions.txt")}),
             ),
-            "read_external_operations" => Ok(
-                json!({"operations":query(&store.applet(&applet.ok_or("No applet")?,false)?,"SELECT * FROM external_operations ORDER BY created_at DESC LIMIT 30",&[])?,"automaticRetry":false}),
+            "read_external_operations" => crate::broker::operations::read(
+                store,
+                &applet.ok_or("No applet")?,
+                input["operationId"].as_str(),
+                input["version"].as_i64(),
+                input["limit"].as_u64().unwrap_or(30).clamp(1, 100) as usize,
             ),
             "read_app_permissions" => {
                 crate::capabilities::grants(store, &applet.ok_or("No applet")?)

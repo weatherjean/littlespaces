@@ -119,6 +119,7 @@ pub async fn call(
 ) -> Result<Value> {
     let current = store.revision(id, None)?;
     let total_started = std::time::Instant::now();
+    let mut requests = Vec::new();
     let result = async {
         if expected.is_some_and(|v| Some(v) != current["version"].as_i64()) {
             return Err("App revision changed. Refresh before invoking this action".into());
@@ -141,14 +142,16 @@ pub async fn call(
         let mut req = request(source, "call", name, input, before);
         req.catalog = catalog.clone();
         let started = std::time::Instant::now();
-        let result = sandbox::run_with(
+        let result = sandbox::run_with_trace(
             &req,
             Some(sandbox::Authority {
                 store,
                 applet_id: id,
                 http: &action["http"],
                 read_only: action["readOnly"] == true,
+                version: current["version"].as_i64(),
             }),
+            &mut requests,
         )
         .await;
         let _ = crate::diagnostics::record(
@@ -163,7 +166,7 @@ pub async fn call(
                 "ok": result.is_ok(),
                 "error": result.as_ref().err(),
                 "logs": result.as_ref().ok().map(|output| &output.logs),
-                "requests": result.as_ref().ok().map(|output| &output.requests),
+                "requests": requests,
             }),
         );
         let output = result?;
@@ -182,15 +185,19 @@ pub async fn call(
                 &current["version"],
                 &old,
                 &records,
-                output
-                    .requests
-                    .iter()
-                    .any(|event| event["code"] == "external_write"),
+                &crate::broker::operations::ids(&requests),
             )?;
         }
         Ok(output.result)
     }
     .await;
+    if result.is_err() || !commit {
+        let _ = crate::broker::operations::uncommitted(
+            store,
+            id,
+            &crate::broker::operations::ids(&requests),
+        );
+    }
     let _ = crate::diagnostics::record(
         store,
         id,
@@ -321,6 +328,7 @@ pub async fn probe_source(
             applet_id: id,
             http: &action["http"],
             read_only: true,
+            version: None,
         }),
         &mut requests,
     )

@@ -7,13 +7,16 @@ fn version(db: &Connection) -> Result<i64> {
         .map_err(|error| error.to_string())
 }
 
-fn migrate(db: &mut Connection, apply: impl FnOnce(&Connection) -> Result<()>) -> Result<()> {
-    const CURRENT: i64 = 1;
+fn migrate(
+    db: &mut Connection,
+    current: i64,
+    apply: impl FnOnce(&Connection) -> Result<()>,
+) -> Result<()> {
     let check = |version| -> Result<bool> {
-        if version > CURRENT {
+        if version > current {
             Err("Database schema is newer than this LittleSpaces version".into())
         } else {
-            Ok(version == CURRENT)
+            Ok(version == current)
         }
     };
     if check(version(db)?)? {
@@ -25,7 +28,7 @@ fn migrate(db: &mut Connection, apply: impl FnOnce(&Connection) -> Result<()>) -
     // Another opener may have finished the upgrade while this connection waited.
     if !check(version(&tx)?)? {
         apply(&tx)?;
-        tx.pragma_update(None, "user_version", CURRENT)
+        tx.pragma_update(None, "user_version", current)
             .map_err(|error| error.to_string())?;
     }
     tx.commit().map_err(|error| error.to_string())
@@ -45,7 +48,7 @@ fn columns(db: &Connection, table: &str, additions: &[(&str, &str)]) -> Result<(
 }
 
 pub(super) fn workspace(db: &mut Connection) -> Result<()> {
-    migrate(db, |db| {
+    migrate(db, 1, |db| {
         db.execute_batch(include_str!("../schema.sql"))
             .map_err(|error| error.to_string())?;
         for (table, column, definition) in [
@@ -72,7 +75,7 @@ pub(super) fn workspace(db: &mut Connection) -> Result<()> {
 }
 
 pub(super) fn applet(db: &mut Connection) -> Result<()> {
-    migrate(db, |db| {
+    migrate(db, 2, |db| {
         db.execute_batch(include_str!("applet-schema.sql"))
             .map_err(|error| error.to_string())?;
         let additions: Vec<_> = [
@@ -89,6 +92,15 @@ pub(super) fn applet(db: &mut Connection) -> Result<()> {
         .map(|name| (name, "TEXT NOT NULL DEFAULT ''"))
         .chain([("restoredFrom", "INTEGER")])
         .collect();
-        columns(db, "revisions", &additions)
+        columns(db, "revisions", &additions)?;
+        columns(
+            db,
+            "external_operations",
+            &[
+                ("version", "INTEGER"),
+                ("response_state", "TEXT NOT NULL DEFAULT 'unknown'"),
+                ("local_status", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ],
+        )
     })
 }

@@ -5,6 +5,7 @@ use crate::{
     vault,
 };
 use serde_json::json;
+mod external;
 mod storage;
 struct Fixture(Store);
 impl Fixture {
@@ -357,21 +358,25 @@ fn incremental_commits_touch_only_changed_rows_and_reject_stale_snapshots() {
         ("changed".into(), json!(4)),
         ("added".into(), json!(5)),
     ]);
-    crate::backend::commit_records(store, &id, &revision["version"], &old, &changed, false)
-        .unwrap();
+    crate::backend::commit_records(store, &id, &revision["version"], &old, &changed, &[]).unwrap();
     let audit = query(&db, "SELECT * FROM audit ORDER BY key", &[]).unwrap();
     assert_eq!(audit,json!([{"operation":"insert","key":"added"},{"operation":"update","key":"changed"},{"operation":"delete","key":"removed"}]).as_array().unwrap().clone());
     let before = store.records(&id).unwrap();
     assert!(
-        crate::backend::commit_records(store, &id, &revision["version"], &old, &old, false)
-            .is_err()
+        crate::backend::commit_records(store, &id, &revision["version"], &old, &old, &[]).is_err()
     );
     store
         .publish(text(&space, "id"), &id, &content, None, 1)
         .unwrap();
-    let error =
-        crate::backend::commit_records(store, &id, &revision["version"], &changed, &old, true)
-            .unwrap_err();
+    let error = crate::backend::commit_records(
+        store,
+        &id,
+        &revision["version"],
+        &changed,
+        &old,
+        &["synthetic-operation".into()],
+    )
+    .unwrap_err();
     assert!(error.contains("External changes may already have occurred"));
     assert_eq!(store.records(&id).unwrap(), before);
 }
@@ -515,6 +520,7 @@ async fn host_read_only_authority_rejects_external_writes_before_recording_inten
         applet_id: &id,
         http: &policy,
         read_only: true,
+        version: None,
     };
     let mut diagnostics = vec![];
     let error = crate::broker::request_for_action(
@@ -567,7 +573,7 @@ fn competing_record_commits_save_one_snapshot_and_report_the_conflict() {
                     &version,
                     &BTreeMap::new(),
                     &BTreeMap::from([("winner".into(), json!(value))]),
-                    false,
+                    &[],
                 )
             })
         })

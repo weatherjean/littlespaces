@@ -8,6 +8,9 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     time::Duration,
 };
+pub(crate) mod operations;
+use operations::Operation;
+
 fn public(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !(a == 0
@@ -40,6 +43,7 @@ pub struct Authority<'a> {
     pub applet_id: &'a str,
     pub http: &'a serde_json::Value,
     pub read_only: bool,
+    pub version: Option<i64>,
 }
 /// Authorize each bridge request independently of the JavaScript wrapper.
 /// Persist write intent before dispatch; cancellation leaves an uncertain outcome.
@@ -62,43 +66,55 @@ pub async fn request_for_action(
         return Err("This action cannot use that HTTP method".into());
     }
     let operation = if external_write {
-        let id = crate::random_uuid();
+        let version = authority
+            .version
+            .ok_or("External writes require a revision-bound action")?;
         let origin = url::Url::parse(text(input, "url"))
             .map_err(|_| "Invalid API URL")?
             .origin()
             .ascii_serialization();
-        let now = crate::store::now();
-        crate::store::execute(
-            &authority.store.applet(authority.applet_id, false)?,
-            "INSERT INTO external_operations(id,action,origin,method,status,http_status,created_at,updated_at)
-             VALUES(?,?,?,?,'uncertain',NULL,?,?)",
-            &[json!(id), json!(action), json!(origin), json!(method), json!(now), json!(now)],
-        )?;
-        diagnostics.push(json!({
-            "operationId": id,
-            "code": "external_write",
-            "outcome": "uncertain",
-            "automaticRetry": false,
-        }));
-        Some((id, diagnostics.len() - 1))
+        Some(Operation::begin(
+            authority.store,
+            authority.applet_id,
+            version,
+            action,
+            &origin,
+            &method,
+        )?)
     } else {
         None
     };
-    let result = request(authority.store, input, authority.read_only).await;
-    if let Some((id, event)) = operation {
-        if let Ok(response) = &result {
-            crate::store::execute(
-                &authority.store.applet(authority.applet_id, false)?,
-                "UPDATE external_operations SET status='response_received',http_status=?,updated_at=? WHERE id=?",
-                &[response["status"].clone(), json!(crate::store::now()), json!(id)],
-            )?;
-            diagnostics[event]["outcome"] = json!("response_received");
+    let event = diagnostics.len();
+    if let Some(operation) = &operation {
+        diagnostics.push(json!({"operationId":operation.id,"code":"external_write","outcome":"uncertain","version":authority.version,"automaticRetry":false}));
+    }
+    let result = request_with_operation(
+        authority.store,
+        input,
+        authority.read_only,
+        operation.as_ref(),
+    )
+    .await;
+    if let Some(operation) = &operation {
+        if let Ok(evidence) = operation.evidence() {
+            diagnostics[event]["outcome"] = evidence["status"].clone();
+            diagnostics[event]["responseState"] = evidence["response_state"].clone();
+            diagnostics[event]["httpStatus"] = evidence["http_status"].clone();
         }
     }
     result
 }
 
 pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Value> {
+    request_with_operation(store, input, read_only, None).await
+}
+
+async fn request_with_operation(
+    store: &Store,
+    input: &Value,
+    read_only: bool,
+    operation: Option<&Operation<'_>>,
+) -> Result<Value> {
     let mut url = url::Url::parse(text(input, "url")).map_err(|_| "Invalid API URL")?;
     if url.scheme() != "https"
         || url.port_or_known_default() != Some(443)
@@ -202,26 +218,57 @@ pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Va
         }
         req = req.json(&input["body"]);
     }
+    if let Some(operation) = operation {
+        operation.dispatched()?;
+    }
     let response = req
         .send()
         .await
         .map_err(|_| "API request failed or timed out; inspect the app before retrying a write")?;
+    read_response(response, &credentials, operation).await
+}
+
+pub(crate) async fn read_response(
+    response: reqwest::Response,
+    credentials: &[String],
+    operation: Option<&Operation<'_>>,
+) -> Result<Value> {
     let status = response.status();
+    if let Some(operation) = operation {
+        operation.received(status.as_u16())?;
+    }
     if status.is_redirection() {
+        if let Some(operation) = operation {
+            operation.body_state("redirect_blocked")?;
+        }
         return Err("API redirects are blocked; use the final public endpoint".into());
     }
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "API response failed")?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(_) => {
+                if let Some(operation) = operation {
+                    operation.body_state("body_failed")?;
+                }
+                return Err("API response failed".into());
+            }
+        };
         if bytes.len() + chunk.len() > 1_000_000 {
+            if let Some(operation) = operation {
+                operation.body_state("body_too_large")?;
+            }
             return Err("API response exceeds 1 MB".into());
         }
         bytes.extend_from_slice(&chunk);
     }
     let mut data = serde_json::from_slice::<Value>(&bytes)
         .unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)));
-    redact(&mut data, &credentials);
+    redact(&mut data, credentials);
+    if let Some(operation) = operation {
+        operation.body_state("body_received")?;
+    }
     Ok(json!({"status":status.as_u16(),"ok":status.is_success(),"data":data}))
 }
 // API responses are untrusted. Providers can echo credentials in JSON keys as well as values.

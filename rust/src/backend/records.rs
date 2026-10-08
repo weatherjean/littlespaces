@@ -44,7 +44,7 @@ pub(crate) fn commit_records(
     version: &Value,
     old: &BTreeMap<String, Value>,
     records: &BTreeMap<String, Value>,
-    external_write: bool,
+    operations: &[String],
 ) -> Result<()> {
     let mut db = store.applet(id, false)?;
     let tx = db
@@ -65,7 +65,7 @@ pub(crate) fn commit_records(
         })
         .collect::<Result<_>>()?;
     if &rev["version"] != version || &live != old {
-        let message = if external_write {
+        let message = if !operations.is_empty() {
             "App data changed while the action ran. External changes may already have occurred; inspect external operations before retrying."
         } else {
             "App data changed while the action ran. Refresh before retrying."
@@ -84,6 +84,12 @@ pub(crate) fn commit_records(
             "INSERT INTO records VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             &[json!(key), json!(value.to_string())],
         )?;
+    }
+    for operation in operations {
+        let updated = execute(&tx, "UPDATE external_operations SET local_status='committed',updated_at=? WHERE id=? AND version=? AND local_status='pending'", &[json!(crate::store::now()),json!(operation),version.clone()])?;
+        if updated != 1 {
+            return Err("External-operation evidence changed. No records were committed.".into());
+        }
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
