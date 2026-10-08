@@ -1,0 +1,33 @@
+# Only source needed for the Linux test image enters the build context.
+**
+!package.json
+!package-lock.json
+!.prettierrc.json
+!web/
+!web/**
+!src/
+!src/lib/
+!src/lib/**
+!static/
+!static/**
+!scripts/
+!scripts/migration/
+!scripts/migration/**
+!tests/
+!tests/fixtures/
+!tests/fixtures/**
+!rust/
+!rust/Cargo.toml
+!rust/Cargo.lock
+!rust/src/
+!rust/src/**
+!deploy/
+!deploy/docker/
+!deploy/docker/**
+# Never send local workspaces, credentials, caches, or build artifacts.
+**/.env*
+**/*.sqlite*
+**/secrets.key
+**/node_modules/**
+**/target/**
+**/.data*/**

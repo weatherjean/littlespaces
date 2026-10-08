@@ -1,0 +1,37 @@
+# Disposable Linux tests, not a production deployment image.
+FROM rust:1.84.1-bookworm AS rust-build
+WORKDIR /build
+ENV CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
+COPY rust/Cargo.toml rust/Cargo.lock ./rust/
+COPY rust/src ./rust/src
+COPY web/applets ./web/applets
+RUN cargo build --manifest-path rust/Cargo.toml --locked \
+    && cargo test --manifest-path rust/Cargo.toml --locked \
+    && mkdir /out \
+    && cp rust/target/debug/little-spaces /out/little-spaces \
+    && cargo test --manifest-path rust/Cargo.toml --locked --no-run --message-format=json > /tmp/unit-artifacts.jsonl \
+    && unit_binary="$(sed -n '/"reason":"compiler-artifact"/{/"test":true/s/.*"executable":"\([^" ]*\)".*/\1/p;}' /tmp/unit-artifacts.jsonl)" \
+    && test -n "$unit_binary" \
+    && cp "$unit_binary" /out/little-spaces-unit-tests
+
+FROM node:24-bookworm AS tests
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap ca-certificates python3 procps \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci && npx playwright install --with-deps chromium webkit
+COPY --from=rust-build /out/ /usr/local/bin/
+COPY web ./web
+COPY src/lib ./src/lib
+COPY static ./static
+COPY rust/src ./rust/src
+COPY scripts/migration ./scripts/migration
+COPY tests/fixtures ./tests/fixtures
+RUN npm run build:rust:web \
+    && useradd --create-home --uid 10001 tester \
+    && mkdir -p /app/build-rust/screenshots /app/build-rust/live-tests \
+    && chown -R tester:tester /app/build-rust
+USER tester
+ENV HOME=/home/tester RUST_BINARY=/usr/local/bin/little-spaces
+CMD ["sh", "-c", "little-spaces-unit-tests && npm run check:rust:web && npm run test:rust:e2e"]

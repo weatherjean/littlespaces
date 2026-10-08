@@ -5,7 +5,20 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const journal = readFileSync(join(root, 'web/applets/journal.js'), 'utf8');
-const backend = readFileSync(join(root, 'rust/src/journal.js'), 'utf8');
+const backend =
+  readFileSync(join(root, 'rust/src/journal.js'), 'utf8') +
+  `
+actions.slowRead = {description:'Fixture concurrent read',readOnly:true,parameters:{type:'object'},run:(_,ctx)=>{const until=Date.now()+350;while(Date.now()<until){}return ctx.db.list()}};
+actions.hostBoundaryTest = {
+  description:'Fixture verifies the host independently rejects undeclared HTTP',
+  readOnly:true, parameters:{type:'object'},
+  run:() => {
+    const response = JSON.parse(globalThis.__http(JSON.stringify({url:'https://api.example.com/items'})));
+    if(response.__bridgeError) throw Error(response.__bridgeError);
+    return response;
+  }
+};
+`;
 const marker = join(process.env.CODEX_HOME, 'fixture-connected');
 let connected = existsSync(marker),
   sequence = 0;
@@ -125,6 +138,33 @@ async function run(id, input) {
         caveats: [],
       },
       () => done(id, 'Here is a plan for your journal.'),
+    );
+    return;
+  }
+  if (/debug/i.test(last) && thread.tools[0]?.tools.some((tool) => tool.name === 'debug_action')) {
+    call(id, 'read_applet_sdk', {}, () =>
+      call(id, 'read_app_permissions', {}, () =>
+        call(id, 'read_app_diagnostics', {}, () =>
+          call(id, 'inspect_frontend', {}, () =>
+            call(
+              id,
+              'debug_action',
+              {
+                action: 'add',
+                inputJSON: JSON.stringify({ text: 'A dry run must not persist' }),
+                useRecords: true,
+              },
+              (result) => {
+                if (!result.ok || result.committed || result.liveHttp)
+                  throw Error('Unsafe debug result');
+                call(id, 'read_external_operations', {}, () =>
+                  done(id, 'Debugging completed without writes.'),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
     return;
   }

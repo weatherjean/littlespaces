@@ -236,6 +236,86 @@ try {
   await frame.getByLabel('What’s on your mind?').fill('An idea worth preserving');
   await frame.getByRole('button', { name: 'Save entry', exact: true }).click();
   await frame.getByText('An idea worth preserving', { exact: true }).waitFor();
+  const appletId = await page.evaluate(
+    async (spaceId) => (await (await fetch(`/api/spaces/${spaceId}/view`)).json()).applet.id,
+    spaceId,
+  );
+  const actionCatalog = await page.evaluate(
+    async (id) => (await (await fetch(`/api/applets/${id}/actions`)).json()).actions,
+    appletId,
+  );
+  assert.equal(actionCatalog.find((action) => action.name === 'add').effects.records, 'write');
+  assert.deepEqual(actionCatalog.find((action) => action.name === 'add').http, []);
+  const concurrent = await page.evaluate(
+    async (id) =>
+      Promise.all(
+        Array.from({ length: 5 }, async () => {
+          const response = await fetch(`/api/applets/${id}/actions`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'slowRead', input: {}, version: 1 }),
+          });
+          return { status: response.status, value: await response.json() };
+        }),
+      ),
+    appletId,
+  );
+  assert.equal(
+    concurrent.filter((result) => result.status === 200).length,
+    4,
+    'Four concurrent workers must execute successfully',
+  );
+  assert.equal(
+    concurrent.filter((result) => String(result.value.error).includes('busy')).length,
+    1,
+    'Excess requests must fail busy without queueing',
+  );
+
+  assert.equal(
+    (await send(`/api/applets/${appletId}/actions`, { action: 'add', input: {}, version: 1 }))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await send(`/api/applets/${appletId}/actions`, {
+        action: 'add',
+        input: { text: 'Stale write' },
+        version: 999,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await send(`/api/applets/${appletId}/diagnostics`, { message: 'stale report', version: 999 }))
+      .status,
+    400,
+  );
+  await page.frames()[1].evaluate(async () => {
+    await window.applet.debug.report('Fixture diagnostic', {
+      password: 'private-debug-fixture',
+      screen: 'journal',
+    });
+    const input = document.createElement('textarea');
+    input.textContent = 'private-input-fixture';
+    const privateText = document.createElement('p');
+    privateText.dataset.private = '';
+    privateText.textContent = 'private-rendered-fixture';
+    document.getElementById('app').append(input, privateText);
+    await window.applet.debug.snapshot();
+    input.remove();
+    privateText.remove();
+  });
+  const reports = await page.evaluate(
+    async (id) => (await (await fetch(`/api/applets/${id}/diagnostics`)).json()).reports,
+    appletId,
+  );
+  assert(reports.some((report) => report.kind === 'frontend.snapshot'));
+  assert(reports.some((report) => report.data.message === 'Fixture diagnostic'));
+  assert(!JSON.stringify(reports).includes('private-debug-fixture'));
+  assert(!JSON.stringify(reports).includes('private-input-fixture'));
+  assert(!JSON.stringify(reports).includes('private-rendered-fixture'));
+  assert(!JSON.stringify(reports).includes('stale report'));
   const palette = await page.frames()[1].evaluate(() => {
     const body = document.body;
     const original = body.className;
@@ -275,6 +355,14 @@ try {
   await page.getByLabel('Message', { exact: true }).fill('Please add a journal entry');
   await page.getByRole('button', { name: 'Send message' }).click();
   await page.getByText('Saved your journal entry.', { exact: true }).waitFor();
+  await page.getByLabel('Message', { exact: true }).fill('Please debug this app');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await page.getByText('Debugging completed without writes.', { exact: true }).waitFor();
+  const debugRecords = await page.evaluate(
+    async (id) => (await (await fetch(`/api/applets/${id}/records`)).json()).records,
+    appletId,
+  );
+  assert(!debugRecords.some((record) => record.value.text === 'A dry run must not persist'));
   await page.getByRole('button', { name: 'App versions and tests' }).click();
   await page.getByRole('heading', { name: 'Versions & tests', exact: true }).waitFor();
   const png = await sharp({ create: { width: 20, height: 20, channels: 3, background: '#48a070' } })
@@ -295,6 +383,34 @@ try {
   await page.getByRole('link', { name: 'Home', exact: true }).click();
   await page.getByRole('link', { name: 'Little Journal', exact: true }).waitFor();
   await page.screenshot({ path: 'build-rust/screenshots/launcher-desktop.png', fullPage: true });
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'API access for Little Journal', exact: true }).click();
+  await page.getByRole('button', { name: 'Add service', exact: true }).click();
+  await page.getByLabel('HTTPS origin', { exact: true }).fill('https://api.example.com');
+  await page
+    .getByLabel('Secret names (comma separated; leave empty for public access)', { exact: true })
+    .fill('TEST_API_KEY');
+  await page.getByRole('button', { name: 'Save API access', exact: true }).click();
+  await page.getByText('API access saved.', { exact: true }).waitFor();
+  assert.deepEqual(
+    await page.evaluate(
+      async (id) => (await (await fetch(`/api/applets/${id}/permissions`)).json()).grants,
+      appletId,
+    ),
+    [{ origin: 'https://api.example.com', methods: ['GET', 'HEAD'], secrets: ['TEST_API_KEY'] }],
+  );
+  const deniedHttp = await send(`/api/applets/${appletId}/actions`, {
+    action: 'hostBoundaryTest',
+    input: {},
+    version: 1,
+  });
+  assert.equal(deniedHttp.status, 400);
+  assert.match(deniedHttp.value.error, /HTTP capability denied/);
+  await page.screenshot({
+    path: 'build-rust/screenshots/app-permissions-desktop.png',
+    fullPage: true,
+  });
+  await page.getByRole('link', { name: 'Apps', exact: true }).click();
   // Voice suggestions are read-only until explicitly confirmed, and confirmation is exactly once.
   await page.getByRole('link', { name: 'Voice', exact: true }).click();
   await page.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();

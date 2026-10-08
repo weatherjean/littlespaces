@@ -42,7 +42,9 @@
     "setup:rust": "node scripts/migration/start.mjs --setup-owner",
     "owner:reset:rust": "node scripts/migration/start.mjs --reset-owner",
     "import:rust": "node scripts/migration/start.mjs --import-workspace",
-    "verify:rust": "npm run check:rust && npm run test:rust && npm run build:rust:web && cargo build --manifest-path rust/Cargo.toml --locked && npm run test:rust:e2e"
+    "verify:rust": "npm run check:rust && npm run test:rust && npm run build:rust:web && cargo build --manifest-path rust/Cargo.toml --locked && npm run test:rust:e2e",
+    "test:rust:live": "node scripts/migration/test-live.mjs",
+    "test:rust:docker": "node scripts/migration/test-docker.mjs"
   },
   "dependencies": {
     "@openai/codex": "0.160.0",
