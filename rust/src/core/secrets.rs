@@ -72,14 +72,6 @@ impl Secrets {
         if value.is_empty() || value.len() > 16000 {
             return Err(Error::Validation);
         }
-        let count: i64 = self.store.open()?.query_row(
-            "SELECT COUNT(*) FROM secrets WHERE name<>?",
-            [name],
-            |r| r.get(0),
-        )?;
-        if count >= 128 {
-            return Err(Error::Limit);
-        }
         let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| Error::Storage)?;
         let mut nonce = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -92,7 +84,17 @@ impl Secrets {
                 },
             )
             .map_err(|_| Error::Storage)?;
-        self.store.open()?.execute("INSERT INTO secrets VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext",params![name,nonce.as_slice(),ciphertext])?;
+        let mut db = self.store.open()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM secrets WHERE name<>?", [name], |r| {
+                r.get(0)
+            })?;
+        if count >= 128 {
+            return Err(Error::Limit);
+        }
+        tx.execute("INSERT INTO secrets VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext",params![name,nonce.as_slice(),ciphertext])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn delete(&self, name: &str) -> Result<()> {

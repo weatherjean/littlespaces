@@ -8,3 +8,4 @@ pub mod http;
 pub mod runtime;
 pub use control::Cancellation;
 pub use runtime::{ExecutionMode, Invocation, Outcome, Runtime};
+pub mod authoring;

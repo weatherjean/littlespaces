@@ -24,7 +24,7 @@ impl Store {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let marker: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if marker != 1280528978 || version != 1 {
+            if marker != 1280528978 || version != 2 {
                 return Err(Error::Storage);
             }
         } else {
@@ -74,6 +74,23 @@ impl Store {
             params![draft.id.0, app.0, 1, encode(&draft.code)?],
         )?;
         Ok(draft)
+    }
+    pub fn draft(&self, app: &AppId, id: &DraftId) -> Result<Draft> {
+        let (version, code): (i64, String) = self
+            .open()?
+            .query_row(
+                "SELECT version,code FROM drafts WHERE app=? AND id=?",
+                params![app.0, id.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        Ok(Draft {
+            id: id.clone(),
+            app: app.clone(),
+            version,
+            code: serde_json::from_str(&code).map_err(|_| Error::Storage)?,
+        })
     }
     pub fn edit_draft(&self, id: &DraftId, expected: i64, code: AppCode) -> Result<()> {
         code.validate()?;
@@ -155,6 +172,16 @@ impl Store {
     ) -> Result<()> {
         let mut db = self.open()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::publish_in(&tx, app, id, expected)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn publish_in(
+        tx: &rusqlite::Transaction<'_>,
+        app: &AppId,
+        id: &RevisionId,
+        expected: Option<&RevisionId>,
+    ) -> Result<()> {
         let tested: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM revisions r JOIN revision_tests t ON t.revision=r.id AND t.digest=r.digest WHERE r.app=? AND r.id=?)", params![app.0,id.0], |r| r.get(0))?;
         if !tested {
             return Err(Error::Untested);
@@ -166,7 +193,6 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
-        tx.commit()?;
         Ok(())
     }
     pub fn snapshot(&self, app: &AppId) -> Result<Snapshot> {
@@ -368,5 +394,137 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalDecision {
+    Applied,
+    NotApplied,
+    AcceptUnknown,
+}
+impl Store {
+    pub(crate) fn begin_invocation(&self, request: &super::runtime::Invocation) -> Result<()> {
+        let mut db = self.open()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM invocations WHERE id=?)",
+            [&request.id.0],
+            |r| r.get(0),
+        )?;
+        if duplicate {
+            return Err(Error::DuplicateInvocation);
+        }
+        // Fence overlapping live actions and unresolved writes across revisions of the same app.
+        // A crash leaves 'running' intentionally blocked until the owner inspects recovery evidence.
+        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM invocations i WHERE i.app=? AND (i.state='running' OR EXISTS(SELECT 1 FROM external_operations e WHERE e.invocation=i.id AND (e.state='uncertain' OR COALESCE(e.status,0)>=300 OR i.state!='completed') AND NOT EXISTS(SELECT 1 FROM external_resolutions r WHERE r.operation=e.id))))",[&request.app.0],|r| r.get(0))?;
+        if blocked {
+            return Err(Error::ExternalUncertain);
+        }
+        tx.execute(
+            "INSERT INTO invocations VALUES(?,?,?,?,'running')",
+            params![
+                request.id.0,
+                request.app.0,
+                request.revision.0,
+                request.action
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Authenticated owner recovery only. Agent tools and scripts cannot acknowledge effects.
+    /// Even a complete response does not prove remote write semantics; retain its evidence.
+    pub fn resolve_external(
+        &self,
+        app: &AppId,
+        operation: &str,
+        decision: ExternalDecision,
+    ) -> Result<()> {
+        let decision = match decision {
+            ExternalDecision::Applied => "applied",
+            ExternalDecision::NotApplied => "not_applied",
+            ExternalDecision::AcceptUnknown => "accept_unknown",
+        };
+        let changed=self.open()?.execute("INSERT INTO external_resolutions SELECT e.id,? FROM external_operations e JOIN invocations i ON i.id=e.invocation WHERE i.app=? AND e.id=? ON CONFLICT(operation) DO UPDATE SET decision=excluded.decision",params![decision,app.0,operation])?;
+        if changed != 1 {
+            return Err(Error::NotFound);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::super::runtime::{ExecutionMode, Invocation};
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn fresh_ids_cannot_replay_unresolved_effects_and_acknowledgment_preserves_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let app = store.create_app("External").unwrap();
+        let code = AppCode {
+            backend: "fn run(input) { [] }".into(),
+            frontend: "".into(),
+            actions: vec![ActionContract {
+                name: "run".into(),
+                read_only: false,
+                input: json!({}),
+                output: json!({}),
+            }],
+            tests: vec![],
+        };
+        let draft = store.create_draft(&app, code).unwrap();
+        let revision = store.freeze_draft(&draft.id, 1).unwrap();
+        let mut request = Invocation {
+            id: InvocationId::new(),
+            app: app.clone(),
+            revision: revision.id,
+            action: "run".into(),
+            input: json!({}),
+            mode: ExecutionMode::Commit,
+        };
+        store.begin_invocation(&request).unwrap();
+        assert_eq!(
+            store.begin_invocation(&request),
+            Err(Error::DuplicateInvocation)
+        );
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO external_operations VALUES('effect',?,'POST','uncertain',200)",
+                [&request.id.0],
+            )
+            .unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "UPDATE invocations SET state='failed' WHERE id=?",
+                [&request.id.0],
+            )
+            .unwrap();
+        request.id = InvocationId::new();
+        assert_eq!(
+            store.begin_invocation(&request),
+            Err(Error::ExternalUncertain)
+        );
+        store
+            .resolve_external(&app, "effect", ExternalDecision::AcceptUnknown)
+            .unwrap();
+        store.begin_invocation(&request).unwrap();
+        let evidence: String = store
+            .open()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM external_operations WHERE id='effect'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(evidence, "uncertain");
     }
 }

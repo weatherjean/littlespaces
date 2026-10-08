@@ -24,6 +24,7 @@ identity!(AppId);
 identity!(DraftId);
 identity!(RevisionId);
 identity!(InvocationId);
+identity!(ConversationId);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +137,7 @@ pub enum Error {
     Network,
     ExternalUncertain,
     DuplicateInvocation,
+    ApprovalRequired,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl fmt::Display for Error {

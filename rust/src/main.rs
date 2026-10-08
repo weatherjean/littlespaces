@@ -1,4 +1,4 @@
-use little_spaces::core::{http::MockHttp, secrets::Secrets, *};
+use little_spaces::core::{http::MockHttp, secrets::Secrets, store::ExternalDecision, *};
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
 
@@ -11,7 +11,7 @@ async fn main() {
 }
 async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let command=args.next().ok_or("Usage: little-spaces <init|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence> <workspace-directory> ...")?;
+    let command=args.next().ok_or("Usage: little-spaces <init|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence|effect-resolve> <workspace-directory> ...")?;
     let directory = args.next().ok_or("Provide a workspace directory")?;
     let directory = Path::new(&directory);
     if command == "init" {
@@ -43,6 +43,7 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 return Err(Error::Limit.into());
             }
             let code: AppCode = serde_json::from_slice(&bytes).map_err(|_| Error::Validation)?;
+            code.validate()?;
             let app = store.create_app(&title)?;
             let draft = store.create_draft(&app, code)?;
             let revision = store.freeze_draft(&draft.id, 1)?;
@@ -112,6 +113,18 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let name = next()?;
             secrets.delete(&name)?;
             json!({"deleted":name})
+        }
+        "effect-resolve" => {
+            let app = AppId(next()?);
+            let operation = next()?;
+            let decision = match next()?.as_str() {
+                "applied" => ExternalDecision::Applied,
+                "not_applied" => ExternalDecision::NotApplied,
+                "accept_unknown" => ExternalDecision::AcceptUnknown,
+                _ => return Err("Choose applied, not_applied or accept_unknown".into()),
+            };
+            store.resolve_external(&app, &operation, decision)?;
+            json!({"acknowledged":operation})
         }
         "evidence" => {
             serde_json::to_value(store.external_evidence(&AppId(next()?), &InvocationId(next()?))?)?

@@ -43,6 +43,7 @@ pub struct Runtime {
     pub store: Store,
     secrets: Secrets,
     admission: Arc<tokio::sync::Semaphore>,
+    pub(crate) authoring_admission: Arc<tokio::sync::Semaphore>,
     pub deadline: Duration,
 }
 struct Session {
@@ -59,8 +60,12 @@ impl Runtime {
             store,
             secrets,
             admission: Arc::new(tokio::sync::Semaphore::new(slots)),
+            authoring_admission: Arc::new(tokio::sync::Semaphore::new(slots)),
             deadline: Duration::from_millis(750),
         })
+    }
+    pub fn secret_names(&self) -> Result<Vec<super::secrets::SecretName>> {
+        self.secrets.list()
     }
     /// Every caller (UI/chat/schedule/dry run) supplies an immutable revision and unique invocation.
     pub async fn invoke(
@@ -111,18 +116,7 @@ impl Runtime {
         }
         if request.mode == ExecutionMode::Commit {
             // No implicit restart/replay, even when a prior call has incomplete local results.
-            let inserted = self.store.open()?.execute(
-                "INSERT OR IGNORE INTO invocations VALUES(?,?,?,?,'running')",
-                params![
-                    request.id.0,
-                    request.app.0,
-                    request.revision.0,
-                    request.action
-                ],
-            )?;
-            if inserted != 1 {
-                return Err(Error::DuplicateInvocation);
-            }
+            self.store.begin_invocation(&request)?;
         }
         let broker = Broker {
             store: self.store.clone(),
