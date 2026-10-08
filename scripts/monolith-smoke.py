@@ -20,7 +20,11 @@ def main():
             return json.loads(result.stdout)
 
         run("init", workspace)
-        app = run("create", workspace, "Tasks", str(ROOT / "examples/tasks-rhai.json"))
+        code = json.loads((ROOT / "examples/tasks-rhai.json").read_text())
+        code["frontend"] = ""  # This smoke verifies backend behavior; real frontend checks run separately.
+        fixture = Path(temporary) / "backend.json"
+        fixture.write_text(json.dumps(code))
+        app = run("create", workspace, "Tasks", str(fixture))
         run("test", workspace, app["app"], app["revision"])
         run("publish", workspace, app["app"], app["revision"])
         parameters = (workspace, app["app"], app["revision"])

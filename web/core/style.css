@@ -1,0 +1,172 @@
+:root {
+  font: 16px system-ui;
+  color: #23332f;
+  background: #f3f5ef;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+  background: #244f42;
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+input,
+textarea,
+select {
+  padding: 0.7rem;
+  border: 1px solid #b8c6bc;
+  border-radius: 8px;
+  background: white;
+}
+a {
+  color: #244f42;
+}
+.shell {
+  max-width: 1280px;
+  margin: auto;
+  padding: 24px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+h1 {
+  font: 600 28px Georgia;
+  margin: 0;
+}
+h2 {
+  font: 500 22px Georgia;
+}
+nav,
+.row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  gap: 24px;
+}
+.panel {
+  background: white;
+  border: 1px solid #d9e1d6;
+  border-radius: 16px;
+  padding: 24px;
+}
+.apps {
+  display: grid;
+  gap: 8px;
+}
+.apps button {
+  text-align: left;
+  background: #e6eee3;
+  color: #244f42;
+}
+.auth {
+  max-width: 430px;
+  margin: 10vh auto;
+}
+.stack {
+  display: grid;
+  gap: 16px;
+}
+.muted {
+  color: #65716b;
+}
+.error {
+  color: #9b3024;
+  white-space: pre-wrap;
+}
+.messages {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+  max-height: 450px;
+  overflow: auto;
+}
+.message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f2f5ee;
+  padding: 14px;
+  border-radius: 10px;
+}
+.message.user {
+  background: #e2ebe4;
+}
+.message pre {
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.composer {
+  display: flex;
+  gap: 12px;
+}
+.composer textarea {
+  flex: 1;
+  min-height: 80px;
+}
+iframe {
+  width: 100%;
+  min-height: 520px;
+  border: 0;
+  border-radius: 12px;
+  background: white;
+}
+.secret {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #e4e9e1;
+}
+code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.badge {
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #e3eadc;
+}
+.schedule {
+  padding: 12px;
+  background: #f3f5ef;
+  margin: 8px 0;
+}
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .shell {
+    padding: 12px;
+  }
+  .panel {
+    padding: 16px;
+  }
+  .composer {
+    flex-direction: column;
+  }
+}

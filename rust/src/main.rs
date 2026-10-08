@@ -29,6 +29,23 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let store = Store::create(&directory.join("workspace.sqlite"))?;
     let secrets = Secrets::open(store.clone(), &directory.join("secrets.key"))?;
     let runtime = Runtime::new(store.clone(), secrets.clone(), 4)?;
+    if command == "serve" {
+        let port = args
+            .next()
+            .map(|s| s.parse::<u16>())
+            .transpose()?
+            .unwrap_or(5175);
+        return little_spaces::core::server::serve(directory.to_path_buf(), port).await;
+    }
+    if command == "owner-reset" {
+        let mut password = zeroize::Zeroizing::new(String::new());
+        std::io::stdin().take(1025).read_to_string(&mut password)?;
+        little_spaces::core::owner::OwnerAuth::new(store)
+            .reset(password.trim_end_matches(['\r', '\n']).into())
+            .await?;
+        println!("Owner password reset; sessions revoked");
+        return Ok(());
+    }
     let mut next = || args.next().ok_or("Missing command argument");
     let result: Value = match command.as_str() {
         "init" => json!({"initialized":true}),

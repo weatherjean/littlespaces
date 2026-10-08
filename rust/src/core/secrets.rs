@@ -39,9 +39,11 @@ impl Secrets {
             }
             Zeroizing::new(std::fs::read(key_path).map_err(|_| Error::Storage)?)
         } else {
-            let count: i64 = store
-                .open()?
-                .query_row("SELECT COUNT(*) FROM secrets", [], |r| r.get(0))?;
+            let count: i64 = store.open()?.query_row(
+                "SELECT (SELECT COUNT(*) FROM secrets)+(SELECT COUNT(*) FROM chatgpt_auth)",
+                [],
+                |r| r.get(0),
+            )?;
             if count != 0 {
                 return Err(Error::Storage);
             }
@@ -146,6 +148,41 @@ impl Secrets {
         );
         Ok(Zeroizing::new(
             String::from_utf8(plain.to_vec()).map_err(|_| Error::Storage)?,
+        ))
+    }
+    pub(crate) fn seal(&self, label: &str, value: &[u8]) -> Result<Vec<u8>> {
+        let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| Error::Storage)?;
+        let mut nonce = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce);
+        let mut bytes = nonce.to_vec();
+        bytes.extend(
+            cipher
+                .encrypt(
+                    Nonce::from_slice(&nonce),
+                    Payload {
+                        msg: value,
+                        aad: label.as_bytes(),
+                    },
+                )
+                .map_err(|_| Error::Storage)?,
+        );
+        Ok(bytes)
+    }
+    pub(crate) fn unseal(&self, label: &str, value: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        if value.len() < 28 {
+            return Err(Error::Storage);
+        }
+        let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| Error::Storage)?;
+        Ok(Zeroizing::new(
+            cipher
+                .decrypt(
+                    Nonce::from_slice(&value[..12]),
+                    Payload {
+                        msg: &value[12..],
+                        aad: label.as_bytes(),
+                    },
+                )
+                .map_err(|_| Error::Storage)?,
         ))
     }
     pub(crate) fn scope(&self) -> Result<HostSecrets> {

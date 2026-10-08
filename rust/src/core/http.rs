@@ -288,6 +288,7 @@ mod tests {
                         output: json!({}),
                     }],
                     tests: vec![],
+                    frontend_tests: vec![],
                 },
             )
             .unwrap();

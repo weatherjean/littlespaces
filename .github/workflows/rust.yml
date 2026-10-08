@@ -1,4 +1,4 @@
-name: Rust monolith core
+name: Rust monolith
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-core-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  group: rust-${{ github.event_name }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -21,22 +21,29 @@ env:
 jobs:
   quality:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm run build --prefix web
       - name: Set up Rust
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - name: Format
         run: cargo +stable fmt --manifest-path rust/Cargo.toml --check
       - name: Clippy
-        run: cargo +stable clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
+        run: cargo +stable clippy --manifest-path rust/Cargo.toml --locked --all-targets --all-features -- -D warnings
 
   regression:
-    name: Core regression (${{ matrix.arch }})
+    name: Focused regression (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -49,11 +56,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up Rust
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm run build --prefix web
+      - name: Set up minimum Rust
         run: rustup toolchain install 1.84.1 --profile minimal
-      - name: Focused core regressions (synthetic HTTP only)
-        run: cargo +1.84.1 test --manifest-path rust/Cargo.toml --locked
-      - name: Build single executable
+      - name: Focused core regressions
+        run: cargo +1.84.1 test --manifest-path rust/Cargo.toml --locked --all-features
+      - name: Build ordinary executable
         run: cargo +1.84.1 build --manifest-path rust/Cargo.toml --locked
-      - name: Persisted app CLI smoke
+      - name: Persisted backend smoke
         run: python3 scripts/monolith-smoke.py
+      - name: Build development fixture provider
+        run: cargo +1.84.1 build --manifest-path rust/Cargo.toml --locked --features development-fixtures
+      - name: Install development test browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Rust agent and real iframe regression (synthetic provider only)
+        run: npm test --prefix web
+      - name: Save synthetic browser screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-${{ matrix.arch }}
+          path: build-rust/screenshots/*.png
+          retention-days: 7
+          if-no-files-found: warn

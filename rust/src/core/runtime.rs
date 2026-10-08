@@ -45,6 +45,8 @@ pub struct Runtime {
     admission: Arc<tokio::sync::Semaphore>,
     pub(crate) authoring_admission: Arc<tokio::sync::Semaphore>,
     pub deadline: Duration,
+    pub browser: Option<super::browser::BrowserConfig>,
+    pub(crate) previews: super::browser::Previews,
 }
 struct Session {
     records: Records,
@@ -62,10 +64,46 @@ impl Runtime {
             admission: Arc::new(tokio::sync::Semaphore::new(slots)),
             authoring_admission: Arc::new(tokio::sync::Semaphore::new(slots)),
             deadline: Duration::from_millis(750),
+            browser: None,
+            previews: Default::default(),
         })
     }
     pub fn secret_names(&self) -> Result<Vec<super::secrets::SecretName>> {
         self.secrets.list()
+    }
+    pub(crate) async fn redact_public(&self, value: Value) -> Result<Value> {
+        let secrets = self.secrets.clone();
+        self.store.blocking(move |_| secrets.redact(value)).await
+    }
+    pub(crate) fn diagnostic(
+        &self,
+        revision: &Revision,
+        action: &str,
+        phase: &str,
+        details: Value,
+    ) -> Error {
+        let payload = self
+            .secrets
+            .redact(json!({"action":action,"phase":phase,"details":details}));
+        if let Ok(payload) = payload {
+            let _ = self.store.open().and_then(|db| {
+                db.execute(
+                    "INSERT INTO diagnostics VALUES(?,?,?,?)",
+                    rusqlite::params![
+                        format!("{:032x}", rand::random::<u128>()),
+                        revision.app.0,
+                        revision.id.0,
+                        payload.to_string()
+                    ],
+                )?;
+                Ok(())
+            });
+        }
+        if phase == "compile" || phase == "script" {
+            Error::Script
+        } else {
+            Error::Validation
+        }
     }
     /// Every caller (UI/chat/schedule/dry run) supplies an immutable revision and unique invocation.
     pub async fn invoke(
@@ -162,6 +200,52 @@ impl Runtime {
         }
         result
     }
+    pub(crate) async fn preview_action(
+        &self,
+        app: AppId,
+        revision: RevisionId,
+        action: String,
+        input: Value,
+        records: Records,
+        mock: MockHttp,
+    ) -> Result<(Value, Records)> {
+        let permit = self
+            .admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Saturated)?;
+        let control = Control::new(Cancellation::default(), self.deadline);
+        let runtime = self.clone();
+        let handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let revision = runtime.store.revision(&app, &revision)?;
+            let contract = revision
+                .code
+                .actions
+                .iter()
+                .find(|a| a.name == action)
+                .ok_or(Error::Validation)?;
+            let broker = Broker {
+                store: runtime.store.clone(),
+                secrets: runtime.secrets.clone(),
+                handle,
+            };
+            runtime.evaluate(
+                &revision,
+                contract,
+                input,
+                &records,
+                &broker,
+                &InvocationId::new(),
+                Some(&mock),
+                false,
+                &control,
+            )
+        })
+        .await
+        .map_err(|_| Error::Script)?
+    }
     /// Backend assertions use generated, persisted tests against an isolated record snapshot.
     /// This is backend evidence only; frontend verification belongs to the browser harness.
     pub async fn test_revision(
@@ -198,13 +282,15 @@ impl Runtime {
                 handle,
             };
             let mut records = Records::new();
-            for test in &revision.code.tests {
+            for (index, test) in revision.code.tests.iter().enumerate() {
                 let action = revision
                     .code
                     .actions
                     .iter()
                     .find(|a| a.name == test.action)
                     .ok_or(Error::Validation)?;
+                let mut fixtures = mock.clone();
+                fixtures.0.extend(test.http.clone());
                 let (value, next) = runtime.evaluate(
                     &revision,
                     action,
@@ -212,12 +298,17 @@ impl Runtime {
                     &records,
                     &broker,
                     &InvocationId::new(),
-                    Some(&mock),
+                    Some(&fixtures),
                     false,
                     &control,
                 )?;
                 if value != test.expected {
-                    return Err(Error::Validation);
+                    return Err(runtime.diagnostic(
+                        &revision,
+                        &test.action,
+                        "assertion",
+                        json!({"index":index,"expected":test.expected,"actual":value}),
+                    ));
                 }
                 records = next;
             }
@@ -244,7 +335,14 @@ impl Runtime {
         control: &Control,
     ) -> Result<(Value, Records)> {
         control.check()?;
-        validate_json(&action.input, &input)?;
+        validate_json(&action.input, &input).map_err(|_| {
+            self.diagnostic(
+                revision,
+                &action.name,
+                "input",
+                json!({"schema":action.input,"input":input}),
+            )
+        })?;
         let readonly = action.read_only || force_readonly;
         let session = Rc::new(RefCell::new(Session {
             records: records.clone(),
@@ -387,9 +485,14 @@ impl Runtime {
                 dynamic(&result.map_err(failure)?)
             },
         );
-        let ast = engine
-            .compile(&revision.code.backend)
-            .map_err(|_| Error::Script)?;
+        let ast = engine.compile(&revision.code.backend).map_err(|e| {
+            self.diagnostic(
+                revision,
+                &action.name,
+                "compile",
+                json!({"message":e.to_string().chars().take(4096).collect::<String>()}),
+            )
+        })?;
         control.check()?;
         let input = dynamic(&input).map_err(|_| Error::Validation)?;
         let result = engine.call_fn::<Dynamic>(&mut Scope::new(), &ast, &action.name, (input,));
@@ -397,11 +500,25 @@ impl Runtime {
         if let Some(error) = session.borrow().error {
             return Err(error);
         }
-        let result = result.map_err(|_| Error::Script)?;
+        let result = result.map_err(|e| {
+            self.diagnostic(
+                revision,
+                &action.name,
+                "script",
+                json!({"message":e.to_string().chars().take(4096).collect::<String>()}),
+            )
+        })?;
         let result: Value = rhai::serde::from_dynamic(&result).map_err(|_| Error::Validation)?;
         // Secrets are never delivered to scripts; redact again at the tool/UI boundary.
         let result = self.secrets.redact(result)?;
-        validate_json(&action.output, &result)?;
+        validate_json(&action.output, &result).map_err(|_| {
+            self.diagnostic(
+                revision,
+                &action.name,
+                "output",
+                json!({"schema":action.output,"actual":result}),
+            )
+        })?;
         let state = session.borrow();
         validate_records(&state.records)?;
         if readonly && state.records != *records {
@@ -456,10 +573,12 @@ mod tests {
                             output,
                         }],
                         tests: vec![TestCase {
+                            http: Default::default(),
                             action: "run".into(),
                             input: json!({}),
                             expected,
                         }],
+                        frontend_tests: vec![],
                     },
                 )
                 .unwrap();

@@ -1,0 +1,20 @@
+{
+  "name": "littlespaces-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test-browser.mjs",
+    "format": "prettier --write core *.mjs applet-runtime.js package.json",
+    "format:check": "prettier --check core *.mjs applet-runtime.js package.json"
+  },
+  "dependencies": {
+    "preact": "10.29.8",
+    "htm": "3.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "@playwright/test": "1.63.0",
+    "prettier": "3.9.9"
+  }
+}

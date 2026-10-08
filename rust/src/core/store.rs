@@ -24,7 +24,7 @@ impl Store {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let marker: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if marker != 1280528978 || version != 2 {
+            if marker != 1280528978 || version != 3 {
                 return Err(Error::Storage);
             }
         } else {
@@ -182,6 +182,21 @@ impl Store {
         id: &RevisionId,
         expected: Option<&RevisionId>,
     ) -> Result<()> {
+        let code: String = tx
+            .query_row(
+                "SELECT code FROM revisions WHERE app=? AND id=?",
+                params![app.0, id.0],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let code: AppCode = serde_json::from_str(&code).map_err(|_| Error::Storage)?;
+        if !code.frontend.is_empty() {
+            let verified:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM frontend_checks f JOIN revisions r ON r.id=f.revision AND r.digest=f.digest WHERE r.id=?)",[&id.0],|r|r.get(0))?;
+            if !verified {
+                return Err(Error::Untested);
+            }
+        }
         let tested: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM revisions r JOIN revision_tests t ON t.revision=r.id AND t.digest=r.digest WHERE r.app=? AND r.id=?)", params![app.0,id.0], |r| r.get(0))?;
         if !tested {
             return Err(Error::Untested);
@@ -286,6 +301,7 @@ mod tests {
                 output: json!({"type":"array"}),
             }],
             tests: vec![],
+            frontend_tests: vec![],
         }
     }
     #[test]
@@ -475,6 +491,7 @@ mod effect_tests {
                 output: json!({}),
             }],
             tests: vec![],
+            frontend_tests: vec![],
         };
         let draft = store.create_draft(&app, code).unwrap();
         let revision = store.freeze_draft(&draft.id, 1).unwrap();
@@ -526,5 +543,30 @@ mod effect_tests {
             )
             .unwrap();
         assert_eq!(evidence, "uncertain");
+    }
+}
+
+impl Store {
+    pub async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(Store) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || work(store))
+            .await
+            .map_err(|_| Error::Storage)?
+    }
+}
+
+impl Store {
+    pub fn diagnostics(&self, app: &AppId, revision: &RevisionId) -> Result<Value> {
+        self.revision(app, revision)?;
+        let db = self.open()?;
+        let mut stmt=db.prepare("SELECT payload FROM diagnostics WHERE app=? AND revision=? ORDER BY rowid DESC LIMIT 20")?;
+        let rows = stmt.query_map(params![app.0, revision.0], |r| r.get::<_, String>(0))?;
+        Ok(Value::Array(
+            rows.map(|r| serde_json::from_str(&r?).map_err(|_| Error::Storage))
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 }

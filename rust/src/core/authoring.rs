@@ -10,6 +10,12 @@ pub enum AuthoringTool {
     ReadSdk,
     ReadDraft,
     SecretNames,
+    TestFrontend {
+        revision: RevisionId,
+    },
+    ReadDiagnostics {
+        revision: RevisionId,
+    },
     EditDraft {
         expected_version: i64,
         code: AppCode,
@@ -47,7 +53,7 @@ impl AuthoringSession {
         let mut db = runtime.store.open()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO conversations VALUES(?,?)",
+            "INSERT INTO conversations(id,app) VALUES(?,?)",
             params![conversation.0, app.0],
         )?;
         tx.execute(
@@ -129,6 +135,9 @@ impl AuthoringSession {
             AuthoringTool::SecretNames => {
                 serde_json::to_value(self.runtime.secret_names()?).map_err(|_| Error::Storage)
             }
+            AuthoringTool::ReadDiagnostics { revision } => {
+                self.runtime.store.diagnostics(&app, revision)
+            }
             _ if !approved => Err(Error::ApprovalRequired),
             AuthoringTool::EditDraft {
                 expected_version,
@@ -142,11 +151,15 @@ impl AuthoringSession {
             }
             AuthoringTool::TestDraft { expected_version } => {
                 match self.runtime.store.freeze_draft(&draft, *expected_version) {
-                    Ok(revision) => self
-                        .runtime
-                        .test_revision(app.clone(), revision.id.clone(), mock, cancel)
-                        .await
-                        .map(|()| json!({"revision":revision.id,"backendTestsPassed":true})),
+                    Ok(revision) => {
+                        let result = self
+                            .runtime
+                            .test_revision(app.clone(), revision.id.clone(), mock, cancel)
+                            .await;
+                        Ok(
+                            json!({"revision":revision.id,"backendTestsPassed":result.is_ok(),"error":result.err(),"diagnostics":self.runtime.store.diagnostics(&app,&revision.id)?}),
+                        )
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -167,6 +180,9 @@ impl AuthoringSession {
                     .invoke(request, mock, cancel)
                     .await
                     .and_then(|o| serde_json::to_value(o).map_err(|_| Error::Storage))
+            }
+            AuthoringTool::TestFrontend { revision } => {
+                super::browser::test(&self.runtime, app.clone(), revision.clone(), cancel).await
             }
             AuthoringTool::Publish {
                 revision,
@@ -237,22 +253,26 @@ mod tests {
                 .unwrap();
         let runtime = Runtime::new(store.clone(), secrets, 4).unwrap();
         let app = store.create_app("Tasks").unwrap();
-        let code: AppCode =
+        let mut code: AppCode =
             serde_json::from_str(include_str!("../../../examples/tasks-rhai.json")).unwrap();
+        code.frontend.clear();
         let mut broken = code.clone();
         broken.backend = "fn add(input) { 42 } fn list(input) { [] }".into();
         let draft = store.create_draft(&app, broken).unwrap();
         let session = AuthoringSession::begin(runtime.clone(), &app, &draft.id, true).unwrap();
-        assert!(session
-            .dispatch(
-                AuthoringTool::TestDraft {
-                    expected_version: 1
-                },
-                MockHttp::default(),
-                Cancellation::default()
-            )
-            .await
-            .is_err());
+        assert_eq!(
+            session
+                .dispatch(
+                    AuthoringTool::TestDraft {
+                        expected_version: 1
+                    },
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await
+                .unwrap()["backendTestsPassed"],
+            false
+        );
         session
             .dispatch(
                 AuthoringTool::EditDraft {

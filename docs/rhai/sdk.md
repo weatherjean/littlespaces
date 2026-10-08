@@ -4,23 +4,23 @@ An app revision contains `backend`, `frontend`, `actions` and `tests`. Every act
 
 Use explicit function arguments and local variables. Modules, imports and closures are compiled out; eval, print and debug are disabled. Do not rely on top-level state. Each call has a fresh engine and app-scoped snapshot. There is no SQL, filesystem, shell or plaintext-secret API.
 
-| Function | Behavior |
-| --- | --- |
-| `db_get(key)` | Record value, or JSON null/Rhai unit when absent. |
-| `db_list()` | Array of `{key, value}`, ordered by key. |
-| `db_set(key, value)` | Propose a JSON record change. |
-| `db_remove(key)` | Propose removal; returns whether the record existed. |
-| `uuid()` | Fresh random ID string. |
-| `now_ms()` | Unix time in milliseconds. |
-| `json_parse(text)` | Parse bounded JSON. |
-| `json_stringify(value)` | Encode bounded JSON. |
+| Function                | Behavior                                                  |
+| ----------------------- | --------------------------------------------------------- |
+| `db_get(key)`           | Record value, or JSON null/Rhai unit when absent.         |
+| `db_list()`             | Array of `{key, value}`, ordered by key.                  |
+| `db_set(key, value)`    | Propose a JSON record change.                             |
+| `db_remove(key)`        | Propose removal; returns whether the record existed.      |
+| `uuid()`                | Fresh random ID string.                                   |
+| `now_ms()`              | Unix time in milliseconds.                                |
+| `json_parse(text)`      | Parse bounded JSON.                                       |
+| `json_stringify(value)` | Encode bounded JSON.                                      |
 | `http_request(request)` | Bounded host HTTP request; returns `{status, body}` JSON. |
 
-HTTP takes explicit `url`, `method`, optional `headers`, `query` and structured JSON `body`. Methods are GET, HEAD, POST, PUT, PATCH and DELETE. HTTP values reference a secret as `#{"$secret":"TOKEN"}`; the host substitutes the entire value. URL, field names and routing headers cannot contain secret substitutions. Tests/dry runs resolve references to synthetic values and require supplied mock responses keyed by the exact URL. An absent mock fails; there is no fallback to live HTTP. Live probes force read-only behavior. Read-only violations fail the entire call, even if caught by the script.
+HTTP takes explicit `url`, `method`, optional `headers`, `query` and structured JSON `body`. Methods are GET, HEAD, POST, PUT, PATCH and DELETE. HTTP values reference a secret as `#{"$secret":"TOKEN"}`; the host substitutes the entire value. URL, field names and routing headers cannot contain secret substitutions. Tests/dry runs resolve references to synthetic values and require mock responses keyed by the exact URL. Each backend test may include an `http` object mapping URLs to `{status, body}` responses; the default is empty. Preview/browser suites reuse those synthetic responses and isolated records. An absent mock fails; there is no fallback to live HTTP. Live probes force read-only behavior. Read-only violations fail the entire call, even if caught by the script.
 
 Every published backend can use every workspace secret. Publishing approves this workspace integration authority; secret substitution cannot stop a backend from sending a credential to the wrong public service. Script-visible responses and tool results redact configured values. Diagnostics expose error categories and external-operation evidence, never plaintext secrets or raw HTTP bodies.
 
-Input and output are validated. Local deltas commit in one transaction only if the app publication and record version still match the snapshot. Test runs begin with isolated empty records, carry changes between test cases, assert exact expected outputs, cover every declared action, and never write live records. Publication requires evidence for the exact immutable code/contracts/test digest. This backend gate does not verify frontend behavior; browser verification is still being implemented.
+Input and output are validated. Local deltas commit in one transaction only if the app publication and record version still match the snapshot. Test runs begin with isolated empty records, carry changes between test cases, assert exact expected outputs, cover every declared action, and never write live records. Publication requires evidence for the exact immutable code/contracts/test digest. Frontend publication also needs evidence bound to the same digest: automated browser assertions from the development harness, or explicit owner review of an isolated preview. The stored report identifies the verification kind; owner review/runtime diagnostics are not identical to automated browser coverage.
 
 ## Execution limits
 
@@ -36,10 +36,14 @@ These limits and bounded admission are **not a hard per-action memory ceiling**.
 
 ## External-effect evidence
 
-A unique invocation ID may be submitted for live commit only once. The host persists `uncertain` before dispatching each write-method request, retains any HTTP status seen, and changes to `response_received` only after receiving a complete valid JSON body. That status describes evidence, not application semantics or rollback. Local validation, conflict, cancellation or failed commit never removes external evidence. A timeout/interrupted stream may have applied the remote write. Overlapping live calls and unresolved external effects fence later live calls for the app, including across revisions. A fresh invocation ID cannot bypass the fence. An explicit owner resolution records applied/not-applied/accept-unknown separately without erasing original evidence; this is unavailable to scripts and agent tools. Complete successful HTTP responses permit subsequent intentional calls, while non-success responses and failed local attempts remain fenced. A process crash leaves running calls fenced; interrupted-job recovery is still pending. Inspect evidence; do not automatically replay with a new invocation ID. Read methods can have effects on poorly behaved services despite their convention.
+A unique invocation ID may be submitted for live commit only once. The host persists `uncertain` before dispatching each write-method request, retains any HTTP status seen, and changes to `response_received` only after receiving a complete valid JSON body. That status describes evidence, not application semantics or rollback. Local validation, conflict, cancellation or failed commit never removes external evidence. A timeout/interrupted stream may have applied the remote write. Overlapping live calls and unresolved external effects fence later live calls for the app, including across revisions. A fresh invocation ID cannot bypass the fence. An explicit owner resolution records applied/not-applied/accept-unknown separately without erasing original evidence; this is unavailable to scripts and agent tools. Complete successful HTTP responses permit subsequent intentional calls, while non-success responses and failed local attempts remain fenced. Restart marks incomplete calls interrupted without replay. Unresolved external effects remain fenced; interrupted calls with no dispatched effect may be followed by new intentional invocations. Inspect evidence; do not automatically replay with a new invocation ID. Read methods can have effects on poorly behaved services despite their convention.
 
-## Authoring tools (step 2 foundation)
+## Frontend SDK and authoring
 
-`core::authoring::AuthoringSession` persists a conversation/app/draft scope and host-supplied owner build approval. It exposes typed read-SDK, read-draft, secret-name-list, version-checked draft edit, test-draft, mocked dry-run and publish tools. Tool calls cannot switch apps or approve a build. Publication checks that the current draft version/code matches the tested revision and the session's expected publication, then updates publication/session state in one transaction. Persisted tool results support conversation resumption. This is a tool layer, not an agent or model provider.
+`appletUI` provides `h`, `html`, `render`, `useState`, `useEffect`, `useRef`, `useMemo`, `useCallback` and `useReducer`. Use Preact/HTM with no imports or dependencies and render into `document.getElementById('app')`. Call `await applet.call(action, input)` for backend work. Sandboxed iframes permit scripts and form events; same-origin access, direct HTTP, outbound forms, external dependencies and top navigation remain restricted. The parent bridge binds calls to its app/revision, bounds pending requests and discards replies after navigation to another app/revision.
 
-The current test drives these tools with explicit Rust calls and a hand-authored example, injects a backend failure, fixes it, tests, publishes and updates while preserving records. It does **not** establish the step 2 agent milestone. Direct ChatGPT sign-in/inference, streamed model orchestration, actionable compiler/schema/test diagnostics, a real sandboxed Preact/HTM preview, and the browser-testing harness remain required. Backend test evidence alone does not verify frontend code.
+Declare `frontend_tests` as an array of `{action:'fill', selector, value}`, `{action:'click', selector}` and `{action:'text', selector, contains}` steps. At least one text assertion is required for automated verification. The development browser harness previews the actual iframe, drives these steps and returns assertions, errors, a bounded text snapshot and a screenshot filename. It is separate Node/Playwright development tooling, absent from the ordinary executable. The host also offers isolated owner previews and explicit publication approval without a harness. That records owner review, not automated browser tests.
+
+`core::authoring::AuthoringSession` persists conversation/app/draft scope and host-supplied build approval. Tools: read_sdk, read_draft, secret_names, read_diagnostics, edit_draft, test_draft, test_frontend, dry_run and publish. They cannot change app scope or approve their own build. Publication checks current draft version/source and the session's expected publication in one transaction. Tests return immutable revision IDs and redacted compiler/schema/assertion diagnostics. Backend tests carry isolated record changes between test cases; UI previews carry changes between calls without touching live records.
+
+The Rust agent receives streamed Responses requests through completion, persists unique tool calls before dispatch, stores results, bounds turns/history and supports cancellation. Browser disconnects do not cancel jobs. Restart marks incomplete jobs/calls/invocations interrupted; potentially dispatched effects are not replayed. Normal chat invokes only published app actions. Build conversations require the owner's explicit Create app/Update through chat action.

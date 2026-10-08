@@ -5,9 +5,24 @@ license = "MIT"
 edition = "2021"
 rust-version = "1.84"
 
+[features]
+development-fixtures = []
+
 [dependencies]
 aes-gcm = "0.10"
-axum = "0.7.9"
+axum = { version = "0.7.9", features = ["multipart"] }
+base64 = "0.22"
+base64ct = "=1.6.0"
+encoding_rs = "=0.8.35"
+chrono = { version = "0.4", features = ["serde"] }
+croner = "3"
+futures-util = "0.3"
+jsonwebtoken = "=9.3.1"
+libc = "0.2"
+scrypt = "0.11"
+subtle = "2"
+time = "=0.3.36"
+uuid = { version = "=1.20.0", features = ["v4"] }
 jsonschema = { version = "=0.26.2", default-features = false }
 rand = "0.8"
 reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -16,7 +31,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
 url = "=2.5.2"
 zeroize = "=1.8.1"
 
@@ -27,3 +42,10 @@ tempfile = "3"
 lto = true
 codegen-units = 1
 strip = true
+
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3

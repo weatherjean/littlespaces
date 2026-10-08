@@ -37,6 +37,8 @@ pub struct ActionContract {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TestCase {
+    #[serde(default)]
+    pub http: std::collections::BTreeMap<String, Value>,
     pub action: String,
     pub input: Value,
     pub expected: Value,
@@ -48,6 +50,15 @@ pub struct AppCode {
     pub frontend: String,
     pub actions: Vec<ActionContract>,
     pub tests: Vec<TestCase>,
+    #[serde(default)]
+    pub frontend_tests: Vec<BrowserStep>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserStep {
+    Fill { selector: String, value: String },
+    Click { selector: String },
+    Text { selector: String, contains: String },
 }
 impl AppCode {
     pub fn digest(&self) -> Result<String> {
@@ -62,6 +73,7 @@ impl AppCode {
             || self.actions.is_empty()
             || self.actions.len() > 16
             || self.tests.len() > 64
+            || self.frontend_tests.len() > 32
             || serde_json::to_vec(self)
                 .map_err(|_| Error::Validation)?
                 .len()
@@ -138,6 +150,10 @@ pub enum Error {
     ExternalUncertain,
     DuplicateInvocation,
     ApprovalRequired,
+    Unauthorized,
+    Model,
+    Authentication,
+    BrowserUnavailable,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl fmt::Display for Error {

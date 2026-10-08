@@ -1,12 +1,139 @@
 {
-  "backend": "fn add(input) { let task = #{title:input.title, done:false}; db_set(input.key, task); task } fn list(input) { db_list() }",
-  "frontend": "const {html, render} = appletUI; render(html`<p>Task app backend example; interactive UI pending.</p>`, document.body);",
+  "backend": "fn add(input) { let task = #{title:input.title, done:false}; db_set(input.key, task); task } fn list(input) { db_list() } fn complete(input) { let task=db_get(input.key); if task == () { throw \"Task not found\"; } task.done=true; db_set(input.key,task); task }",
+  "frontend": "const {html,render,useState,useEffect}=appletUI;\nfunction Tasks(){const [tasks,setTasks]=useState([]),[title,setTitle]=useState(''),[error,setError]=useState('');async function load(){setTasks(await applet.call('list',{}));}useEffect(()=>{load().catch(e=>setError(e.message));},[]);async function add(e){e.preventDefault();try{await applet.call('add',{key:String(Date.now()),title});setTitle('');await load();}catch(e){setError(e.message);}}async function complete(key){try{await applet.call('complete',{key});await load();}catch(e){setError(e.message);}}return html`<main><h1>Tasks</h1><form onSubmit=${add}><input aria-label=\"Task title\" value=${title} onInput=${e=>setTitle(e.target.value)} required/><button type=\"submit\">Add task</button></form>${error&&html`<p role=\"alert\">${error}</p>`}<ul>${tasks.map(t=>html`<li key=${t.key}><span>${t.value.title}${t.value.done?' \u2014 done':''}</span>${!t.value.done&&html`<button data-action=\"complete\" onClick=${()=>complete(t.key)}>Complete</button>`}</li>`)}</ul></main>`;}render(html`<${Tasks}/>`,document.getElementById('app'));",
   "actions": [
-    {"name":"add","read_only":false,"input":{"type":"object","required":["key","title"],"properties":{"key":{"type":"string","minLength":1,"maxLength":64},"title":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false},"output":{"type":"object","required":["title","done"],"properties":{"title":{"type":"string"},"done":{"type":"boolean"}},"additionalProperties":false}},
-    {"name":"list","read_only":true,"input":{"type":"object","additionalProperties":false},"output":{"type":"array"}}
+    {
+      "name": "add",
+      "read_only": false,
+      "input": {
+        "type": "object",
+        "required": ["key", "title"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "required": ["title", "done"],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list",
+      "read_only": true,
+      "input": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "array"
+      }
+    },
+    {
+      "name": "complete",
+      "read_only": false,
+      "input": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "required": ["title", "done"],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
   ],
   "tests": [
-    {"action":"add","input":{"key":"sample","title":"First task"},"expected":{"title":"First task","done":false}},
-    {"action":"list","input":{},"expected":[{"key":"sample","value":{"title":"First task","done":false}}]}
+    {
+      "action": "add",
+      "input": {
+        "key": "sample",
+        "title": "First task"
+      },
+      "expected": {
+        "title": "First task",
+        "done": false
+      }
+    },
+    {
+      "action": "list",
+      "input": {},
+      "expected": [
+        {
+          "key": "sample",
+          "value": {
+            "title": "First task",
+            "done": false
+          }
+        }
+      ]
+    },
+    {
+      "action": "complete",
+      "input": {
+        "key": "sample"
+      },
+      "expected": {
+        "title": "First task",
+        "done": true
+      }
+    }
+  ],
+  "frontend_tests": [
+    {
+      "action": "fill",
+      "selector": "input[aria-label=\"Task title\"]",
+      "value": "Browser task"
+    },
+    {
+      "action": "click",
+      "selector": "button[type=\"submit\"]"
+    },
+    {
+      "action": "text",
+      "selector": "li",
+      "contains": "Browser task"
+    },
+    {
+      "action": "click",
+      "selector": "button[data-action=\"complete\"]"
+    },
+    {
+      "action": "text",
+      "selector": "li",
+      "contains": "done"
+    }
   ]
 }
