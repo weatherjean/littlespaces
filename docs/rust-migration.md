@@ -65,6 +65,8 @@ Per-app diagnostics retain at most 100 reports, each bounded to 32 KB; reads are
 
 ## Verification
 
+Routine checks run in [Rust CI](../.github/workflows/rust.yml) on GitHub-hosted Linux AMD64 and ARM64 runners. See [the contributor guide](../CONTRIBUTING.md#checks) for triggers, toolchains, artifacts, and local equivalents. CI uses synthetic ChatGPT responses and real isolated workers; real account tests remain private and opt-in. The future production Docker/Compose setup will have integration checks against its own deployment image.
+
 ```sh
 cargo test --manifest-path rust/Cargo.toml --locked
 npm run build:rust:web

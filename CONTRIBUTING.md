@@ -43,7 +43,11 @@ npx playwright install chromium webkit
 npm run test:rust:e2e
 ```
 
-The browser suite uses temporary data and a synthetic model provider, but executes real OS-isolated workers. `npm run verify:rust` combines the main checks, builds, and browser regression. The disposable Linux check is `npm run test:rust:docker`; inspect host and Docker disk space before building it. Remove only resources belonging to your test run. Never indiscriminately prune other Docker resources.
+The browser suite uses temporary data and a synthetic model provider, but executes real OS-isolated workers. `npm run verify:rust` combines the main checks, builds, and browser regression.
+
+[Rust CI](.github/workflows/rust.yml) runs on pull requests, pushes to `main` and `migration/rust-preact-quickjs`, and manual dispatch. A quality job uses stable Rust for formatting and Clippy. Regression jobs use Rust 1.84.1 on Ubuntu 22.04 AMD64 and ARM64 runners, build with locked dependencies, and run Chromium/WebKit against real Bubblewrap/QuickJS workers. Jobs have timeouts, use pinned actions with read-only repository permissions, and retain only synthetic browser screenshots for seven days. No owner databases or ChatGPT authentication caches are uploaded. Real ChatGPT tests are not part of CI.
+
+Routine CI runs directly on GitHub's Linux virtual machines. The disposable Docker regression image remains optional developer tooling: run `npm run test:rust:docker` when diagnosing container-specific behavior. Inspect host and Docker disk space before building it. Remove only resources belonging to your test run. Never indiscriminately prune other Docker resources.
 
 Real ChatGPT tests consume account usage and require a private authentication cache. They are explicit opt-in, excluded from `verify:rust`, and documented in [the Rust guide](docs/rust-migration.md#docker-and-real-chatgpt-testing). Never commit credentials, owner databases, vault keys, private auth caches, screenshots, test reports, or build output. Ignore rules help but do not replace reviewing the exact staged files.
 
@@ -55,4 +59,4 @@ The root npm manifest currently supports both implementations. Preact/HTM are bu
 
 Publishing must bind tested source to its revision-specific contract. HTTP requires both action declarations and owner-managed app grants, with credential origin restrictions in addition. Local commits must remain atomic and conflict-checked. External effects survive local rollback: an uncertain operation must never be blindly retried. Diagnostics and API responses are untrusted evidence.
 
-Preserve upstream notices when copying code or distributing bundles. See [third-party notices](THIRD_PARTY_NOTICES.md). Deployment, backup/restore exercises, and comprehensive system testing are separate release stages.
+Preserve upstream notices when copying code or distributing bundles. See [third-party notices](THIRD_PARTY_NOTICES.md). Stage 2 will target a production Docker image managed with Docker Compose; integration checks should exercise that same image with a test Compose configuration. The current browser-heavy image is test tooling. Deployment implementation, backup/restore exercises, and comprehensive system testing remain separate release stages.

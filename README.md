@@ -29,7 +29,7 @@ The SvelteKit/Node implementation is preserved for comparison and migration. Unq
 
 ## Release status
 
-Current regression checks cover the local runtime, browser flows, and isolated Linux workers. They do not establish production readiness or support for a particular VPS size. Deployment design and implementation, target-host resource validation, backup/restore exercises, and comprehensive system testing remain later stages. There is no supported Rust production deployment flow yet.
+Routine checks are defined in [GitHub Actions](.github/workflows/rust.yml): Rust/frontend quality and Linux AMD64/ARM64 browser regressions with isolated workers. The local Docker test image remains optional tooling. These checks do not establish production readiness or support for a particular VPS size. Stage 2 will target a production Docker image with Docker Compose and test that deployment image. Deployment implementation, target-host resource validation, backup/restore exercises, and comprehensive system testing remain later stages. There is no supported Rust production deployment flow yet.
 
 ## Docs
 

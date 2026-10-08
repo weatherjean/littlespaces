@@ -1,0 +1,102 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main, migration/rust-preact-quickjs]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  quality:
+    name: Rust and frontend quality
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Set up Rust quality tools
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup override set stable
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Check Rust and frontend code
+        run: npm run check:rust
+      - name: Check formatting
+        run: |
+          npm run format:rust:check
+          npx prettier --check .github/workflows/rust.yml
+
+  regression:
+    name: Linux regression (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Set up supported minimum Rust toolchain
+        run: |
+          rustup toolchain install 1.84.1 --profile minimal
+          rustup override set 1.84.1
+      - name: Install Linux isolation tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap build-essential pkg-config
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Run Rust tests
+        run: npm run test:rust
+      - name: Build frontend assets
+        run: npm run build:rust:web
+      - name: Build the server
+        run: cargo build --manifest-path rust/Cargo.toml --locked
+      - name: Install test browsers and their system libraries
+        run: npx playwright install --with-deps chromium webkit
+      # Synthetic ChatGPT provider; real Bubblewrap/QuickJS workers. Never --live.
+      - name: Run isolated-worker and browser regression
+        run: npm run test:rust:e2e
+      - name: Save synthetic browser screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-browser-${{ matrix.arch }}
+          path: build-rust/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 7
+          include-hidden-files: false
