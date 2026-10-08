@@ -347,7 +347,7 @@ impl Tools {
                         || items.len() > max
                         || items.iter().any(|v| {
                             v.as_str()
-                                .map_or(true, |s| s.trim().is_empty() || s.chars().count() > 240)
+                                .is_none_or(|s| s.trim().is_empty() || s.chars().count() > 240)
                         })
                     {
                         return Err(

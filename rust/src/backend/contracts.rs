@@ -73,7 +73,7 @@ pub async fn catalog(store: &Store, id: &str, revision: &Value) -> Result<Vec<Va
         query(
             &db,
             "SELECT contract FROM backend_contracts WHERE hash=?",
-            &[hash.clone()],
+            std::slice::from_ref(&hash),
         )?
         .first()
         .map(|row| text(row, "contract").to_string())

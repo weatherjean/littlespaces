@@ -25,10 +25,10 @@ pub fn parse_plant(answer: &str) -> Result<Value> {
             return Err("The model returned excessive identification text".into());
         }
     }
-    if value["alternatives"].as_array().map_or(true, |v| {
+    if value["alternatives"].as_array().is_none_or(|v| {
         v.len() > 5
             || v.iter()
-                .any(|s| s.as_str().map_or(true, |s| s.chars().count() > 150))
+                .any(|s| s.as_str().is_none_or(|s| s.chars().count() > 150))
     }) {
         return Err("Invalid plant alternatives".into());
     }

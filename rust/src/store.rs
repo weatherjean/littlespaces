@@ -284,7 +284,7 @@ impl Store {
                 if values.len() > max
                     || values
                         .iter()
-                        .any(|v| v.as_str().map_or(true, |s| s.is_empty() || s.len() > 200))
+                        .any(|v| v.as_str().is_none_or(|s| s.is_empty() || s.len() > 200))
                 {
                     return Err("Invalid context references".into());
                 }
@@ -309,7 +309,7 @@ impl Store {
     }
     pub fn create_chat(&self, space: &str, launch: Value) -> Result<Value> {
         self.space(space)?;
-        if !launch.as_object().map_or(true, |o| o.is_empty()) {
+        if !launch.as_object().is_none_or(|o| o.is_empty()) {
             self.validate_launch(space, &launch)?;
         }
         let id = crate::random_uuid();

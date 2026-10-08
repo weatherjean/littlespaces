@@ -370,7 +370,7 @@ async fn run(
     let tool_app = app.clone();
     let tool_chat = chat.to_string();
     let mut rpc = app.codex.lock().await;
-    if rpc.as_mut().map_or(true, |rpc| !rpc.alive()) {
+    if rpc.as_mut().is_none_or(|rpc| !rpc.alive()) {
         *rpc = Some(crate::codex::Codex::start(&app.store).await?);
     }
     let rpc = rpc.as_mut().unwrap();

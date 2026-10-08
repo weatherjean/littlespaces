@@ -43,7 +43,7 @@ struct App {
 impl App {
     async fn rpc(&self) -> store::Result<tokio::sync::MutexGuard<'_, Option<codex::Codex>>> {
         let mut guard = self.codex.lock().await;
-        if guard.as_mut().map_or(true, |rpc| !rpc.alive()) {
+        if guard.as_mut().is_none_or(|rpc| !rpc.alive()) {
             *guard = Some(codex::Codex::start(&self.store).await?);
         }
         Ok(guard)
