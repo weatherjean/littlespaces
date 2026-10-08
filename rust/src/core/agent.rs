@@ -120,6 +120,8 @@ impl Agent {
             let app:Option<String>=tx.query_row("SELECT app FROM conversations WHERE id=?",[&conv.0],|r|r.get(0)).optional()?.ok_or(Error::NotFound)?;
             let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE conversation=? AND state IN ('running','queued'))",[&conv.0],|r|r.get(0))?;if active{return Err(Error::Conflict);}
             tx.execute("INSERT INTO jobs VALUES(?,?,?,'running',?)",params![job,app,conv.0,payload.to_string()])?;
+            let title=message.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+            tx.execute("UPDATE conversations SET title=? WHERE id=? AND title='Conversation'",params![title,conv.0])?;
             tx.execute("INSERT INTO messages VALUES(?,?,?)",params![super::owner::token(),conv.0,json!({"role":"user","content":message}).to_string()])?;tx.commit()?;Ok(())
         }).await?;
         let cancel = Cancellation::default();

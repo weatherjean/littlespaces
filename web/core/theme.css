@@ -1,0 +1,33 @@
+/* LittleSpaces / Orbit shared design tokens. */
+:root {
+  --color-scheme: dark;
+  --font-family:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --bg: #141b30;
+  --panel: #19233a;
+  --surface: #25304c;
+  --ink: #eef2ff;
+  --muted: #a2aec8;
+  --accent: #b6c8ff;
+  --on-accent: #141b30;
+  --line: color-mix(in srgb, var(--ink) 12%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 8%, transparent);
+  --hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  --danger: #ffb4c0;
+  --danger-solid: #a83349;
+  --on-danger: #ffffff;
+  --success: #a9dbc2;
+  --radius: 12px;
+  --app-radius: 22px;
+  --border-width: 1px;
+  --shadow: 0 8px 24px #00000018;
+  --shadow-hover: 0 12px 32px #00000028;
+  --modal-shadow: 0 24px 80px #00000055;
+  --backdrop: #070c1480;
+  --tile-chat: #2a3a60;
+  --tile-0: #283f43;
+  --tile-1: #443745;
+  --tile-2: #293e59;
+  --tile-3: #3a3353;
+  --tile-settings: #2d354d;
+}

@@ -5,7 +5,7 @@ import { chromium } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -151,7 +151,23 @@ try {
   });
   const { origin, setup } = address;
   browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const snapshots = path.join(root, 'build-rust/screenshots');
+  await mkdir(snapshots, { recursive: true });
+  const signedOut = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const authPage = await signedOut.newPage();
+  await authPage.goto(origin);
+  await authPage.getByRole('heading', { name: 'Set up LittleSpaces' }).waitFor();
+  assert.equal(
+    await authPage.locator('body').evaluate((n) => getComputedStyle(n).backgroundColor),
+    'rgba(0, 0, 0, 0)',
+  );
+  assert.equal(
+    await authPage.locator('html').evaluate((n) => getComputedStyle(n).backgroundColor),
+    'rgb(20, 27, 48)',
+  );
+  await authPage.screenshot({ path: path.join(snapshots, 'monolith-orbit-setup.png') });
+
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   let csrf = '';
   async function api(route, body) {
     const response = await context.request.fetch(`${origin}${route}`, {
@@ -166,13 +182,35 @@ try {
   assert.equal((await context.request.get(`${origin}/api/apps`)).status(), 401);
   await api('/api/setup', { token: setup, password: 'synthetic owner password' });
   csrf = (await api('/api/login', { password: 'synthetic owner password' })).csrf;
+  await authPage.reload();
+  await authPage.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
+  await authPage.screenshot({ path: path.join(snapshots, 'monolith-orbit-login.png') });
+  await signedOut.close();
   assert.equal(
     (
       await context.request.post(`${origin}/api/apps`, { data: { title: 'CSRF attempt' } })
     ).status(),
     401,
   );
-  const app = await api('/api/apps', { title: 'Task app' });
+  const creating = await context.newPage();
+  await creating.goto(origin);
+  await creating.getByRole('button', { name: 'Create your first app', exact: true }).click();
+  await creating.getByRole('dialog', { name: 'Create an app', exact: true }).waitFor();
+  await creating.getByLabel('App name', { exact: true }).fill('Task app');
+  await creating.getByRole('button', { name: 'Create and build', exact: true }).click();
+  await creating.waitForURL(/\/chat\//);
+  const app = {
+    app: (await api('/api/apps')).find((a) => a.title === 'Task app').id,
+    conversation: new URL(creating.url()).pathname.slice(6),
+  };
+  await creating.getByRole('button', { name: 'New chat', exact: true }).click();
+  await creating.waitForURL(
+    (url) => url.pathname.startsWith('/chat/') && url.pathname.slice(6) !== app.conversation,
+  );
+  const builds = await api('/api/conversations');
+  assert.equal(builds.find((c) => c.id === new URL(creating.url()).pathname.slice(6)).build, true);
+  await creating.close();
+
   async function runAgent(conversation) {
     const { job } = await api(`/api/conversations/${conversation}/send`, {
       message: mode === 'chat' ? 'List my tasks' : 'Create and test the task app',
@@ -181,8 +219,10 @@ try {
     if (conversation === app.conversation && mode === 'build') {
       const live = await context.newPage();
       await live.goto(origin);
-      await live.getByRole('button', { name: 'Build: Task app', exact: true }).click();
-      await live.locator('.message strong').filter({ hasText: 'running' }).first().waitFor();
+      await live.getByRole('link', { name: 'Chat', exact: true }).click();
+      await live.getByRole('button', { name: /Choose conversation:/ }).click();
+      await live.getByRole('button', { name: 'Create and test the task app', exact: true }).click();
+      await live.getByRole('status').filter({ hasText: 'Working…' }).first().waitFor();
       await live.close();
     }
     for (let n = 0; n < 250; n++) {
@@ -203,6 +243,21 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(origin);
+  await page.getByRole('heading', { name: 'Made for your everyday.' }).waitFor();
+  assert.equal(
+    await page
+      .locator('.app-grid')
+      .evaluate((n) => getComputedStyle(n).gridTemplateColumns.split(' ').length),
+    5,
+  );
+  assert.equal(
+    await page.locator('.primary-nav').evaluate((n) => getComputedStyle(n).position),
+    'fixed',
+  );
+  await page.screenshot({
+    path: path.join(snapshots, 'monolith-orbit-launcher.png'),
+    fullPage: true,
+  });
   await page.getByRole('button', { name: 'Task app', exact: true }).click();
   const frame = page.frameLocator('iframe[title="Applet"]');
   await frame.getByLabel('Task title').fill('Owner task');
@@ -210,7 +265,78 @@ try {
   await frame.locator('li').filter({ hasText: 'Owner task' }).waitFor();
   await frame.getByRole('button', { name: 'Complete', exact: true }).click();
   await frame.locator('li').filter({ hasText: 'done' }).waitFor();
-  console.log('Owner UI actions passed');
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-app.png') });
+  await page.getByRole('button', { name: 'Chat with app', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Task app', exact: true }).waitFor();
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-app-chat.png') });
+  await page.getByRole('button', { name: 'Chat options', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Chat options', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.ok(await page.getByRole('dialog', { name: 'Task app', exact: true }).isVisible());
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click();
+  await page.getByRole('button', { name: 'More app options' }).click();
+  await page.getByRole('button', { name: 'Versions & tests', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Versions & tests', exact: true }).waitFor();
+  assert.ok(await page.getByText('Automated browser checks passed', { exact: true }).count());
+  await page.getByRole('button', { name: 'Close versions' }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await page.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
+  await page.screenshot({
+    path: path.join(snapshots, 'monolith-orbit-settings.png'),
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Add secret', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Add secret', exact: true }).waitFor();
+  await page.getByLabel('Name', { exact: true }).fill('SYNTHETIC');
+  await page.getByLabel('Value', { exact: true }).fill('synthetic-browser-value');
+  await page.getByRole('button', { name: 'Save secret', exact: true }).click();
+  await page.getByText('SYNTHETIC', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Delete secret SYNTHETIC' }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('link', { name: 'Apps', exact: true }).click();
+  await page.getByRole('heading', { name: 'Made for your everyday.' }).waitFor();
+  assert.equal(
+    await page
+      .locator('.app-grid')
+      .evaluate((n) => getComputedStyle(n).gridTemplateColumns.split(' ').length),
+    3,
+  );
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({
+    path: path.join(snapshots, 'monolith-orbit-phone-launcher.png'),
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Task app', exact: true }).click();
+  await page.getByRole('button', { name: 'Chat with app', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Task app', exact: true }).waitFor();
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-phone-chat.png') });
+  const dimensions = await page
+    .getByRole('dialog', { name: 'Task app', exact: true })
+    .boundingBox();
+  assert.ok(dimensions.width >= 389 && dimensions.height <= 844);
+  await page.evaluate(() => {
+    Object.defineProperty(visualViewport, 'height', { value: 470, configurable: true });
+    visualViewport.dispatchEvent(new Event('resize'));
+  });
+  await page.waitForTimeout(50);
+  const keyboard = await page.getByRole('dialog', { name: 'Task app', exact: true }).boundingBox();
+  assert.ok(keyboard.y + keyboard.height <= 471);
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-phone-keyboard.png') });
+  await page.getByRole('button', { name: /Choose conversation:/ }).click();
+  await page.getByRole('dialog', { name: 'Conversations', exact: true }).waitFor();
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-phone-picker.png') });
+  await page.keyboard.press('Escape');
+  assert.ok(await page.getByRole('dialog', { name: 'Task app', exact: true }).isVisible());
+  await page.getByRole('button', { name: 'Close chat', exact: true }).click();
+  await page.evaluate(() => {
+    delete visualViewport.height;
+    visualViewport.dispatchEvent(new Event('resize'));
+  });
+  console.log(
+    'Binding Orbit launcher, full canvas/dock, nested dialogs, settings, mobile keyboard and owner UI actions passed',
+  );
+
   const saved = (await api(`/api/apps/${app.app}`)).records;
   assert.equal(Object.values(saved)[0].done, true);
   console.log('Checking record-preserving update');
@@ -223,6 +349,25 @@ try {
   turn = 0;
   const chat = await api('/api/conversations', { app: app.app });
   await runAgent(chat.conversation);
+  await page.route('**/api/chatgpt', (route) =>
+    route.fulfill({ json: { connected: true, planUsage: true, email: 'synthetic@example.test' } }),
+  );
+  await page.route('**/api/models', (route) =>
+    route.fulfill({ json: [{ slug: 'fixture', display_name: 'Fixture model' }] }),
+  );
+  await page.goto(`${origin}/chat/${chat.conversation}`);
+  await page.getByRole('button', { name: 'Send message', exact: true }).waitFor();
+  await page.getByLabel('Message', { exact: true }).fill('List my tasks again');
+  mode = 'chat';
+  turn = 0;
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: 'Working…' }).waitFor();
+  await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-phone-conversation.png') });
+  for (let i = 0; i < 150; i++) {
+    if (!(await page.getByRole('button', { name: 'Stop reply', exact: true }).count())) break;
+    await page.waitForTimeout(100);
+  }
+  await page.getByLabel('Message', { exact: true }).waitFor();
   const history = await api(`/api/conversations/${chat.conversation}`);
   assert.ok(history.some((m) => m.name === 'invoke_action' && m.result.ok.result.length === 1));
   assert.deepEqual(errors, []);

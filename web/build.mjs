@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, copyFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 const out = new URL('../build-rust/core/', import.meta.url);
 await mkdir(out, { recursive: true });
 for (const [entry, name] of [
@@ -17,4 +17,9 @@ for (const [entry, name] of [
     target: ['es2022'],
   });
 }
-await copyFile(new URL('core/style.css', import.meta.url), new URL('style.css', out));
+await build({
+  entryPoints: [new URL('core/style.css', import.meta.url).pathname],
+  outfile: new URL('style.css', out).pathname,
+  bundle: true,
+  minify: true,
+});

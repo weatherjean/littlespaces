@@ -140,6 +140,7 @@ pub fn router(server: Arc<Server>) -> Router {
     let private = Router::new()
         .route("/api/apps", get(apps).post(create_app))
         .route("/api/apps/:id", get(app_detail))
+        .route("/api/revisions/:app", get(revisions))
         .route("/api/action", post(action))
         .route("/api/build/:id", post(build))
         .route("/api/authoring/:id", post(author_tool))
@@ -172,6 +173,10 @@ pub fn router(server: Arc<Server>) -> Router {
         .route_layer(middleware::from_fn_with_state(server.clone(), authenticate));
     Router::new()
         .route("/", get(index))
+        .route("/settings", get(index))
+        .route("/chat", get(index))
+        .route("/chat/:id", get(index))
+        .route("/apps/:id", get(index))
         .route("/shell.js", get(shell_js))
         .route("/style.css", get(style_css))
         .route("/applet.js", get(applet_js))
@@ -330,8 +335,16 @@ async fn build(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Valu
             .store
             .blocking(move |store| {
                 let app = AppId(id);
-                let published = store.snapshot(&app)?.revision.ok_or(Error::NotFound)?;
-                let code = store.revision(&app, &published)?.code;
+                let code = if let Some(published) = store.snapshot(&app)?.revision {
+                    store.revision(&app, &published)?.code
+                } else {
+                    let draft: String = store.open()?.query_row(
+                        "SELECT id FROM drafts WHERE app=? ORDER BY rowid DESC LIMIT 1",
+                        [&app.0],
+                        |row| row.get(0),
+                    )?;
+                    store.draft(&app, &DraftId(draft))?.code
+                };
                 let draft = store.create_draft(&app, code)?;
                 let session = AuthoringSession::begin(runtime, &app, &draft.id, true)?;
                 Ok(json!({"conversation":session.conversation}))
@@ -715,4 +728,8 @@ async fn frontend_diagnostic(
         })
         .await?;
     Ok(Json(json!({"recorded":true})))
+}
+
+async fn revisions(State(s): State<Arc<Server>>, Path(app): Path<String>) -> Api<Value> {
+    Ok(Json(s.runtime.store.blocking(move|store|{let app=AppId(app);let current=store.snapshot(&app)?.revision;let db=store.open()?;let mut q=db.prepare("SELECT r.id,r.code,EXISTS(SELECT 1 FROM revision_tests t WHERE t.revision=r.id AND t.digest=r.digest),(SELECT report FROM frontend_checks f WHERE f.revision=r.id AND f.digest=r.digest) FROM revisions r WHERE r.app=? ORDER BY r.rowid DESC LIMIT 50")?;let rows=q.query_map([&app.0],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,bool>(2)?,r.get::<_,Option<String>>(3)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;let result=rows.into_iter().map(|(id,code,tested,report)|{let code:AppCode=serde_json::from_str(&code).map_err(|_|Error::Storage)?;let kind=report.and_then(|s|serde_json::from_str::<Value>(&s).ok()).and_then(|v|v["kind"].as_str().map(str::to_owned));Ok(json!({"current":current.as_ref().is_some_and(|r|r.0==id),"id":id,"testCount":code.tests.len(),"backendTested":tested,"frontendKind":kind}))}).collect::<Result<Vec<_>>>()?;Ok(json!(result))}).await?))
 }
