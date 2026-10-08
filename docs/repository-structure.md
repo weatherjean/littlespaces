@@ -1,0 +1,46 @@
+# Repository structure and first quality round
+
+The migration branch preserves two implementations. Keep their source and data until migration behavior is verified. No major source area has been moved or deleted in this round.
+
+## Current responsibilities
+
+| Area                                                       | Responsibility                                                                              |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `rust/src/api.rs`                                          | Axum routing, owner session/origin checks, request dispatch                                 |
+| `rust/src/tools.rs`                                        | Scoped agent tools, approved drafts, test and publication workflow                          |
+| `rust/src/backend.rs`                                      | Action orchestration, worker results, dry runs and connection probes                        |
+| `rust/src/backend/contracts.rs`                            | Source-bound catalogs, contract caching and input/output validation                         |
+| `rust/src/backend/records.rs`                              | Worker deltas, record limits and atomic conflict-checked commits                            |
+| `rust/src/runtime.rs`, `worker.js`                         | QuickJS bindings and JavaScript action/test sessions                                        |
+| `rust/src/sandbox.rs`                                      | Worker admission, OS isolation, bounded IPC and watchdog                                    |
+| `rust/src/broker.rs`, `capabilities.rs`, `vault.rs`        | HTTP authorization, external-write outcomes, credential restrictions and encryption         |
+| `rust/src/store.rs`, `schema.sql`                          | SQLite connections, additive upgrades, workspace and revision persistence                   |
+| `web/`                                                     | Preact shell and applet frontend runtime                                                    |
+| `src/`                                                     | Preserved SvelteKit app, plus utilities and CSS still imported by `web/`                    |
+| `static/`                                                  | Shared public assets                                                                        |
+| `scripts/migration/`, `tests/fixtures/codex-rust.mjs`      | Rust development/build commands and synthetic browser driver                                |
+| Other `scripts/`, `tests/`, root Svelte/Vite configuration | Preserved Node/SvelteKit tooling and tests                                                  |
+| `deploy/docker/`                                           | Disposable Linux regression image and attributed seccomp profile; not production deployment |
+
+## Prioritized review
+
+The first implemented round addresses a credential boundary bug (HTTP response keys could echo credentials), errors concealed as absent permission/catalog rows, repeated schema validation, and mixed action/commit/HTTP responsibilities. Record commits now acquire an immediate transaction before reading the current snapshot, avoiding a deferred read-to-write lock upgrade. HTTP authority rejects read-only writes before creating external-operation intent. Existing contract, read-only, record preservation, and isolation behavior remains required.
+
+The recommended second round is deliberately narrow:
+
+1. **Storage upgrades and publication concurrency.** `Store::applet` checks columns and issues additive DDL on every connection. Two connections upgrading an old database can race between inspection and `ALTER TABLE`. Serialize upgrades and separate migration from ordinary opens. `Store::publish` checks ownership, writes the applet revision, then updates workspace metadata through separate connections/databases; draft publication also checks its base version outside that operation. Define conflict and recovery behavior before extracting revision storage. Add focused tests for competing upgrades/publications and partial failures.
+2. **External-operation evidence.** Intent is durable and interruption remains uncertain. The ledger is currently unbounded, lacks revision association, and marks a response only after the broker successfully reads its body. A received redirect, oversized body, or failed body read therefore remains uncertain. Preserve conservative retry behavior while distinguishing dispatch, headers received, body failure, and local commit. Specify retention without silently deleting evidence needed to resolve uncertain writes.
+3. **API and agent-tool boundaries.** Split applet routes and draft tools out of the large dispatch functions, preserving session/origin guards, per-turn tool availability, and exact draft approval. Errors are still strings and ordinary dispatch errors generally become HTTP 400, including some busy paths. Introduce narrow typed errors where they improve status handling and recovery, without a full rewrite.
+4. **Dependency and public-release hygiene.** Move the small shared frontend imports out of `src/lib`, then separate npm manifests and legacy commands. Inventory remaining third-party/transitive notices and packaged Codex licensing before distributing executables or images. The first-round credential-pattern scan found no matches in tracked or candidate source files; local path/identifier review found the existing public copyright/repository handle and the synthetic Docker user. This does not establish that earlier Git history is clean; review release history before publishing.
+
+SQLite's five-second busy timeout still blocks synchronous callers, and snapshots are copied in memory. Measure these limits in later resource validation; do not increase concurrency speculatively. Vault-key creation and the many other broad error fallbacks in storage/tools deserve targeted failure-path review. Current tests do not resolve these findings.
+
+## Proposed layout before moving major areas
+
+Keep `rust/`, `web/`, `static/`, and `docs/` at their existing locations. First introduce `shared/` for the pure utilities and CSS consumed by both frontends: `app-emoji.ts`, `app-chat-context.ts`, `web-citations.ts`, `voice.ts`, `secret-validation.ts`, and shared styles. Update both consumers and verify both builds before moving legacy code.
+
+Once that boundary is explicit, put the preserved SvelteKit source, its framework configuration, exclusive scripts, tests, and npm manifest under `legacy/`. Keep Rust build/test scripts separate from legacy scripts, initially under their current `scripts/migration/` path to avoid unnecessary command churn. Give the Rust web build its own manifest only after listing its direct dependencies; retain explicit root command aliases during the transition. Keep synthetic Rust fixtures with the Rust regression tools.
+
+Do not delete `web/preserved.css` just because it was extracted from Svelte components: the Preact shell still uses those rules. Do not remove legacy libraries from the shared npm manifest before checking both build graphs. Relocating major areas should be a separate reviewable change with import-path and command verification.
+
+Deployment design/implementation, target-host validation, backup/restore exercises, and comprehensive system testing remain later stages.

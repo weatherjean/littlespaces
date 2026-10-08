@@ -2,6 +2,10 @@
 **
 !package.json
 !package-lock.json
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!licenses/
+!licenses/**
 !.prettierrc.json
 !web/
 !web/**
@@ -31,3 +35,4 @@
 **/node_modules/**
 **/target/**
 **/.data*/**
+**/auth.json

@@ -30,7 +30,7 @@
     "test:e2e:ui": "npm run build && playwright test --ui",
     "build:rust:web": "node scripts/migration/build-web.mjs",
     "start:rust": "node scripts/migration/start.mjs",
-    "test:rust": "cargo test --manifest-path rust/Cargo.toml",
+    "test:rust": "cargo test --manifest-path rust/Cargo.toml --locked",
     "test:rust:e2e": "node scripts/migration/test-browser.mjs",
     "dev:legacy": "node scripts/dev.mjs",
     "build:legacy": "vite build",
@@ -38,13 +38,15 @@
     "dev:rust": "node scripts/migration/dev.mjs",
     "build:rust": "npm run build:rust:web && cargo build --manifest-path rust/Cargo.toml --release --locked",
     "check:rust:web": "node scripts/migration/check-web.mjs",
-    "check:rust": "npm run check:rust:web && cargo clippy --manifest-path rust/Cargo.toml --locked -- -D warnings",
+    "check:rust": "npm run check:rust:web && cargo fmt --manifest-path rust/Cargo.toml -- --check && cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings",
     "setup:rust": "node scripts/migration/start.mjs --setup-owner",
     "owner:reset:rust": "node scripts/migration/start.mjs --reset-owner",
     "import:rust": "node scripts/migration/start.mjs --import-workspace",
-    "verify:rust": "npm run check:rust && npm run test:rust && npm run build:rust:web && cargo build --manifest-path rust/Cargo.toml --locked && npm run test:rust:e2e",
+    "verify:rust": "npm run check:rust && npm run format:rust:check && npm run test:rust && npm run build:rust:web && cargo build --manifest-path rust/Cargo.toml --locked && npm run test:rust:e2e",
     "test:rust:live": "node scripts/migration/test-live.mjs",
-    "test:rust:docker": "node scripts/migration/test-docker.mjs"
+    "test:rust:docker": "node scripts/migration/test-docker.mjs",
+    "format:rust": "cargo fmt --manifest-path rust/Cargo.toml && prettier --write web scripts/migration rust/src/*.js rust/src/applet-sdk.d.ts",
+    "format:rust:check": "cargo fmt --manifest-path rust/Cargo.toml -- --check && prettier --check web scripts/migration rust/src/*.js rust/src/applet-sdk.d.ts"
   },
   "dependencies": {
     "@openai/codex": "0.160.0",

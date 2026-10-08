@@ -6,3 +6,10 @@ build/
 package-lock.json
 playwright-report/
 test-results/
+
+# Rust builds and private migration/test workspaces
+rust/target/
+build-rust/
+.data-rust*/
+.data-*/
+licenses/

@@ -1,5 +1,7 @@
 # Local development diagnostics
 
+This guide describes the preserved SvelteKit/Node implementation. On the Rust migration branch, use [the Rust guide](rust-migration.md) and [contributor commands](../CONTRIBUTING.md).
+
 ## Live Codex evaluation
 
 Run `npm run dev:instance` to start a separate Vite instance at

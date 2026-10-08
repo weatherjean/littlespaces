@@ -1,5 +1,7 @@
 # Set up with the ChatGPT desktop app
 
+This guide describes the preserved SvelteKit/Node implementation. On the Rust migration branch, use [the Rust guide](rust-migration.md) and [contributor commands](../CONTRIBUTING.md).
+
 Open the ChatGPT desktop app and paste this prompt:
 
 ```text

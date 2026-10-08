@@ -2,7 +2,7 @@
 
 The migration branch is `migration/rust-preact-quickjs`. The existing SvelteKit application remains runnable with its original commands. The preserved baseline is commit `331326b` on `experiment/liquid-glass`.
 
-## First working slice
+## Current implementation
 
 A Rust/Axum server serves a Preact launcher, a sandboxed Preact/HTM journal applet, and an isolated QuickJS backend worker. Entries persist in SQLite and survive server restarts. The launcher reuses the original theme, shared CSS, liquid-glass treatments, Orbit mark, launcher markup and responsive navigation. Settings includes device speech selection and playback controls.
 
@@ -18,14 +18,14 @@ From the repository root:
 npm ci
 npm run build:rust:web
 cargo build --manifest-path rust/Cargo.toml --locked
-npm run start:rust
+RUST_BINARY=rust/target/debug/little-spaces npm run start:rust
 ```
 
 On the first run, open the private setup URL printed in the terminal and configure the owner account. The server binds to IPv4 loopback (`127.0.0.1:5180` by default). Non-loopback binding requires an HTTPS `APP_ORIGIN` and a trusted TLS proxy. Owner sessions use HttpOnly, SameSite=Strict cookies, and mutating API requests require the configured origin.
 
 `RUST_LISTEN` can select another loopback address/port. `RUST_DATA_DIR` defaults to `.data-rust`. This database is separate from the current `.data` workspace; there is no automatic import or modification of existing data.
 
-After building, the server needs only its executable and `build-rust/web`. It runs without Node, npm, a frontend compiler, or a local speech model. Release compilation happens on the development machine or CI.
+After building, the server serves the UI and runs applet actions with its executable and `build-rust/web`. AI chat and app creation additionally require the pinned Codex app-server executable installed by npm (or `CODEX_BINARY` pointing to a compatible executable). Applet execution needs no Node runtime, frontend compiler, or local speech model. This is not yet a standalone release package. See [contributor guidance](../CONTRIBUTING.md) for the release build and dependency boundaries.
 
 ## Applet authoring without a build step
 
@@ -70,7 +70,8 @@ cargo test --manifest-path rust/Cargo.toml --locked
 npm run build:rust:web
 cargo build --manifest-path rust/Cargo.toml --locked
 npm run test:rust:e2e
-npm run check
+npm run check:rust
+npm run format:rust:check
 ```
 
 The Rust suite checks persistence output, domain validation, async actions, read-only enforcement, absent ambient capabilities, runaway allocation, and infinite-loop interruption. The browser suite runs a temporary private database, checks authorization and origin rejection, executes actions through the real isolated worker, verifies iframe isolation and restart persistence, and exercises desktop/mobile Chromium and mobile WebKit. It writes screenshots to the ignored `build-rust/screenshots` directory.
@@ -79,13 +80,9 @@ A local Apple Silicon/macOS smoke measurement of the optimized executable record
 
 The preview is not yet evidence that the complete application fits a 512 MiB DigitalOcean droplet. Linux sandbox and memory behavior, Codex app-server resource use, full feature parity, backup/restore, and updates must be validated on the target server before production support is claimed.
 
-## Port order
+## Remaining release work
 
-1. Preserve this working UI/action/persistence slice and add production owner authentication.
-2. Port ChatGPT app-server connection and streaming chat, keeping existing chat layout and interactions.
-3. Port applet authoring, action schemas, tests, publication and revision history; define explicit compatibility/import for Svelte applets.
-4. Port photos, integrations, schedules, notifications and voice recognition, using device speech playback.
-5. Package immutable releases and DigitalOcean provisioning, backup, update, recovery and resource verification.
+The core feature ports are present; passing current checks is not a production sign-off. Repository cleanup is tracked in [the structure review](repository-structure.md). Deployment design, target-host resource validation, immutable packaging, backup/restore exercises, and comprehensive system testing remain later stages.
 
 Rolling back this source branch does not migrate data between implementations. Keep the two data directories separate until a tested import/rollback procedure exists.
 

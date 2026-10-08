@@ -1,5 +1,7 @@
 # Install and access your workspace
 
+This guide describes the preserved SvelteKit/Node implementation. On the Rust migration branch, use [the Rust guide](rust-migration.md) and [contributor commands](../CONTRIBUTING.md).
+
 Each installation has one owner, one private workspace, and its own ChatGPT connection. There is no shared authentication service, default account, public registration, or required domain. A domain, HTTPS IP origin, or HTTPS tunnel URL works. HTTP is allowed only on loopback for local development or access through an SSH forward.
 
 ## Initial installation

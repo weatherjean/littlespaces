@@ -1,5 +1,7 @@
 # Project reference
 
+This guide describes the preserved SvelteKit/Node implementation. On the Rust migration branch, use [the Rust guide](rust-migration.md) and [contributor commands](../CONTRIBUTING.md).
+
 Setup details, capabilities, limitations, and development notes for LittleSpaces. For a quick introduction, see the [README](../README.md).
 
 ## Run

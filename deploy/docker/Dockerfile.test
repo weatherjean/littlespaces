@@ -22,6 +22,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci && npx playwright install --with-deps chromium webkit
 COPY --from=rust-build /out/ /usr/local/bin/
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
+COPY licenses ./licenses
 COPY web ./web
 COPY src/lib ./src/lib
 COPY static ./static

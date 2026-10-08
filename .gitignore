@@ -14,3 +14,9 @@ test-results/
 rust/target/
 build-rust/
 .data-rust*/
+
+# Owner credentials and private test authentication, wherever a workspace is placed.
+**/auth.json
+**/secrets.key
+.data-*/
+.DS_Store

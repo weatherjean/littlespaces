@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, copyFile } from 'node:fs/promises';
 import { compile } from '@tailwindcss/node';
 import { gzipSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
@@ -138,3 +138,11 @@ for (const name of await readdir('build-rust/web/assets')) {
     await writeFile('build-rust/web/assets/' + name + '.gz', gzipSync(bytes));
   }
 }
+
+// Keep full notices with bundled browser code and the matching Rust distribution.
+await mkdir('build-rust/web/licenses', { recursive: true });
+for (const name of await readdir('licenses')) {
+  await copyFile(`licenses/${name}`, `build-rust/web/licenses/${name}`);
+}
+await copyFile('LICENSE', 'build-rust/web/licenses/LITTLESPACES.txt');
+await copyFile('THIRD_PARTY_NOTICES.md', 'build-rust/web/licenses/THIRD_PARTY_NOTICES.md');
