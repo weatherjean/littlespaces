@@ -1,0 +1,4 @@
+/target/
+/reports/
+*.sqlite*
+__pycache__/

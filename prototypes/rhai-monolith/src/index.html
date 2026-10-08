@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  /><title>Rust monolith prototype</title>
+  <style>
+    body {
+      font: 16px system-ui;
+      max-width: 700px;
+      margin: 40px auto;
+      padding: 0 16px;
+    }
+    button,
+    input {
+      font: inherit;
+      padding: 8px;
+    }
+    pre {
+      white-space: pre-wrap;
+      background: #eee;
+      padding: 16px;
+    }
+    label {
+      display: block;
+      margin: 16px 0;
+    }
+  </style>
+  <h1>Rust / Rhai feasibility prototype</h1>
+  <p>One process, one database. Synthetic weather and AI provider. No real account usage.</p>
+  <form id="task">
+    <label>Task <input name="title" required maxlength="100" /></label
+    ><button>Add through Rhai</button
+    ><button type="button" id="ai">Add through simulated AI tools</button>
+  </form>
+  <p><button id="list">List tasks</button> <button id="weather">Read fixture weather</button></p>
+  <pre id="result" role="status">Ready</pre>
+  <script type="module">
+    const result = document.querySelector('#result');
+    async function send(path, body) {
+      try {
+        const r = await fetch(path, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        result.textContent = JSON.stringify(await r.json(), null, 2);
+      } catch (e) {
+        result.textContent = e.message;
+      }
+    }
+    document.querySelector('#task').onsubmit = (e) => {
+      e.preventDefault();
+      send('/api/apps/tasks/actions/add', {
+        input: { title: new FormData(e.target).get('title') },
+        version: 1,
+      });
+    };
+    document.querySelector('#list').onclick = () =>
+      send('/api/apps/tasks/actions/list', { input: {}, version: 1 });
+    document.querySelector('#weather').onclick = () =>
+      send('/api/apps/weather/actions/weather', { input: {}, version: 1 });
+    document.querySelector('#ai').onclick = () =>
+      send('/api/ai', { message: document.querySelector('input').value || 'Synthetic task' });
+  </script>
+</html>
