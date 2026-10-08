@@ -101,55 +101,6 @@ async fn guard(State(app): State<App>, request: Request, next: Next) -> Response
     }
     next.run(request).await
 }
-#[cfg(test)]
-mod origin_tests {
-    use super::origin_matches;
-    #[test]
-    fn local_aliases_require_the_same_port_and_request_host() {
-        let expected = "http://127.0.0.1:5180";
-        assert!(origin_matches(
-            expected,
-            Some("http://localhost:5180"),
-            Some("localhost:5180")
-        ));
-        for (origin, host) in [
-            (Some("http://localhost:5181"), Some("localhost:5181")),
-            (Some("http://localhost:5180"), Some("127.0.0.1:5180")),
-            (
-                Some("http://attacker.example:5180"),
-                Some("attacker.example:5180"),
-            ),
-            (Some("http://localhost:5180/path"), Some("localhost:5180")),
-            (None, Some("localhost:5180")),
-        ] {
-            assert!(!origin_matches(expected, origin, host));
-        }
-        assert!(origin_matches(
-            "http://localhost:5180",
-            Some(expected),
-            Some("127.0.0.1:5180")
-        ));
-    }
-    #[test]
-    fn production_origins_remain_exact() {
-        let expected = "https://app.example";
-        assert!(origin_matches(
-            expected,
-            Some(expected),
-            Some("app.example")
-        ));
-        assert!(!origin_matches(
-            expected,
-            Some("https://localhost"),
-            Some("localhost")
-        ));
-        assert!(!origin_matches(
-            "https://127.0.0.1:5180",
-            Some("https://localhost:5180"),
-            Some("localhost:5180")
-        ));
-    }
-}
 pub fn router(app: App) -> Router {
     Router::new()
         .route(
@@ -896,4 +847,54 @@ async fn applet_document(app: &App, id: &str) -> Result<String> {
     Ok(format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';script-src 'nonce-{nonce}';style-src 'unsafe-inline';img-src data: blob:;connect-src 'none';frame-src 'none';form-action 'none';base-uri 'none';"><style>{baseline}{css}</style></head><body><div id="app"></div><script nonce="{nonce}">{script}</script></body></html>"#
     ))
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_matches;
+    #[test]
+    fn local_aliases_require_the_same_port_and_request_host() {
+        let expected = "http://127.0.0.1:5180";
+        assert!(origin_matches(
+            expected,
+            Some("http://localhost:5180"),
+            Some("localhost:5180")
+        ));
+        for (origin, host) in [
+            (Some("http://localhost:5181"), Some("localhost:5181")),
+            (Some("http://localhost:5180"), Some("127.0.0.1:5180")),
+            (
+                Some("http://attacker.example:5180"),
+                Some("attacker.example:5180"),
+            ),
+            (Some("http://localhost:5180/path"), Some("localhost:5180")),
+            (None, Some("localhost:5180")),
+        ] {
+            assert!(!origin_matches(expected, origin, host));
+        }
+        assert!(origin_matches(
+            "http://localhost:5180",
+            Some(expected),
+            Some("127.0.0.1:5180")
+        ));
+    }
+    #[test]
+    fn production_origins_remain_exact() {
+        let expected = "https://app.example";
+        assert!(origin_matches(
+            expected,
+            Some(expected),
+            Some("app.example")
+        ));
+        assert!(!origin_matches(
+            expected,
+            Some("https://localhost"),
+            Some("localhost")
+        ));
+        assert!(!origin_matches(
+            "https://127.0.0.1:5180",
+            Some("https://localhost:5180"),
+            Some("localhost:5180")
+        ));
+    }
 }

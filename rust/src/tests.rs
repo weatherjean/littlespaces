@@ -475,3 +475,112 @@ async fn debugging_tools_do_not_grant_permissions_or_bypass_turn_restrictions() 
     }
     assert_eq!(crate::capabilities::grants(store, &id).unwrap(), json!([]));
 }
+
+#[tokio::test]
+async fn permission_and_contract_reads_surface_database_errors() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let id = crate::random_uuid();
+    let db = store.applet(&id, true).unwrap();
+    assert_eq!(crate::capabilities::grants(store, &id).unwrap(), json!([]));
+    db.execute_batch(
+        "ALTER TABLE http_grants RENAME COLUMN grants TO broken;
+                      ALTER TABLE backend_contracts RENAME COLUMN contract TO broken;",
+    )
+    .unwrap();
+    assert!(crate::capabilities::grants(store, &id)
+        .unwrap_err()
+        .contains("no such column"));
+    let revision = json!({"backend":"const actions={read:{readOnly:true,run:()=>[]}}"});
+    // A damaged cache must fail before attempting to inspect untrusted code again.
+    assert!(crate::backend::catalog(store, &id, &revision)
+        .await
+        .unwrap_err()
+        .contains("no such column"));
+}
+
+#[tokio::test]
+async fn host_read_only_authority_rejects_external_writes_before_recording_intent() {
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let id = crate::random_uuid();
+    store.applet(&id, true).unwrap();
+    let policy = json!([{"origin":"https://api.example.com","methods":["POST"],"secrets":[]}]);
+    crate::capabilities::save(store, &id, &policy).unwrap();
+    let authority = crate::broker::Authority {
+        store,
+        applet_id: &id,
+        http: &policy,
+        read_only: true,
+    };
+    let mut diagnostics = vec![];
+    let error = crate::broker::request_for_action(
+        &authority,
+        "read",
+        &json!({"url":"https://api.example.com/items","method":"POST"}),
+        &mut diagnostics,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("cannot use that HTTP method"));
+    assert!(diagnostics.is_empty());
+    assert!(query(
+        &store.applet(&id, false).unwrap(),
+        "SELECT * FROM external_operations",
+        &[]
+    )
+    .unwrap()
+    .is_empty());
+}
+
+#[test]
+fn competing_record_commits_save_one_snapshot_and_report_the_conflict() {
+    use std::{collections::BTreeMap, sync::Arc, sync::Barrier};
+    let fixture = Fixture::new();
+    let store = &fixture.0;
+    let space = store.create_space("App", "grid").unwrap();
+    let id = crate::random_uuid();
+    let revision = store
+        .publish(
+            text(&space, "id"),
+            &id,
+            &json!({"title":"App","description":"","source":"ui","bundle":"ui"}),
+            None,
+        )
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+    let threads: Vec<_> = (1..=2)
+        .map(|value| {
+            let store = store.clone();
+            let id = id.clone();
+            let version = revision["version"].clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                crate::backend::commit_records(
+                    &store,
+                    &id,
+                    &version,
+                    &BTreeMap::new(),
+                    &BTreeMap::from([("winner".into(), json!(value))]),
+                    false,
+                )
+            })
+        })
+        .collect();
+    barrier.wait();
+    let results: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let error = results.into_iter().find_map(Result::err).unwrap();
+    assert!(
+        error.contains("App data changed while the action ran"),
+        "{error}"
+    );
+    let records = store.records(&id).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["key"], "winner");
+    assert!(matches!(records[0]["value"].as_i64(), Some(1 | 2)));
+}

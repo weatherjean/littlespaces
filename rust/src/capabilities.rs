@@ -1,5 +1,5 @@
 //! Host-owned HTTP grants. App source can request capabilities, never grant them.
-use crate::store::{execute, first, text, Result, Store};
+use crate::store::{execute, query, text, Result, Store};
 use serde_json::{json, Value};
 
 pub fn normalize(value: &Value) -> Result<Value> {
@@ -47,12 +47,13 @@ pub fn normalize(value: &Value) -> Result<Value> {
 
 pub fn grants(store: &Store, id: &str) -> Result<Value> {
     let db = store.applet(id, false)?;
-    match first(&db, "SELECT grants FROM http_grants WHERE id=1", &[]) {
-        Ok(row) => normalize(
-            &serde_json::from_str(text(&row, "grants"))
+    let rows = query(&db, "SELECT grants FROM http_grants WHERE id=1", &[])?;
+    match rows.first() {
+        Some(row) => normalize(
+            &serde_json::from_str(text(row, "grants"))
                 .map_err(|_| "Invalid stored HTTP permissions")?,
         ),
-        Err(_) => Ok(json!([])),
+        None => Ok(json!([])),
     }
 }
 

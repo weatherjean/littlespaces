@@ -35,6 +35,69 @@ fn reference(store: &Store, value: &Value, origin: &str) -> Result<String> {
         vault::for_origin(store, name, origin)?
     ))
 }
+pub struct Authority<'a> {
+    pub store: &'a crate::store::Store,
+    pub applet_id: &'a str,
+    pub http: &'a serde_json::Value,
+    pub read_only: bool,
+}
+/// Authorize each bridge request independently of the JavaScript wrapper.
+/// Persist write intent before dispatch; cancellation leaves an uncertain outcome.
+pub async fn request_for_action(
+    authority: &Authority<'_>,
+    action: &str,
+    input: &Value,
+    diagnostics: &mut Vec<Value>,
+) -> Result<Value> {
+    let grants = crate::capabilities::grants(authority.store, authority.applet_id)?;
+    crate::capabilities::check(&grants, input)?;
+    crate::capabilities::check(authority.http, input)?;
+    let method = if text(input, "method").is_empty() {
+        "GET".to_string()
+    } else {
+        text(input, "method").to_uppercase()
+    };
+    let external_write = !matches!(method.as_str(), "GET" | "HEAD");
+    if external_write && authority.read_only {
+        return Err("This action cannot use that HTTP method".into());
+    }
+    let operation = if external_write {
+        let id = crate::random_uuid();
+        let origin = url::Url::parse(text(input, "url"))
+            .map_err(|_| "Invalid API URL")?
+            .origin()
+            .ascii_serialization();
+        let now = crate::store::now();
+        crate::store::execute(
+            &authority.store.applet(authority.applet_id, false)?,
+            "INSERT INTO external_operations(id,action,origin,method,status,http_status,created_at,updated_at)
+             VALUES(?,?,?,?,'uncertain',NULL,?,?)",
+            &[json!(id), json!(action), json!(origin), json!(method), json!(now), json!(now)],
+        )?;
+        diagnostics.push(json!({
+            "operationId": id,
+            "code": "external_write",
+            "outcome": "uncertain",
+            "automaticRetry": false,
+        }));
+        Some((id, diagnostics.len() - 1))
+    } else {
+        None
+    };
+    let result = request(authority.store, input, authority.read_only).await;
+    if let Some((id, event)) = operation {
+        if let Ok(response) = &result {
+            crate::store::execute(
+                &authority.store.applet(authority.applet_id, false)?,
+                "UPDATE external_operations SET status='response_received',http_status=?,updated_at=? WHERE id=?",
+                &[response["status"].clone(), json!(crate::store::now()), json!(id)],
+            )?;
+            diagnostics[event]["outcome"] = json!("response_received");
+        }
+    }
+    result
+}
+
 pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Value> {
     let mut url = url::Url::parse(text(input, "url")).map_err(|_| "Invalid API URL")?;
     if url.scheme() != "https"
@@ -161,26 +224,33 @@ pub async fn request(store: &Store, input: &Value, read_only: bool) -> Result<Va
     redact(&mut data, &credentials);
     Ok(json!({"status":status.as_u16(),"ok":status.is_success(),"data":data}))
 }
+// API responses are untrusted. Providers can echo credentials in JSON keys as well as values.
+fn redact_text(text: &mut String, credentials: &[String]) {
+    for credential in credentials
+        .iter()
+        .filter(|credential| !credential.is_empty())
+    {
+        *text = text.replace(credential, "[redacted]");
+        let encoded =
+            url::form_urlencoded::byte_serialize(credential.as_bytes()).collect::<String>();
+        *text = text.replace(&encoded, "[redacted]");
+    }
+}
+
 fn redact(value: &mut Value, credentials: &[String]) {
     match value {
-        Value::String(text) => {
-            for credential in credentials {
-                if !credential.is_empty() {
-                    *text = text.replace(credential, "[redacted]");
-                    let encoded = url::form_urlencoded::byte_serialize(credential.as_bytes())
-                        .collect::<String>();
-                    *text = text.replace(&encoded, "[redacted]");
-                }
-            }
-        }
+        Value::String(text) => redact_text(text, credentials),
         Value::Array(values) => {
             for value in values {
                 redact(value, credentials);
             }
         }
         Value::Object(values) => {
-            for value in values.values_mut() {
-                redact(value, credentials);
+            let entries = std::mem::take(values);
+            for (mut key, mut value) in entries {
+                redact_text(&mut key, credentials);
+                redact(&mut value, credentials);
+                values.insert(key, value);
             }
         }
         _ => {}
@@ -204,5 +274,30 @@ mod tests {
             assert!(!public(ip.parse().unwrap()));
         }
         assert!(public("1.1.1.1".parse().unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    #[test]
+    fn echoed_credentials_are_redacted_in_nested_keys_and_values() {
+        let secret = "synthetic/credential+value";
+        let encoded = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect::<String>();
+        let mut response = json!({
+            secret: [{encoded.clone(): {"message": format!("Bearer {secret}")}}],
+            "encoded": encoded,
+            "public": "unchanged",
+        });
+        redact(&mut response, &[secret.into()]);
+        assert_eq!(
+            response,
+            json!({
+                "[redacted]": [{"[redacted]": {"message": "Bearer [redacted]"}}],
+                "encoded": "[redacted]",
+                "public": "unchanged",
+            })
+        );
     }
 }

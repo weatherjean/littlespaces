@@ -6,12 +6,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-pub struct Authority<'a> {
-    pub store: &'a crate::store::Store,
-    pub applet_id: &'a str,
-    pub http: &'a serde_json::Value,
-    pub read_only: bool,
-}
+pub use crate::broker::Authority;
 static WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 fn command(executable: &Path) -> Result<Command, String> {
@@ -130,45 +125,13 @@ pub async fn run_with_trace(
                 }
                 let result = match &authority {
                     Some(auth) if request.mode == "call" => {
-                        let grants = crate::capabilities::grants(auth.store, auth.applet_id);
-                        match grants.and_then(|grants| {
-                            crate::capabilities::check(&grants, &value["input"])?;
-                            crate::capabilities::check(auth.http, &value["input"])
-                        }) {
-                            Ok(()) => {
-                                let method = value["input"]["method"]
-                                    .as_str()
-                                    .unwrap_or("GET")
-                                    .to_uppercase();
-                                let operation = if !matches!(method.as_str(), "GET" | "HEAD") {
-                                    let id = crate::random_uuid();
-                                    let origin = url::Url::parse(
-                                        value["input"]["url"].as_str().unwrap_or(""),
-                                    )
-                                    .map_err(|_| "Invalid API URL")?
-                                    .origin()
-                                    .ascii_serialization();
-                                    crate::store::execute(&auth.store.applet(auth.applet_id,false)?, "INSERT INTO external_operations VALUES(?,?,?,?,'uncertain',NULL,?,?)", &[serde_json::json!(id),serde_json::json!(request.action),serde_json::json!(origin),serde_json::json!(method),serde_json::json!(crate::store::now()),serde_json::json!(crate::store::now())])?;
-                                    Some(id)
-                                } else {
-                                    None
-                                };
-                                let result = crate::broker::request(
-                                    auth.store,
-                                    &value["input"],
-                                    auth.read_only,
-                                )
-                                .await;
-                                if let Some(id) = operation {
-                                    if let Ok(response) = &result {
-                                        crate::store::execute(&auth.store.applet(auth.applet_id,false)?, "UPDATE external_operations SET status='response_received',http_status=?,updated_at=? WHERE id=?", &[response["status"].clone(),serde_json::json!(crate::store::now()),serde_json::json!(id)])?;
-                                    }
-                                    diagnostics.push(serde_json::json!({"operationId":id,"code":"external_write","outcome":if result.is_ok(){"response_received"}else{"uncertain"},"automaticRetry":false}));
-                                }
-                                result
-                            }
-                            Err(error) => Err(error),
-                        }
+                        crate::broker::request_for_action(
+                            auth,
+                            &request.action,
+                            &value["input"],
+                            diagnostics,
+                        )
+                        .await
                     }
                     Some(_) => Err("Live HTTP is unavailable in tests and debug runs".into()),
                     None => Err("HTTP unavailable".into()),
