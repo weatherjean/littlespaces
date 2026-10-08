@@ -115,6 +115,11 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        "models" => {
+            let auth = little_spaces::core::chatgpt::ChatGpt::new(store.clone(), secrets.clone())?;
+            let models = auth.models().await?;
+            json!({"availableModels":models.as_array().map_or(0,Vec::len)})
+        }
         "secrets" => serde_json::to_value(secrets.list()?)?,
         "secret-put" => {
             let name = next()?;

@@ -154,6 +154,7 @@ pub enum Error {
     Model,
     Authentication,
     BrowserUnavailable,
+    ModelCatalogLimit,
     UsageLimit,
     UsageUnavailable,
     ModelIncomplete,

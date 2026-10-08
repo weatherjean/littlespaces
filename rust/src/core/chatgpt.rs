@@ -229,6 +229,34 @@ impl ChatGpt {
         });
         Ok(url.into())
     }
+    pub async fn tunnel_callback(
+        &self,
+        query: std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        let owner = self
+            .pending
+            .lock()
+            .await
+            .as_ref()
+            .ok_or(Error::Authentication)?
+            .owner
+            .clone();
+        let hash = owner.clone();
+        let valid = self
+            .store
+            .blocking(move |store| {
+                Ok(store.open()?.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM owner_sessions WHERE id=? AND expires_at>?)",
+                    rusqlite::params![hash, now()],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .await?;
+        if !valid {
+            return Err(Error::Unauthorized);
+        }
+        self.callback(&owner, query).await
+    }
     pub async fn callback(
         &self,
         owner: &str,
@@ -309,15 +337,24 @@ impl ChatGpt {
     }
     async fn bounded_json<T: serde::de::DeserializeOwned>(
         &self,
+        response: reqwest::Response,
+    ) -> Result<T> {
+        self.json_with_budget(response, 128 * 1024, Error::Limit)
+            .await
+    }
+    async fn json_with_budget<T: serde::de::DeserializeOwned>(
+        &self,
         mut response: reqwest::Response,
+        max_bytes: usize,
+        limit_error: Error,
     ) -> Result<T> {
         if !response.status().is_success() {
             return Err(Error::Authentication);
         }
         let mut bytes = Zeroizing::new(Vec::new());
         while let Some(chunk) = response.chunk().await.map_err(|_| Error::Authentication)? {
-            if bytes.len() + chunk.len() > 128 * 1024 {
-                return Err(Error::Limit);
+            if bytes.len() + chunk.len() > max_bytes {
+                return Err(limit_error);
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -374,13 +411,15 @@ impl ChatGpt {
     pub async fn models(&self) -> Result<Value> {
         let token = self.access_token().await?;
         let value: Value = self
-            .bounded_json(
+            .json_with_budget(
                 self.client
                     .get("https://api.openai.com/v1/models")
                     .bearer_auth(token.as_str())
                     .send()
                     .await
                     .map_err(|_| Error::Network)?,
+                4 * 1024 * 1024,
+                Error::ModelCatalogLimit,
             )
             .await?;
         let models = value["models"].as_array().ok_or(Error::Model)?;
@@ -565,5 +604,80 @@ mod tests {
         assert!(!bytes
             .windows(b"not-a-real-access-token".len())
             .any(|w| w == b"not-a-real-access-token"));
+    }
+}
+
+#[cfg(test)]
+mod catalog_budget_tests {
+    use super::*;
+    #[tokio::test]
+    async fn model_catalog_can_exceed_auth_budget_without_weakening_auth_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
+        let auth = ChatGpt::new(store, secrets).unwrap();
+        let body=json!({"models":[{"slug":"fixture","display_name":"Fixture","visibility":"list","metadata":"x".repeat(256*1024)}]}).to_string();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let response = auth.client.get(&url).send().await.unwrap();
+        let catalog: Value = auth
+            .json_with_budget(response, 4 * 1024 * 1024, Error::ModelCatalogLimit)
+            .await
+            .unwrap();
+        assert_eq!(catalog["models"][0]["slug"], "fixture");
+        let response = auth.client.get(&url).send().await.unwrap();
+        assert!(matches!(
+            auth.bounded_json::<Value>(response).await,
+            Err(Error::Limit)
+        ));
+        server.abort();
+    }
+}
+
+#[cfg(test)]
+mod tunnel_owner_tests {
+    use super::*;
+    #[tokio::test]
+    async fn callback_without_domain_cookie_requires_live_originating_owner_session_and_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
+        let owner = super::super::owner::OwnerAuth::new(store.clone());
+        owner
+            .setup(owner.setup_token().into(), "synthetic long password".into())
+            .await
+            .unwrap();
+        let (token, _) = owner.login("synthetic long password".into()).await.unwrap();
+        let auth = ChatGpt::new(store, secrets).unwrap();
+        auth.begin(
+            super::super::owner::hash_token(&token),
+            "http://127.0.0.1:1455/auth/callback".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            auth.tunnel_callback(std::collections::BTreeMap::from([(
+                "state".into(),
+                "wrong-state".into()
+            )]))
+            .await,
+            Err(Error::Authentication)
+        );
+        owner.logout(&token).unwrap();
+        assert_eq!(
+            auth.tunnel_callback(std::collections::BTreeMap::new())
+                .await,
+            Err(Error::Unauthorized)
+        );
     }
 }
