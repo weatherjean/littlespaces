@@ -296,6 +296,9 @@ impl Agent {
                     .filter_map(|v| v["text"].as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
+                if text.trim().is_empty() {
+                    return Err(Error::ModelIncomplete);
+                }
                 self.message(conversation, json!({"role":"assistant","content":text}))
                     .await?;
                 return Ok(());
@@ -535,6 +538,7 @@ pub(crate) struct ResponseStream {
     total: usize,
     pub text: String,
     output: Option<Vec<Value>>,
+    done_items: BTreeMap<usize, Value>,
     failed: bool,
 }
 impl ResponseStream {
@@ -579,6 +583,15 @@ impl ResponseStream {
     }
     fn event(&mut self, v: Value) -> Result<()> {
         match v["type"].as_str() {
+            Some("response.output_item.done") => {
+                let index = v["output_index"].as_u64().ok_or(Error::Model)? as usize;
+                if index >= 256 || !v["item"].is_object() || self.output.is_some() {
+                    return Err(Error::Model);
+                }
+                if self.done_items.insert(index, v["item"].clone()).is_some() {
+                    return Err(Error::Model);
+                }
+            }
             Some("response.output_text.delta") => {
                 self.text.push_str(v["delta"].as_str().ok_or(Error::Model)?);
                 if self.text.len() > 128 * 1024 {
@@ -620,7 +633,21 @@ impl ResponseStream {
         if self.failed || !self.buffer.iter().all(|b| b.is_ascii_whitespace()) {
             return Err(Error::Model);
         }
-        self.output.ok_or(Error::StreamInterrupted)
+        let mut output = self.output.ok_or(Error::StreamInterrupted)?;
+        // Some completed envelopes omit their output. Keep the finalized items,
+        // including tool arguments and encrypted reasoning, until global success.
+        if output.is_empty() {
+            for (index, item) in self.done_items {
+                if index != output.len() {
+                    return Err(Error::Model);
+                }
+                output.push(item);
+            }
+        }
+        if output.is_empty() {
+            return Err(Error::ModelIncomplete);
+        }
+        Ok(output)
     }
 }
 
@@ -629,7 +656,7 @@ mod tests {
     use super::*;
     #[test]
     fn incomplete_and_failed_streams_never_dispatch_tools() {
-        let call = json!({"type":"response.output_item.done","item":{"type":"function_call","name":"authoring","call_id":"x","arguments":"{}"}});
+        let call = json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","name":"authoring","call_id":"x","arguments":"{}"}});
         let mut s = ResponseStream::default();
         s.feed(format!("data: {call}\n\n").as_bytes()).unwrap();
         assert!(s.finish().is_err());
@@ -648,6 +675,28 @@ mod tests {
             s.feed(chunk).unwrap();
         }
         assert_eq!(s.finish().unwrap()[0]["content"][0]["text"], "okay");
+    }
+    #[test]
+    fn finalized_items_survive_empty_completed_envelope() {
+        let item = json!({"id":"msg","type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello!"}]});
+        let events = [
+            json!({"type":"response.output_text.delta","delta":"Hello!"}),
+            json!({"type":"response.output_item.done","output_index":0,"item":item}),
+            json!({"type":"response.completed","response":{"status":"completed","output":[]}}),
+        ];
+        let mut stream = ResponseStream::default();
+        for event in events {
+            for chunk in format!("data: {event}\r\n\r\n").as_bytes().chunks(7) {
+                stream.feed(chunk).unwrap();
+            }
+        }
+        assert_eq!(stream.finish().unwrap(), vec![item]);
+    }
+    #[test]
+    fn deltas_alone_are_not_a_completed_reply() {
+        let mut stream = ResponseStream::default();
+        stream.feed(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n").unwrap();
+        assert_eq!(stream.finish(), Err(Error::ModelIncomplete));
     }
 }
 

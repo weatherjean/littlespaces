@@ -14,6 +14,8 @@ Verification: 29 focused Rust regressions cover validation, atomicity, competing
 
 The owner completed fresh local ChatGPT sign-in; a read-only catalog diagnostic confirmed seven available models after the catalog-budget fix. No inference request was issued by the agent during this repair and no private Codex cache was used. Real-model generation remains to be validated by user testing. The supported flow and sources are in [sign-in.md](sign-in.md). Linux AMD64/ARM64 CI is configured; those new jobs have not been observed locally. Builds and focused checks run locally on macOS with Rust 1.84.1.
 
+The owner's first real greeting exposed a stream-assembly bug: the job retained reply deltas but saved an empty assistant message. Finalized `response.output_item.done` items are now retained when the successful completion envelope omits output, following the [streaming event contract](https://developers.openai.com/api/reference/resources/responses/streaming-events). They remain unavailable for tool dispatch without whole-response completion. Deltas alone cannot establish a final answer, and empty replies fail explicitly. The browser fixture now exercises separate finalized items with empty completion output; real app generation remains unproven.
+
 Release limitations remain explicit:
 
 - Rhai cannot preempt blocking callbacks. Transport deadlines, bounded admission and cancellation/commit gates prevent late local commits, but native compilation/JSON/database work may return after the script deadline.

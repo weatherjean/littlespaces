@@ -379,6 +379,7 @@ export function ChatPanel({
                       )}
                     </Fragment>
                   );
+                if (m.role === 'assistant' && !m.content?.trim()) return null;
                 return (
                   <article key={i} class={`message ${m.role === 'user' ? 'from-user' : ''}`}>
                     <span class="message-label">{m.role === 'user' ? 'You' : 'ChatGPT'}</span>

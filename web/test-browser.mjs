@@ -131,8 +131,21 @@ const provider = http.createServer(async (req, res) => {
       }
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
+    // Exercise the direct-provider envelope: finalized items arrive separately,
+    // while the completion event has no duplicate output payload.
+    for (const [output_index, item] of output.entries()) {
+      for (const part of item.content || []) {
+        if (part.type === 'output_text')
+          res.write(
+            `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: part.text })}\n\n`,
+          );
+      }
+      res.write(
+        `data: ${JSON.stringify({ type: 'response.output_item.done', output_index, item })}\n\n`,
+      );
+    }
     res.end(
-      `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output } })}\n\n`,
+      `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [] } })}\n\n`,
     );
   } catch (error) {
     console.error(String(error));
@@ -437,6 +450,9 @@ try {
   await page.getByLabel('Message', { exact: true }).waitFor();
   const history = await api(`/api/conversations/${chat.conversation}`);
   assert.ok(history.some((m) => m.name === 'invoke_action' && m.result.ok.result.length === 1));
+  assert.ok(history.some((m) => m.role === 'assistant' && m.content === 'Listed your tasks.'));
+  await page.getByText('Listed your tasks.', { exact: true }).last().waitFor();
+  assert.equal(await page.locator('.message:not(.streaming-message) p:empty').count(), 0);
   assert.deepEqual(errors, []);
   appForVoice = app.app;
   mode = 'voice';
