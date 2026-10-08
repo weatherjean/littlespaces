@@ -57,6 +57,8 @@ Rust owns persistence, permissions, credentials, HTTP brokering, validation, and
 
 The root npm manifest currently supports both implementations. Preact/HTM are bundled into the Rust web assets; Vite, esbuild, and Tailwind build those assets. The pinned Codex executable supplies AI chat and generation. SvelteKit and the Node server libraries support the legacy application. Do not remove them until shared imports and retained legacy commands have been separated. Dependency separation is proposed in [the structure review](docs/repository-structure.md).
 
+The Rust frontend uses `web/tsconfig.json`, including when transforming shared TypeScript utilities. Its build does not require `.svelte-kit` or running the legacy framework's setup commands.
+
 Publishing must bind tested source to its revision-specific contract. HTTP requires both action declarations and owner-managed app grants, with credential origin restrictions in addition. Local commits must remain atomic and conflict-checked. External effects survive local rollback: an uncertain operation must never be blindly retried. Diagnostics and API responses are untrusted evidence.
 
 Preserve upstream notices when copying code or distributing bundles. See [third-party notices](THIRD_PARTY_NOTICES.md). Stage 2 will target a production Docker image managed with Docker Compose; integration checks should exercise that same image with a test Compose configuration. The current browser-heavy image is test tooling. Deployment implementation, backup/restore exercises, and comprehensive system testing remain separate release stages.

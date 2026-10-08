@@ -26,6 +26,7 @@ const start = () => {
 start();
 const server = await createServer({
   configFile: 'web/vite.config.mjs',
+  configLoader: 'native',
   server: {
     host: '127.0.0.1',
     port,

@@ -5,7 +5,14 @@ import { gzipSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 execFileSync(
   process.execPath,
-  ['node_modules/vite/bin/vite.js', 'build', '--config', 'web/vite.config.mjs'],
+  [
+    'node_modules/vite/bin/vite.js',
+    'build',
+    '--config',
+    'web/vite.config.mjs',
+    '--configLoader',
+    'native',
+  ],
   { stdio: 'inherit' },
 );
 await mkdir('build-rust/web', { recursive: true });
@@ -16,6 +23,7 @@ await build({
   format: 'iife',
   minify: true,
   target: 'es2022',
+  tsconfig: 'web/tsconfig.json',
 });
 // A finite authoring vocabulary, generated once per application release.
 const utilities = new Set();
