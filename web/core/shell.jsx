@@ -1,5 +1,24 @@
 import { h, render, Fragment } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
+const errors = {
+  authentication: 'Reconnect ChatGPT and confirm permission to use your plan.',
+  model: 'ChatGPT could not complete this request. Check your connection and account settings.',
+  usage_limit: 'Your ChatGPT usage limit has been reached. Check Usage in ChatGPT Settings.',
+  usage_unavailable: 'ChatGPT plan usage is unavailable for this account or workspace.',
+  model_incomplete:
+    'ChatGPT returned an incomplete response. No tools from that response were dispatched.',
+  stream_interrupted:
+    'The response stream ended before completion. No tools from that response were dispatched.',
+  browser_unavailable:
+    'Automated browser verification is unavailable. Review the isolated preview before publishing.',
+  external_uncertain:
+    'An external operation needs owner review before another live call. Inspect effect evidence before retrying.',
+  unauthorized: 'Sign in to your workspace again.',
+  untested: 'This revision still needs backend tests and frontend verification.',
+};
+function explain(error) {
+  return errors[error] || String(error);
+}
 let csrf = '';
 async function api(path, body) {
   const response = await fetch(path, {
@@ -8,7 +27,7 @@ async function api(path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await response.json();
-  if (!response.ok) throw Error(value.error || 'Request failed');
+  if (!response.ok) throw Error(explain(value.error || 'Request failed'));
   return value;
 }
 function App() {
@@ -85,7 +104,7 @@ function App() {
           if (['completed', 'failed', 'cancelled', 'interrupted'].includes(value.state)) {
             setMessages(await api(`/api/conversations/${conversation}`));
             await refresh();
-            if (value.payload.error) setError(value.payload.error);
+            if (value.payload.error) setError(explain(value.payload.error));
           }
         }),
       300,
@@ -128,7 +147,7 @@ function App() {
           input: e.data.input,
           mode: c.preview ? 'dry_run' : 'commit',
         });
-        if (value.error) throw Error(value.error);
+        if (value.error) throw Error(explain(value.error));
         result = value.result.result;
       } catch (e) {
         error = String(e.message);
@@ -208,6 +227,8 @@ function App() {
   async function newChat() {
     const value = await api('/api/conversations', { app: selected });
     setConversation(value.conversation);
+    setJob(null);
+    setJob(null);
     setView('chat');
     await refresh();
   }
@@ -270,6 +291,7 @@ function App() {
                 const value = await api('/api/apps', { title });
                 setSelected(value.app);
                 setConversation(value.conversation);
+                setJob(null);
                 setView('chat');
                 await refresh();
               });
@@ -286,6 +308,8 @@ function App() {
               <button
                 key={c.id}
                 onClick={() => {
+                  setJob(null);
+                  if (c.job) attempt(async () => setJob(await api(`/api/jobs/${c.job}`)));
                   setConversation(c.id);
                   setSelected(c.app);
                   setView('chat');
@@ -309,6 +333,7 @@ function App() {
                         attempt(async () => {
                           const value = await api(`/api/build/${selected}`, {});
                           setConversation(value.conversation);
+                          setJob(null);
                           setView('chat');
                           await refresh();
                         })
@@ -430,7 +455,7 @@ function App() {
                   <div class="message">
                     <strong>{job.state}</strong>
                     <p>{job.payload.text}</p>
-                    {job.payload.error && <p class="error">{job.payload.error}</p>}
+                    {job.payload.error && <p class="error">{explain(job.payload.error)}</p>}
                   </div>
                 )}
               </div>
@@ -510,6 +535,42 @@ function App() {
                 >
                   Continue with ChatGPT
                 </button>
+              )}
+              {detail?.externalEffects?.length > 0 && (
+                <>
+                  <h2>External operations to review</h2>
+                  <p class="muted">
+                    Inspect the remote service before deciding. A local failure does not undo an
+                    external write.
+                  </p>
+                  {detail.externalEffects.map((effect) => (
+                    <form
+                      class="stack"
+                      key={effect.id}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const decision = new FormData(e.currentTarget).get('decision');
+                        attempt(async () => {
+                          await api(`/api/effects/${selected}/${effect.id}/resolve`, { decision });
+                          await refresh();
+                        });
+                      }}
+                    >
+                      <p>
+                        {effect.action} · {effect.method} · {effect.state} · HTTP{' '}
+                        {effect.status || 'unknown'}
+                      </p>
+                      <code>{effect.id}</code>
+                      <select name="decision" required>
+                        <option value="">Record your decision</option>
+                        <option value="applied">Confirmed applied</option>
+                        <option value="not_applied">Confirmed not applied</option>
+                        <option value="accept_unknown">Accept an unknown outcome</option>
+                      </select>
+                      <button>Record owner decision</button>
+                    </form>
+                  ))}
+                </>
               )}
               <h2>Workspace secrets</h2>
               <p class="muted">

@@ -68,7 +68,7 @@ impl Agent {
             .await
     }
     pub async fn conversations(&self) -> Result<Value> {
-        self.runtime.store.blocking(|store|{let db=store.open()?;let mut q=db.prepare("SELECT c.id,c.app,c.title,EXISTS(SELECT 1 FROM authoring_sessions a WHERE a.conversation=c.id) FROM conversations c ORDER BY c.rowid DESC LIMIT 100")?;let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"app":r.get::<_,Option<String>>(1)?,"title":r.get::<_,String>(2)?,"build":r.get::<_,bool>(3)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!(rows))}).await
+        self.runtime.store.blocking(|store|{let db=store.open()?;let mut q=db.prepare("SELECT c.id,c.app,c.title,EXISTS(SELECT 1 FROM authoring_sessions a WHERE a.conversation=c.id),(SELECT id FROM jobs j WHERE j.conversation=c.id AND j.state='running' ORDER BY j.rowid DESC LIMIT 1) FROM conversations c ORDER BY c.rowid DESC LIMIT 100")?;let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"app":r.get::<_,Option<String>>(1)?,"title":r.get::<_,String>(2)?,"build":r.get::<_,bool>(3)?,"job":r.get::<_,Option<String>>(4)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!(rows))}).await
     }
     pub async fn history(&self, conversation: ConversationId) -> Result<Value> {
         self.runtime.store.blocking(move|store|{let db=store.open()?;let exists:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?)",[&conversation.0],|r|r.get(0))?;if !exists{return Err(Error::NotFound);}let mut q=db.prepare("SELECT payload FROM messages WHERE conversation=? ORDER BY rowid DESC LIMIT 120")?;let rows=q.query_map([&conversation.0],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;let values=rows.iter().rev().map(|s|serde_json::from_str(s).map_err(|_|Error::Storage)).collect::<Result<Vec<Value>>>()?;Ok(json!(values))}).await
@@ -230,6 +230,7 @@ impl Agent {
             "You are LittleSpaces, the owner's personal workspace assistant. Use app_info to inspect the app's published actions before invoking them. Do not retry ambiguous external writes. No arbitrary host tools or plaintext secrets are available. Ask the owner to open an app's build conversation for code changes."
         };
         let mut seen = BTreeSet::new();
+        let mut dispatched = 0;
         for _ in 0..32 {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -272,7 +273,14 @@ impl Agent {
                     .await?;
                 return Ok(());
             }
+            if calls.len() > 8 {
+                return Err(Error::Limit);
+            }
             for call in calls {
+                dispatched += 1;
+                if dispatched > 64 {
+                    return Err(Error::Limit);
+                }
                 let call_id = call["call_id"]
                     .as_str()
                     .filter(|s| s.len() < 256)
@@ -518,7 +526,19 @@ impl ResponseStream {
                         .clone(),
                 );
             }
-            Some("response.failed" | "response.incomplete" | "error") => {
+            Some("response.failed") => {
+                self.failed = true;
+                return Err(match v["response"]["error"]["code"].as_str() {
+                    Some("subscription_sharing_usage_limit_exceeded") => Error::UsageLimit,
+                    Some("subscription_sharing_usage_unavailable") => Error::UsageUnavailable,
+                    _ => Error::Model,
+                });
+            }
+            Some("response.incomplete") => {
+                self.failed = true;
+                return Err(Error::ModelIncomplete);
+            }
+            Some("error") => {
                 self.failed = true;
                 return Err(Error::Model);
             }
@@ -530,7 +550,7 @@ impl ResponseStream {
         if self.failed || !self.buffer.iter().all(|b| b.is_ascii_whitespace()) {
             return Err(Error::Model);
         }
-        self.output.ok_or(Error::Model)
+        self.output.ok_or(Error::StreamInterrupted)
     }
 }
 
@@ -558,5 +578,61 @@ mod tests {
             s.feed(chunk).unwrap();
         }
         assert_eq!(s.finish().unwrap()[0]["content"][0]["text"], "okay");
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[tokio::test]
+    async fn recovery_preserves_effects_and_does_not_replay_dispatched_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets =
+            super::super::secrets::Secrets::open(store.clone(), &dir.path().join("secrets.key"))
+                .unwrap();
+        let runtime = Runtime::new(store.clone(), secrets.clone(), 4).unwrap();
+        let auth = ChatGpt::new(store.clone(), secrets).unwrap();
+        let agent = Agent::new(runtime, auth, "http://127.0.0.1:5175".into());
+        let conversation = agent.create_conversation(None).await.unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO jobs VALUES('interrupted',NULL,?,'running','{}')",
+                [&conversation.0],
+            )
+            .unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_calls VALUES('interrupted','unique','dispatching','{}')",
+                [],
+            )
+            .unwrap();
+        agent.recover().await.unwrap();
+        assert_eq!(
+            agent.job("interrupted".into()).await.unwrap()["state"],
+            "interrupted"
+        );
+        let state: String = store
+            .open()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM agent_calls WHERE job='interrupted'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "interrupted");
+        assert!(store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_calls VALUES('interrupted','unique','dispatching','{}')",
+                []
+            )
+            .is_err());
     }
 }

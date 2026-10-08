@@ -154,6 +154,10 @@ pub enum Error {
     Model,
     Authentication,
     BrowserUnavailable,
+    UsageLimit,
+    UsageUnavailable,
+    ModelIncomplete,
+    StreamInterrupted,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl fmt::Display for Error {

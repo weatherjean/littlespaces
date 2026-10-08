@@ -11,7 +11,7 @@ async fn main() {
 }
 async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let command=args.next().ok_or("Usage: little-spaces <init|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence|effect-resolve> <workspace-directory> ...")?;
+    let command=args.next().ok_or("Usage: little-spaces <init|serve|owner-reset|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence|effect-resolve> <workspace-directory> ...")?;
     let directory = args.next().ok_or("Provide a workspace directory")?;
     let directory = Path::new(&directory);
     if command == "init" {

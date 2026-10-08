@@ -102,3 +102,81 @@ pub async fn run(runtime: Runtime) {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::secrets::Secrets;
+    use super::*;
+    #[tokio::test]
+    async fn scheduled_calls_commit_once_and_stale_revisions_disable_schedule() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
+        let runtime = Runtime::new(store.clone(), secrets, 4).unwrap();
+        let app = store.create_app("Scheduled").unwrap();
+        let code = AppCode {
+            backend: "fn run(input) { db_set(\"scheduled\",1); 1 }".into(),
+            frontend: "".into(),
+            actions: vec![ActionContract {
+                name: "run".into(),
+                read_only: false,
+                input: json!({"type":"object"}),
+                output: json!({"type":"integer"}),
+            }],
+            tests: vec![TestCase {
+                http: Default::default(),
+                action: "run".into(),
+                input: json!({}),
+                expected: json!(1),
+            }],
+            frontend_tests: vec![],
+        };
+        let draft = store.create_draft(&app, code).unwrap();
+        let rev = store.freeze_draft(&draft.id, 1).unwrap();
+        runtime
+            .test_revision(
+                app.clone(),
+                rev.id.clone(),
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        store.publish(&app, &rev.id, None).unwrap();
+        let schedule = create(
+            &store,
+            json!({"app":app,"revision":rev.id,"action":"run","input":{},"expression":"* * * * *"}),
+        )
+        .await
+        .unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute("UPDATE schedules SET next_run=?", [now() - 1])
+            .unwrap();
+        tick(&runtime).await.unwrap();
+        assert_eq!(store.snapshot(&app).unwrap().records["scheduled"], json!(1));
+        let version = store.snapshot(&app).unwrap().version;
+        tick(&runtime).await.unwrap();
+        assert_eq!(store.snapshot(&app).unwrap().version, version);
+        let next = store.freeze_draft(&draft.id, 1).unwrap();
+        runtime
+            .test_revision(
+                app.clone(),
+                next.id.clone(),
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        store.publish(&app, &next.id, Some(&rev.id)).unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute("UPDATE schedules SET next_run=?", [now() - 1])
+            .unwrap();
+        tick(&runtime).await.unwrap();
+        assert_eq!(list(&store).await.unwrap()[0]["enabled"], false);
+        assert!(schedule["id"].is_string());
+    }
+}

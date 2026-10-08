@@ -318,7 +318,7 @@ async fn app_detail(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api
                     .as_ref()
                     .map(|id| store.revision(&app, id))
                     .transpose()?;
-                Ok(json!({"app":app,"revision":revision,"records":snapshot.records}))
+                Ok(json!({"app":app,"revision":revision,"records":snapshot.records,"externalEffects":store.app_effects(&app)?}))
             })
             .await?,
     ))

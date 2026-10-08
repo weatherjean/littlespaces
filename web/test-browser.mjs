@@ -24,6 +24,7 @@ const provider = http.createServer(async (req, res) => {
     assert.equal(request.store, false);
     assert.equal(request.stream, true);
     assert.equal(request.model, 'fixture');
+    if (turn === 0) await new Promise((resolve) => setTimeout(resolve, 3000));
     let output;
     const previous = request.input.filter((v) => v.type === 'function_call_output').at(-1);
     const report = previous ? JSON.parse(previous.output) : null;
@@ -177,6 +178,13 @@ try {
       message: mode === 'chat' ? 'List my tasks' : 'Create and test the task app',
       model: 'fixture',
     });
+    if (conversation === app.conversation && mode === 'build') {
+      const live = await context.newPage();
+      await live.goto(origin);
+      await live.getByRole('button', { name: 'Build: Task app', exact: true }).click();
+      await live.locator('.message strong').filter({ hasText: 'running' }).first().waitFor();
+      await live.close();
+    }
     for (let n = 0; n < 250; n++) {
       await new Promise((r) => setTimeout(r, 100));
       const status = await api(`/api/jobs/${job}`);

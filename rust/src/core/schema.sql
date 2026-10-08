@@ -1,5 +1,5 @@
 PRAGMA application_id = 1280528978;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 CREATE TABLE apps(id TEXT PRIMARY KEY, title TEXT NOT NULL, published_revision TEXT,
     record_version INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(id,published_revision) REFERENCES revisions(app,id));

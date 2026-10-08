@@ -24,7 +24,7 @@ impl Store {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let marker: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if marker != 1280528978 || version != 3 {
+            if marker != 1280528978 || version != 4 {
                 return Err(Error::Storage);
             }
         } else {
@@ -568,5 +568,14 @@ impl Store {
             rows.map(|r| serde_json::from_str(&r?).map_err(|_| Error::Storage))
                 .collect::<Result<Vec<_>>>()?,
         ))
+    }
+}
+
+impl Store {
+    pub fn app_effects(&self, app: &AppId) -> Result<Value> {
+        let db = self.open()?;
+        let mut q=db.prepare("SELECT e.id,e.invocation,i.revision,i.action,e.method,e.state,e.status FROM external_operations e JOIN invocations i ON i.id=e.invocation WHERE i.app=? AND (e.state='uncertain' OR COALESCE(e.status,0)>=300 OR i.state!='completed') AND NOT EXISTS(SELECT 1 FROM external_resolutions r WHERE r.operation=e.id) ORDER BY e.rowid DESC LIMIT 50")?;
+        let rows=q.query_map([&app.0],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"invocation":r.get::<_,String>(1)?,"revision":r.get::<_,String>(2)?,"action":r.get::<_,String>(3)?,"method":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"status":r.get::<_,Option<u16>>(6)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        Ok(Value::Array(rows))
     }
 }
