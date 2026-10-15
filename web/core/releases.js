@@ -63,5 +63,17 @@ export function releaseActions({
       setReleaseBusy(false);
     }
   }
-  return { showVersions, prepareRevert, applyRelease };
+  async function discardRelease(plan) {
+    if (releaseBusy) return;
+    setReleaseBusy(true);
+    try {
+      await api(`/api/apps/${selected}/release-plans/${plan.id}/discard`, {});
+      setReleasePlans(await api(`/api/apps/${selected}/release-plans`));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setReleaseBusy(false);
+    }
+  }
+  return { showVersions, prepareRevert, applyRelease, discardRelease };
 }

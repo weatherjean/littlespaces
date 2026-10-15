@@ -21,3 +21,10 @@ build-rust/
 .data-*/
 .DS_Store
 **/testing.key
+
+# Local deployment credentials (only the example is public).
+deploy/production.env
+
+# Python verification caches
+__pycache__/
+*.py[cod]

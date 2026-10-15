@@ -124,6 +124,9 @@ impl Agent {
         images: Vec<String>,
         effort: Option<String>,
     ) -> Result<String> {
+        if self.runtime.operations.stopping() {
+            return Err(Error::Saturated);
+        }
         // Once accepted, admission/checkpoint/launch outlive the HTTP request.
         let agent = self.clone();
         tokio::spawn(async move {
@@ -254,6 +257,9 @@ impl Agent {
     async fn launch(&self, job: String) -> Result<()> {
         let cancel = Cancellation::default();
         let mut active = self.active.lock().await;
+        if self.runtime.operations.stopping() {
+            return Ok(());
+        }
         if active.contains_key(&job) {
             return Err(Error::Conflict);
         }
@@ -306,11 +312,16 @@ impl Agent {
             } else {
                 Err(Error::Cancelled)
             };
-            let error = result.err();
+            let error = match result.err() {
+                Some(Error::Cancelled) if agent.runtime.operations.stopping() => {
+                    Some(Error::Interrupted)
+                }
+                other => other,
+            };
             let state = match error {
                 None => "completed",
                 Some(Error::Cancelled) => "cancelled",
-                Some(Error::RecoveryRequired) => "interrupted",
+                Some(Error::RecoveryRequired | Error::Interrupted) => "interrupted",
                 _ => "failed",
             };
             agent.finish_job(&job, state, error).await;
@@ -339,6 +350,9 @@ impl Agent {
         }
     }
     pub async fn resume(&self, job: String) -> Result<Value> {
+        if self.runtime.operations.stopping() {
+            return Err(Error::Saturated);
+        }
         let agent = self.clone();
         tokio::spawn(async move { agent.resume_durable(job).await })
             .await
@@ -372,6 +386,9 @@ impl Agent {
                 && db.query_row("SELECT EXISTS(SELECT 1 FROM agent_checkpoints WHERE job=?) AND NOT EXISTS(SELECT 1 FROM agent_calls WHERE job=? AND state!='completed') AND NOT EXISTS(SELECT 1 FROM jobs newer WHERE newer.conversation=(SELECT conversation FROM jobs WHERE id=?) AND json_extract(newer.payload,'$.model') IS NOT NULL AND newer.rowid>(SELECT rowid FROM jobs WHERE id=?))", params![id,id,id,id], |r| r.get::<_,bool>(0))?;
             Ok(json!({"id":id,"state":state,"payload":payload,"canResume":can_resume}))
         }).await
+    }
+    pub(crate) async fn idle(&self) -> bool {
+        self.active.lock().await.is_empty()
     }
     pub async fn cancel_all(&self) {
         for cancel in self.active.lock().await.values() {

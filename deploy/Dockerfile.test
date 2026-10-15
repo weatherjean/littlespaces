@@ -1,5 +1,5 @@
 # Source-only Linux regression image. Build with scripts/linux-check.py.
-FROM rust:1.84.1-bookworm
+FROM rust:1.88.0-bookworm
 WORKDIR /app
 COPY rust rust
 COPY docs/rhai docs/rhai

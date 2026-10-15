@@ -1,4 +1,4 @@
-//! Optional development browser harness. It is not part of the application runtime.
+//! Optional separately supervised browser verifier.
 use super::{owner::now, store::Records, *};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -9,6 +9,22 @@ pub struct BrowserConfig {
     pub token: Arc<zeroize::Zeroizing<String>>,
 }
 impl BrowserConfig {
+    pub async fn healthy(&self) -> bool {
+        let Ok(client) = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+        else {
+            return false;
+        };
+        client
+            .get(format!("{}/health", self.endpoint.trim_end_matches('/')))
+            .bearer_auth(self.token.as_str())
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+    }
     pub fn from_environment(origin: String) -> Result<Option<Self>> {
         let Ok(endpoint) = std::env::var("LITTLESPACES_BROWSER_HARNESS") else {
             return Ok(None);

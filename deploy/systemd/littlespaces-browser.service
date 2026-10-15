@@ -1,0 +1,36 @@
+[Unit]
+Description=LittleSpaces isolated browser verifier
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=littlespaces-browser
+Group=littlespaces-browser
+StateDirectory=littlespaces-browser
+StateDirectoryMode=0700
+UMask=0077
+EnvironmentFile=/etc/littlespaces/production.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/littlespaces/current/browsers
+Environment=LITTLESPACES_BROWSER_ARTIFACTS=/var/lib/littlespaces-browser/screenshots
+Environment=LITTLESPACES_BROWSER_SANDBOX=1
+ExecStart=/usr/bin/node /opt/littlespaces/current/web/browser-harness.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryMax=1G
+TasksMax=256
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

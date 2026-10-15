@@ -22,7 +22,7 @@ fn validate(policy: &Retention) -> Result<()> {
     }
     Ok(())
 }
-const OLD_RELEASES:&str="SELECT r.id FROM app_releases r WHERE (SELECT COUNT(*) FROM app_releases newer WHERE newer.app=r.app AND newer.rowid>r.rowid)>=? AND NOT EXISTS(SELECT 1 FROM release_plans p WHERE p.applied_release IS NULL AND (p.app=r.app OR json_extract(p.report,'$.source')=r.id))";
+const OLD_RELEASES:&str="SELECT r.id FROM app_releases r WHERE (SELECT COUNT(*) FROM app_releases newer WHERE newer.app=r.app AND newer.rowid>r.rowid)>=? AND NOT EXISTS(SELECT 1 FROM release_plans p WHERE p.applied_release IS NULL AND p.app=r.app AND json_extract(p.report,'$.source.release')=r.id)";
 fn candidates(db: &rusqlite::Connection, policy: &Retention) -> Result<Vec<String>> {
     let mut q = db.prepare(OLD_RELEASES)?;
     let rows = q
@@ -102,7 +102,7 @@ pub fn backup(store: &Store, destination: &std::path::Path, key: &std::path::Pat
 mod tests {
     use super::*;
     #[test]
-    fn retention_preserves_recent_releases_and_pending_plans() {
+    fn retention_preserves_only_referenced_snapshots_and_recent_releases() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::create(&dir.path().join("db")).unwrap();
         let db = store.open().unwrap();
@@ -120,16 +120,16 @@ mod tests {
             )
             .unwrap();
         }
-        db.execute("INSERT INTO release_plans VALUES('pending','app',NULL,'revision',NULL,0,NULL,NULL,'{}',x'','{}',0,NULL,0)",[]).unwrap();
+        db.execute("INSERT INTO release_plans VALUES('pending','app',NULL,'revision',NULL,0,NULL,NULL,'{}',x'','{\"source\":{\"release\":\"r0\"}}',0,NULL,0)",[]).unwrap();
         let policy = Retention {
             keep_releases: 2,
             orphan_days: 30,
         };
-        assert_eq!(status(&store, &policy).unwrap()["releasesEligible"], 0);
-        assert_eq!(cleanup(&store, &policy).unwrap()["releases"], 0);
+        assert_eq!(status(&store, &policy).unwrap()["releasesEligible"], 2);
+        assert_eq!(cleanup(&store, &policy).unwrap()["releases"], 2);
         db.execute("DELETE FROM release_plans WHERE id='pending'", [])
             .unwrap();
-        assert_eq!(cleanup(&store, &policy).unwrap()["releases"], 3);
+        assert_eq!(cleanup(&store, &policy).unwrap()["releases"], 1);
         let mut q = db
             .prepare("SELECT id FROM app_releases ORDER BY rowid")
             .unwrap();
@@ -139,6 +139,47 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(remaining, vec!["r3", "r4"]);
+    }
+    #[test]
+    fn stale_plan_does_not_deadlock_publication_at_release_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db")).unwrap();
+        let mut db = store.open().unwrap();
+        db.execute(
+            "INSERT INTO apps(id,title,record_version) VALUES('a','App',99)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO revisions VALUES('v','a','digest','{}')", [])
+            .unwrap();
+        for n in 0..64 {
+            db.execute(
+                "INSERT INTO app_releases VALUES(?,'a','v',NULL,'{}',x'','{}',x'','{}',?)",
+                params![format!("r{n}"), n],
+            )
+            .unwrap();
+        }
+        db.execute("INSERT INTO release_plans VALUES('stale','a',NULL,'v',NULL,0,NULL,NULL,'{}',x'','{}',0,NULL,0)",[]).unwrap();
+        assert_eq!(
+            cleanup(&store, &Retention::default()).unwrap()["releases"],
+            44
+        );
+        let tx = db.transaction().unwrap();
+        Store::record_release(
+            &tx,
+            &AppId("a".into()),
+            &RevisionId("v".into()),
+            None,
+            &json!({}),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert!(store
+            .discard_release_plan(&AppId("wrong".into()), "stale")
+            .is_err());
+        store
+            .discard_release_plan(&AppId("a".into()), "stale")
+            .unwrap();
     }
     #[test]
     fn cleanup_keeps_live_images_messages_and_recoverable_checkpoints() {

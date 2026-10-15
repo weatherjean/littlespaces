@@ -9,7 +9,7 @@ use super::{
 };
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -18,6 +18,7 @@ use axum::{
 };
 
 use serde_json::{json, Value};
+use std::future::IntoFuture;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -47,6 +48,7 @@ impl IntoResponse for ApiError {
         }
         let code = match self.0 {
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
+            Error::RateLimited | Error::LoginThrottled => StatusCode::TOO_MANY_REQUESTS,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::Saturated => StatusCode::SERVICE_UNAVAILABLE,
             Error::Conflict | Error::Untested | Error::ExternalUncertain => StatusCode::CONFLICT,
@@ -123,6 +125,9 @@ async fn security_headers(
     if !server.host.accepts(host, request.uri().path()) {
         return ApiError(Error::Unauthorized).into_response();
     }
+    if server.runtime.operations.stopping() && !request.uri().path().starts_with("/health/") {
+        return ApiError(Error::Saturated).into_response();
+    }
     let mut response = next.run(request).await;
     let h = response.headers_mut();
     h.insert(
@@ -136,6 +141,7 @@ async fn security_headers(
 }
 pub fn router(server: Arc<Server>) -> Router {
     let private = Router::new()
+        .route("/api/operations", get(operations_status))
         .route("/api/storage", get(storage_status))
         .route("/api/storage/cleanup", post(storage_cleanup))
         .route("/api/notifications", get(notice_list).post(notice_read))
@@ -183,6 +189,10 @@ pub fn router(server: Arc<Server>) -> Router {
             "/api/apps/:id/release-plans/:plan/apply",
             post(apply_app_release),
         )
+        .route(
+            "/api/apps/:id/release-plans/:plan/discard",
+            post(discard_app_release),
+        )
         .route("/api/secrets", get(secret_names).post(secret_put))
         .route("/api/secrets/:name/delete", post(secret_delete))
         .route("/api/chatgpt", get(chatgpt_status))
@@ -201,6 +211,8 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/preview/:app/:revision", get(preview))
         .route_layer(middleware::from_fn_with_state(server.clone(), authenticate));
     Router::new()
+        .route("/health/live", get(|| async { StatusCode::OK }))
+        .route("/health/ready", get(readiness))
         .route("/", get(index))
         .route("/settings", get(index))
         .route("/chat", get(index))
@@ -281,11 +293,18 @@ async fn setup(State(s): State<Arc<Server>>, h: HeaderMap, Json(v): Json<Value>)
 }
 async fn login(
     State(s): State<Arc<Server>>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     h: HeaderMap,
     Json(v): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
     check_origin(&s, &h)?;
-    let (token, session) = s.owner.login(text(&v, "password")?).await?;
+    let (token, session) = s
+        .owner
+        .login_from(
+            text(&v, "password")?,
+            login_source(peer, &h, s.host.trust_proxy)?,
+        )
+        .await?;
     let mut response = Json(json!({"authenticated":true,"csrf":session.csrf})).into_response();
     response.headers_mut().insert(
         "set-cookie",
@@ -700,7 +719,12 @@ pub async fn serve(
         .unwrap_or_else(|_| format!("http://127.0.0.1:{port}"));
     let callback = std::env::var("LITTLESPACES_OAUTH_CALLBACK")
         .unwrap_or_else(|_| format!("http://127.0.0.1:{port}/auth/callback"));
-    let host = super::host::Host::new(origin, callback)?;
+    let mut host = super::host::Host::new(origin, callback)?;
+    host.trust_proxy = match std::env::var("LITTLESPACES_TRUST_PROXY").as_deref() {
+        Ok("1") => true,
+        Ok("0") | Err(_) => false,
+        _ => return Err("LITTLESPACES_TRUST_PROXY must be 0 or 1".into()),
+    };
     let origin = host.origin.clone();
     runtime.browser = super::browser::BrowserConfig::from_environment(origin.clone())?;
     let agent = Agent::new(runtime.clone(), chatgpt.clone(), origin.clone());
@@ -721,7 +745,11 @@ pub async fn serve(
         host,
     });
     notifications::initialize_jobs(&store)?;
-    let push_worker = tokio::spawn(notifications::run(store, server.secrets.clone()));
+    let push_worker = tokio::spawn(notifications::run(
+        store,
+        server.secrets.clone(),
+        server.runtime.operations.clone(),
+    ));
     let scheduler = tokio::spawn(super::schedules::run(runtime));
     let routes = router(server.clone());
     #[cfg(debug_assertions)]
@@ -733,14 +761,45 @@ pub async fn serve(
             server.chatgpt.clone(),
         )?));
     }
-    let result = axum::serve(listener, routes)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await;
+    let stopping = server.runtime.operations.clone();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let http = axum::serve(
+        listener,
+        routes.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = stop_rx.await;
+    })
+    .into_future();
+    tokio::pin!(http);
+    tokio::select! {
+        result = &mut http => { result?; },
+        result = shutdown_signal() => {
+            result?;
+            stopping.stop();
+            let _ = stop_tx.send(());
+            // Existing requests/actions and background dispatches may finish before cancellation.
+            let drain = async {
+                let _ = (&mut http).await;
+                while !server.agent.idle().await || !server.runtime.idle() || !scheduler.is_finished() || !push_worker.is_finished() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            };
+            if tokio::time::timeout(std::time::Duration::from_secs(25), drain).await.is_err() {
+                server.agent.cancel_all().await;
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while !server.agent.idle().await { tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
+                }).await;
+                // Exit while the workspace lock is still held. Detached blocking tasks must
+                // never outlive lock ownership and overlap a restarted server's writes.
+                super::telemetry::error("shutdown.deadline", Error::Deadline);
+                std::process::exit(0);
+            }
+        }
+    }
+    stopping.stop();
     scheduler.abort();
     push_worker.abort();
-    result?;
     Ok(())
 }
 
@@ -1124,4 +1183,113 @@ async fn storage_cleanup(
             .blocking(move |store| maintenance::cleanup(&store, &policy))
             .await?,
     ))
+}
+
+async fn discard_app_release(
+    State(s): State<Arc<Server>>,
+    Path((app, plan)): Path<(String, String)>,
+) -> Api<Value> {
+    s.runtime
+        .store
+        .blocking(move |store| store.discard_release_plan(&AppId(app), &plan))
+        .await?;
+    Ok(Json(json!({"discarded":true})))
+}
+
+fn login_source(
+    peer: std::net::SocketAddr,
+    headers: &HeaderMap,
+    trust_proxy: bool,
+) -> Result<String> {
+    let ip = if trust_proxy {
+        if !peer.ip().is_loopback() {
+            return Err(Error::Unauthorized);
+        }
+        headers
+            .get("x-real-ip")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+            .ok_or(Error::Unauthorized)?
+    } else {
+        peer.ip()
+    };
+    // Group IPv6 privacy addresses by /64 so rotating addresses cannot bypass the window.
+    Ok(match ip {
+        std::net::IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(ip) => ip.to_string(),
+            None => {
+                let s = ip.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+        _ => ip.to_string(),
+    })
+}
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! { result=tokio::signal::ctrl_c()=>result, _=terminate.recv()=>Ok(()) }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
+}
+async fn readiness(State(s): State<Arc<Server>>) -> StatusCode {
+    if !s.runtime.operations.healthy() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    if let Some(browser) = &s.runtime.browser {
+        if !browser.healthy().await {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+    }
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        s.runtime
+            .store
+            .blocking(|store| operations::storage_health(&store)),
+    )
+    .await
+    {
+        Ok(Ok(value)) if value["storageHealthy"] == true => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+async fn operations_status(State(s): State<Arc<Server>>) -> Api<Value> {
+    let storage = s
+        .runtime
+        .store
+        .blocking(|store| operations::storage_health(&store))
+        .await?;
+    let browser_healthy = match &s.runtime.browser {
+        Some(browser) => Some(browser.healthy().await),
+        None => None,
+    };
+    Ok(Json(
+        json!({"process":s.runtime.operations.status(),"storage":storage,
+        "actionSlotsAvailable":s.runtime.available_actions(),"sqlSlotsAvailable":worker::sql_available(),
+        "browserVerifierConfigured":s.runtime.browser.is_some(),"browserVerifierHealthy":browser_healthy}),
+    ))
+}
+
+#[cfg(test)]
+mod ingress_tests {
+    use super::*;
+    #[test]
+    fn source_headers_require_explicit_trusted_loopback_proxy() {
+        let mut h = HeaderMap::new();
+        h.insert("x-real-ip", HeaderValue::from_static("203.0.113.7"));
+        let local = "127.0.0.1:42".parse().unwrap();
+        assert_eq!(login_source(local, &h, false).unwrap(), "127.0.0.1");
+        assert_eq!(login_source(local, &h, true).unwrap(), "203.0.113.7");
+        assert!(login_source("192.0.2.1:42".parse().unwrap(), &h, true).is_err());
+        h.insert(
+            "x-real-ip",
+            HeaderValue::from_static("203.0.113.7, 1.2.3.4"),
+        );
+        assert!(login_source(local, &h, true).is_err());
+    }
 }

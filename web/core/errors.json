@@ -25,6 +25,7 @@
   "model_incomplete": "ChatGPT did not finish its response. No tools from that response were run. Saved progress is kept.",
   "model_timeout": "ChatGPT stopped sending data for too long. Saved progress is kept; continue from the last checkpoint.",
   "stream_interrupted": "The connection to ChatGPT ended before its reply finished. Saved work is kept; no tools from the unfinished response were run.",
+  "login_throttled": "Too many sign-in attempts from this connection. Wait five minutes before trying again.",
   "rate_limited": "ChatGPT is temporarily limiting requests. Wait a little, then continue the saved job.",
   "provider_unavailable": "ChatGPT is temporarily unavailable. Your progress is saved; continue when the service returns.",
   "provider_access": "Your account or workspace does not permit this request. Check ChatGPT access in Settings.",

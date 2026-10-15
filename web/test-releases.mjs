@@ -97,6 +97,24 @@ export async function testReleases({ api, context, origin, workspace, snapshots 
     done: false,
   });
   assert.equal((await api(`/api/apps/${created.app}/releases`)).length, 3);
+  // Discard a prepared plan through the UI; published data and history must stay intact.
+  const pending = await api(`/api/apps/${created.app}/release-plans`, {
+    revision: first.published,
+  });
+  await page.getByRole('button', { name: 'More app options' }).click();
+  await page.getByRole('button', { name: 'Versions & tests', exact: true }).click();
+  await page.getByRole('button', { name: 'Discard release plan', exact: true }).last().click();
+  await page
+    .getByRole('button', { name: 'Discard release plan', exact: true })
+    .waitFor({ state: 'hidden' });
+  assert.ok(
+    !(await api(`/api/apps/${created.app}/release-plans`)).some((p) => p.id === pending.plan),
+  );
+  assert.equal((await api(`/api/apps/${created.app}/releases`)).length, 3);
+  assert.equal(
+    (await api(`/api/apps/${created.app}/data/query`, {})).records.keep.title,
+    'Original',
+  );
   await page.close();
   const key = (await readFile(path.join(workspace, 'testing.key'), 'utf8')).trim();
   const denied = await context.request.post(`${origin}/api/test-runs`, {

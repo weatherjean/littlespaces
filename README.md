@@ -8,7 +8,7 @@ This clean rewrite has no users and is not released. It has no runtime Node, Cod
 
 ## Build and run
 
-Node is needed only to build the frontend. Rust 1.84+, Node 24+, and OpenSSL development libraries for Web Push encryption (Linux: `pkg-config libssl-dev`; macOS: `brew install openssl@3`):
+Node is needed only to build the frontend. Rust 1.88+, Node 24+, and OpenSSL development libraries for Web Push encryption (Linux: `pkg-config libssl-dev`; macOS: `brew install openssl@3`):
 
 ```sh
 npm ci --prefix web
@@ -30,7 +30,7 @@ The [production readiness review](docs/production-readiness.md) records the curr
 
 [Contributing](CONTRIBUTING.md), [Rhai/Preact SDK](docs/rhai/sdk.md), [implementation status and release limits](docs/rhai/status.md), [agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md).
 
-Routine checks run in GitHub Actions on Linux AMD64 and ARM64. Local focused checks and the development browser workflow are documented in Contributing. Production Docker/Compose and comprehensive system testing remain later stages. Actions run in disposable workers with a 128 MiB Rust heap budget, a separate 64 MiB SQLite heap budget, deadline termination, and a 512 MiB address-space ceiling on Linux. Target deployment, device behavior, and external-service recovery still require qualification before release.
+Routine checks run in GitHub Actions on Linux AMD64 and ARM64. Local focused checks and the development browser workflow are documented in Contributing. A [Traefik/systemd deployment definition](deploy/README.md) covers HTTPS, the browser verifier, health checks and backup/rollback procedures. Target-host qualification remains required. Actions run in disposable workers with a 128 MiB Rust heap budget, a separate 64 MiB SQLite heap budget, deadline termination, and a 512 MiB address-space ceiling on Linux. Target deployment, device behavior, and external-service recovery still require qualification before release.
 
 Voice mode is restored: tap Let’s talk, dictate your request, optionally hear replies, and confirm app write suggestions before they execute. Let’s talk is voice-only; use Chat for text input. The preferred shell appearance follows `experiment/liquid-glass@331326b`, including its gradient background and translucent surfaces.
 

@@ -488,7 +488,7 @@ function App() {
       api('/api/owner-preview-close', { ticket: previewTicket }).catch(() => {});
     };
   }, [preview, previewTicket]);
-  const { showVersions, prepareRevert, applyRelease } = releaseActions({
+  const { showVersions, prepareRevert, applyRelease, discardRelease } = releaseActions({
     api,
     selected,
     releaseBusy,
@@ -1118,14 +1118,27 @@ function App() {
             tested before applying.
           </p>
           {releasePlans
-            .filter((p) => p.current && !p.appliedRelease)
+            .filter((p) => !p.appliedRelease)
             .map((p) => (
-              <button
-                class="secondary-button"
-                onClick={() => setReleaseReview({ ...p, app: selected })}
-              >
-                Review pending data changes
-              </button>
+              <article class="version-entry" key={p.id}>
+                {p.current ? (
+                  <button
+                    class="secondary-button"
+                    onClick={() => setReleaseReview({ ...p, app: selected })}
+                  >
+                    Review pending data changes
+                  </button>
+                ) : (
+                  <p>This release plan is out of date.</p>
+                )}
+                <button
+                  class="secondary-button"
+                  disabled={releaseBusy}
+                  onClick={() => discardRelease(p)}
+                >
+                  Discard release plan
+                </button>
+              </article>
             ))}
           {releases.map((r, i) => (
             <article class="version-entry" key={r.id}>

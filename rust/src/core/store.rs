@@ -69,6 +69,25 @@ impl Store {
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(db)
     }
+    #[allow(clippy::unnecessary_cast)] // libc counter widths differ across supported Unix targets.
+    pub(crate) fn available_disk_bytes(&self) -> Result<u64> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let path = std::ffi::CString::new(self.path.as_os_str().as_bytes())
+                .map_err(|_| Error::Storage)?;
+            let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+                return Err(Error::Storage);
+            }
+            let stats = unsafe { stats.assume_init() };
+            Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(Error::Storage)
+        }
+    }
     pub fn archive_app(&self, app: &AppId, archived: bool) -> Result<()> {
         let db = self.open()?;
         if !db.query_row(

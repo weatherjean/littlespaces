@@ -145,7 +145,7 @@ async fn create(
     let registry = Arc::downgrade(&s);
     let run_id = id.clone();
     tokio::spawn(async move {
-        let _=axum::serve(listener,routes).with_graceful_shutdown(async move {
+        let _=axum::serve(listener,routes.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
             tokio::select! { _=receiver=>{}, _=tokio::time::sleep(std::time::Duration::from_secs(6*3600))=>{} }
             worker.cancel_all().await;
         }).await;

@@ -13,6 +13,7 @@ pub struct OwnerAuth {
     store: Store,
     setup: Arc<zeroize::Zeroizing<String>>,
     gate: Arc<tokio::sync::Semaphore>,
+    attempts: Arc<std::sync::Mutex<std::collections::BTreeMap<String, (u32, i64)>>>,
 }
 #[derive(Clone, serde::Serialize)]
 pub struct Session {
@@ -36,6 +37,7 @@ impl OwnerAuth {
             store,
             setup: Arc::new(zeroize::Zeroizing::new(token())),
             gate: Arc::new(tokio::sync::Semaphore::new(1)),
+            attempts: Default::default(),
         }
     }
     pub fn setup_token(&self) -> &str {
@@ -54,7 +56,12 @@ impl OwnerAuth {
         self.set_password(password, false).await
     }
     pub async fn reset(&self, password: String) -> Result<()> {
-        self.set_password(password, true).await
+        self.set_password(password, true).await?;
+        self.attempts
+            .lock()
+            .map_err(|_| Error::Authentication)?
+            .clear();
+        Ok(())
     }
     async fn set_password(&self, password: String, reset: bool) -> Result<()> {
         if password.chars().count() < 15 || password.len() > 1024 {
@@ -77,6 +84,9 @@ impl OwnerAuth {
         }).await.map_err(|_|Error::Authentication)?
     }
     pub async fn login(&self, password: String) -> Result<(String, Session)> {
+        self.login_from(password, "local".into()).await
+    }
+    pub async fn login_from(&self, password: String, source: String) -> Result<(String, Session)> {
         if password.len() > 1024 {
             return Err(Error::Unauthorized);
         }
@@ -85,16 +95,27 @@ impl OwnerAuth {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Saturated)?;
+        // Reserve before hashing. Per-source windows are bounded and cannot lock other sources out.
+        {
+            let mut attempts = self.attempts.lock().map_err(|_| Error::Authentication)?;
+            attempts.retain(|_, (_, expires)| *expires > now());
+            if !attempts.contains_key(&source) && attempts.len() >= 4096 {
+                return Err(Error::Saturated);
+            }
+            let entry = attempts.entry(source.clone()).or_insert((0, now() + 300));
+            if entry.0 >= 3 {
+                return Err(Error::LoginThrottled);
+            }
+            entry.0 += 1;
+        }
         let store = self.store.clone();
+        let attempts = self.attempts.clone();
         tokio::task::spawn_blocking(move || {
             let _permit=permit; let password=zeroize::Zeroizing::new(password); let db=store.open()?;
-            let (encoded,failures,locked):(String,i64,i64)=db.query_row("SELECT password_hash,failures,locked_until FROM owner_auth WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?.ok_or(Error::Unauthorized)?;
-            if locked>now() { return Err(Error::Unauthorized); }
+            let encoded:String=db.query_row("SELECT password_hash FROM owner_auth WHERE id=1",[],|r|r.get(0)).optional()?.ok_or(Error::Unauthorized)?;
             let valid=PasswordHash::new(&encoded).ok().is_some_and(|hash|Scrypt.verify_password(password.as_bytes(),&hash).is_ok());
-            if !valid {
-                let count=if locked>0 {1} else {failures+1}; db.execute("UPDATE owner_auth SET failures=?,locked_until=? WHERE id=1",params![count,if count>=3 {now()+300} else {0}])?; return Err(Error::Unauthorized);
-            }
-            db.execute("UPDATE owner_auth SET failures=0,locked_until=0 WHERE id=1",[])?;
+            if !valid { return Err(Error::Unauthorized); }
+            attempts.lock().map_err(|_| Error::Authentication)?.remove(&source);
             db.execute("DELETE FROM owner_sessions WHERE expires_at<=?",[now()])?;
             db.execute("DELETE FROM owner_sessions WHERE id IN (SELECT id FROM owner_sessions ORDER BY expires_at DESC LIMIT -1 OFFSET 49)",[])?;
             let session=token(); let csrf=token(); db.execute("INSERT INTO owner_sessions VALUES(?,?,?)",params![hash_token(&session),now()+86400,csrf])?;
@@ -158,8 +179,12 @@ mod tests {
         }
         assert!(matches!(
             owner.login("long synthetic password".into()).await,
-            Err(Error::Unauthorized)
+            Err(Error::LoginThrottled)
         ));
+        assert!(owner
+            .login_from("long synthetic password".into(), "other-source".into())
+            .await
+            .is_ok());
         owner
             .reset("replacement synthetic password".into())
             .await

@@ -3,7 +3,7 @@ name = "little-spaces"
 version = "0.1.0"
 license = "MIT"
 edition = "2021"
-rust-version = "1.84"
+rust-version = "1.88"
 
 [features]
 development-fixtures = []
@@ -21,7 +21,7 @@ jsonwebtoken = "=9.3.1"
 libc = "0.2"
 scrypt = "0.11"
 subtle = "2"
-time = "=0.3.36"
+time = "=0.3.47"
 uuid = { version = "=1.20.0", features = ["v4"] }
 jsonschema = { version = "=0.26.2", default-features = false }
 rand = "0.8"
@@ -33,16 +33,14 @@ serde_json = "1"
 serde_path_to_error = "0.1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
-url = "=2.5.2"
+url = "=2.5.8"
 zeroize = "=1.8.1"
 
-web-push = { version = "=0.10.4", default-features = false }
+ece = "=2.3.1"
 p256 = "=0.13.2"
-base64_legacy = { package = "base64", version = "0.13" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
-ece = "=2.3.1"
 tempfile = "3"
 
 [profile.release]

@@ -64,6 +64,48 @@ def main():
             with urllib.request.urlopen(request, timeout=10) as response:
                 cookie = response.headers["set-cookie"].split(";", 1)[0]
                 assert json.load(response)["authenticated"]
+            for route in ["/health/live", "/health/ready"]:
+                for attempt in range(40):
+                    try:
+                        with urllib.request.urlopen(origin + route, timeout=5) as response:
+                            assert response.status == 200
+                        break
+                    except urllib.error.HTTPError as error:
+                        assert error.code == 503
+                        time.sleep(0.1)
+                else:
+                    raise AssertionError(f"Health never ready: {route}")
+            try:
+                urllib.request.urlopen(origin + "/api/operations", timeout=2)
+                raise AssertionError("Operational details must require owner authentication")
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
+            request = urllib.request.Request(origin + "/api/operations", headers={"cookie": cookie})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                health = json.load(response)
+                assert health["storage"]["storageHealthy"]
+                assert health["process"]["backgroundHealthy"]
+                assert health["sqlSlotsAvailable"] == 4
+            # A live process with unavailable write admission must not claim readiness.
+            with sqlite3.connect(workspace / "workspace.sqlite") as db:
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    urllib.request.urlopen(origin + "/health/ready", timeout=5)
+                    raise AssertionError("Readiness ignored unavailable database writes")
+                except urllib.error.HTTPError as error:
+                    assert error.code == 503
+                db.rollback()
+            # Untrusted forwarded headers cannot mint new login throttle identities.
+            for attempt in range(4):
+                request = urllib.request.Request(origin + "/api/login",
+                    data=b'{"password":"incorrect synthetic password"}',
+                    headers={"origin": origin, "content-type": "application/json",
+                             "x-real-ip": f"203.0.113.{attempt+1}"})
+                try:
+                    urllib.request.urlopen(request, timeout=10)
+                    raise AssertionError("Invalid password accepted")
+                except urllib.error.HTTPError as error:
+                    assert error.code == (401 if attempt < 3 else 429)
             # Real process death releases the workspace lock. Copy only after
             # it exits; this is a synthetic offline backup/restore drill.
             server.kill()
@@ -92,7 +134,12 @@ def main():
                 raise AssertionError("Restored server did not become ready")
             with sqlite3.connect(restored / "workspace.sqlite") as db:
                 assert db.execute("SELECT state FROM jobs WHERE id='cancelled-before-crash'").fetchone() == ("cancelled",)
-            print("Release assets and test-route exclusion passed; synthetic crash, offline restore, owner session, secret metadata and cancellation recovery passed.")
+            # SIGTERM drains, exits successfully, and releases workspace ownership.
+            server.send_signal(signal.SIGTERM)
+            server.communicate(timeout=10)
+            assert server.returncode == 0, "SIGTERM bypassed graceful shutdown"
+            subprocess.run([BINARY, "storage", restored], check=True, capture_output=True)
+            print("Readiness, private operations, login throttling and SIGTERM passed. Release assets and test-route exclusion passed; synthetic crash, offline restore, owner session, secret metadata and cancellation recovery passed.")
         finally:
             server.send_signal(signal.SIGINT)
             try:

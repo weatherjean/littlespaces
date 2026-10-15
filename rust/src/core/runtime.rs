@@ -33,9 +33,11 @@ pub struct Outcome {
 }
 #[derive(Clone)]
 pub struct Runtime {
+    pub(crate) operations: super::operations::Operations,
     pub store: Store,
     secrets: Secrets,
     admission: Arc<tokio::sync::Semaphore>,
+    slots: usize,
     pub(crate) authoring_admission: Arc<tokio::sync::Semaphore>,
     pub deadline: Duration,
     pub(crate) offline_actions: bool,
@@ -49,9 +51,11 @@ impl Runtime {
             return Err(Error::Validation);
         }
         Ok(Self {
+            operations: Default::default(),
             store,
             secrets,
             admission: Arc::new(tokio::sync::Semaphore::new(slots)),
+            slots,
             authoring_admission: Arc::new(tokio::sync::Semaphore::new(slots)),
             deadline: Duration::from_secs(
                 std::env::var("LITTLESPACES_ACTION_TIMEOUT_SECONDS")
@@ -65,6 +69,14 @@ impl Runtime {
             browser: None,
             previews: Default::default(),
         })
+    }
+    pub(crate) fn idle(&self) -> bool {
+        self.admission.available_permits() == self.slots
+            && self.authoring_admission.available_permits() == self.slots
+            && worker::sql_available() == 4
+    }
+    pub(crate) fn available_actions(&self) -> usize {
+        self.admission.available_permits()
     }
     pub fn secret_names(&self) -> Result<Vec<super::secrets::SecretName>> {
         self.secrets.list()

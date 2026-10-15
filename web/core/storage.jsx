@@ -90,8 +90,8 @@ export function StorageSettings({ api }) {
           <>
             <p>
               {review.releasesEligible} old recovery points are eligible. Pending release plans
-              protect their app’s recovery points. This also removes completed-job checkpoints and
-              older diagnostics. Removed recovery points cannot be restored here.
+              protect only the recovery points they reference. This also removes completed-job
+              checkpoints and older diagnostics. Removed recovery points cannot be restored here.
             </p>
             <button class="secondary-button" disabled={busy} onClick={() => run(true)}>
               Confirm cleanup

@@ -6,18 +6,25 @@ mod worker_allocator;
 #[global_allocator]
 static ALLOCATOR: worker_allocator::Budget = worker_allocator::Budget;
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--action-worker") {
+    let mode = std::env::args().nth(1);
+    if matches!(mode.as_deref(), Some("--action-worker" | "--sql-worker")) {
         worker_allocator::ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-        if little_spaces::core::worker::run().is_err() {
+        let result = if mode.as_deref() == Some("--sql-worker") {
+            little_spaces::core::worker::run_sql()
+        } else {
+            little_spaces::core::worker::run()
+        };
+        if result.is_err() {
             std::process::exit(1);
         }
         return;
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("runtime")
-        .block_on(host_main());
+        .expect("runtime");
+    runtime.block_on(host_main());
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
 }
 async fn host_main() {
     if let Err(error) = run().await {

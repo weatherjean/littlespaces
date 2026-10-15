@@ -278,9 +278,13 @@ impl AuthoringSession {
                 json!({"releases":self.runtime.store.releases(&app)?,"plans":self.runtime.store.release_plans(&app)?}),
             ),
             AuthoringTool::InspectData { source, query } => {
+                let app = app.clone();
+                let source = source.clone();
+                let query = query.clone();
                 self.runtime
                     .store
-                    .inspect_data(&app, source.clone(), query.clone())
+                    .blocking(move |store| store.inspect_data(&app, source, query))
+                    .await
             }
             _ if !approved => Err(Error::ApprovalRequired),
             AuthoringTool::PrepareRelease {

@@ -1,4 +1,4 @@
-// Development-only browser service. Never bundled into the Rust executable.
+// Optional browser verifier service. Never bundled into the Rust executable.
 import http from 'node:http';
 import { chromium, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
@@ -6,21 +6,29 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 export async function startHarness({
   token,
   port = 0,
+  publicOrigin = process.env.LITTLESPACES_PUBLIC_URL,
   artifacts = new URL('../build-rust/screenshots/', import.meta.url).pathname,
 }) {
   if (!token || token.length < 32) throw Error('A private harness token is required');
   await mkdir(artifacts, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: process.env.LITTLESPACES_BROWSER_SANDBOX === '1',
+  });
   let active = false;
   const server = http.createServer(async (req, res) => {
     const auth = Buffer.from(req.headers.authorization || ''),
       expected = Buffer.from(`Bearer ${token}`);
-    if (
-      req.method !== 'POST' ||
-      auth.length !== expected.length ||
-      !timingSafeEqual(auth, expected)
-    ) {
+    if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) {
       res.writeHead(401).end();
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(browser.isConnected() ? 200 : 503, { 'cache-control': 'no-store' }).end();
+      return;
+    }
+    if (req.method !== 'POST' || req.url !== '/') {
+      res.writeHead(404).end();
       return;
     }
     if (active) {
@@ -44,8 +52,12 @@ export async function startHarness({
       const { url, steps } = JSON.parse(Buffer.concat(chunks));
       const target = new URL(url);
       if (
-        target.protocol !== 'http:' ||
-        target.hostname !== '127.0.0.1' ||
+        !(
+          (target.protocol === 'http:' && target.hostname === '127.0.0.1') ||
+          (target.protocol === 'https:' && target.origin === publicOrigin)
+        ) ||
+        target.username ||
+        target.password ||
         !target.pathname.startsWith('/preview-test/')
       )
         throw Error('Invalid preview URL');
@@ -139,10 +151,16 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   const service = await startHarness({
     token: process.env.LITTLESPACES_BROWSER_TOKEN,
     port: Number(process.env.LITTLESPACES_BROWSER_PORT || 5176),
+    artifacts: process.env.LITTLESPACES_BROWSER_ARTIFACTS,
   });
-  console.log(`Development browser harness: ${service.url}`);
-  process.on('SIGINT', async () => {
+  console.log(`Browser verifier: ${service.url}`);
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
     await service.close();
     process.exit();
-  });
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
 }

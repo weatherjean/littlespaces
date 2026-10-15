@@ -1,0 +1,50 @@
+http:
+  routers:
+    littlespaces-login:
+      rule: 'Host(`apps.example.com`) && Path(`/api/login`)'
+      priority: 100
+      entryPoints: [websecure]
+      middlewares: [login-limit, security]
+      service: littlespaces
+      tls:
+        certResolver: letsencrypt
+    littlespaces:
+      rule: 'Host(`apps.example.com`)'
+      priority: 1
+      entryPoints: [websecure]
+      middlewares: [request-limit, inflight-limit, security]
+      service: littlespaces
+      tls:
+        certResolver: letsencrypt
+  middlewares:
+    login-limit:
+      rateLimit:
+        average: 3
+        period: 1m
+        burst: 3
+        # depth=0 uses the direct peer; never a caller-supplied X-Forwarded-For.
+        sourceCriterion:
+          ipStrategy:
+            depth: 0
+    request-limit:
+      rateLimit:
+        average: 20
+        period: 1s
+        burst: 40
+    inflight-limit:
+      inFlightReq:
+        amount: 100
+    security:
+      headers:
+        stsSeconds: 31536000
+  services:
+    littlespaces:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://127.0.0.1:5175
+        healthCheck:
+          path: /health/ready
+          hostname: apps.example.com
+          interval: 10s
+          timeout: 5s

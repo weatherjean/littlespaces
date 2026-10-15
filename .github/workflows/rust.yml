@@ -19,6 +19,16 @@ env:
   CARGO_PROFILE_TEST_DEBUG: '0'
 
 jobs:
+  deployment:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install PyYAML==6.0.2
+      - run: python3 scripts/proxy-smoke.py
+
   quality:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
@@ -34,14 +44,20 @@ jobs:
       - name: Install Web Push crypto build dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - run: npm ci --prefix web
+      - name: Audit JavaScript dependencies
+        run: npm audit --prefix web --audit-level=moderate
       - run: npm run format:check --prefix web
       - run: npm run build --prefix web
       - name: Set up Rust
-        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+        run: rustup toolchain install 1.88.0 --profile minimal --component clippy --component rustfmt
+      - name: Install Rust advisory scanner
+        run: cargo +1.88.0 install cargo-audit --version 0.22.2 --locked
+      - name: Audit Rust dependencies
+        run: cargo +1.88.0 audit --file rust/Cargo.lock
       - name: Format
-        run: cargo +stable fmt --manifest-path rust/Cargo.toml --check
+        run: cargo +1.88.0 fmt --manifest-path rust/Cargo.toml --check
       - name: Clippy
-        run: cargo +stable clippy --manifest-path rust/Cargo.toml --locked --all-targets --all-features -- -D warnings
+        run: cargo +1.88.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets --all-features -- -D warnings
 
   regression:
     name: Focused regression (${{ matrix.arch }})
@@ -69,19 +85,30 @@ jobs:
       - run: npm ci --prefix web
       - run: npm run build --prefix web
       - name: Set up minimum Rust
-        run: rustup toolchain install 1.84.1 --profile minimal
+        run: rustup toolchain install 1.88.0 --profile minimal
       - name: Focused core regressions
-        run: cargo +1.84.1 test --manifest-path rust/Cargo.toml --locked --all-features
+        run: cargo +1.88.0 test --manifest-path rust/Cargo.toml --locked --all-features
       - name: Build ordinary executable
-        run: cargo +1.84.1 build --manifest-path rust/Cargo.toml --locked
+        run: cargo +1.88.0 build --manifest-path rust/Cargo.toml --locked
       - name: Persisted backend smoke
         run: python3 scripts/monolith-smoke.py
       - name: Build production executable and verify development routes are absent
         run: |
-          cargo +1.84.1 build --manifest-path rust/Cargo.toml --release --locked
+          cargo +1.88.0 build --manifest-path rust/Cargo.toml --release --locked
           python3 scripts/production-smoke.py
+      - name: Package production files
+        run: |
+          python3 scripts/package-release.py build-rust/release
+          tar -C build-rust/release -czf build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz .
+      - name: Save production package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: littlespaces-linux-${{ matrix.arch }}
+          path: build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
       - name: Build development fixture provider
-        run: cargo +1.84.1 build --manifest-path rust/Cargo.toml --locked --features development-fixtures
+        run: cargo +1.88.0 build --manifest-path rust/Cargo.toml --locked --features development-fixtures
       - name: Install development test browser
         working-directory: web
         run: npx playwright install --with-deps chromium

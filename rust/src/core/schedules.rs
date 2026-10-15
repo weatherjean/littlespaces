@@ -189,6 +189,10 @@ async fn tick(runtime: &Runtime) -> Result<()> {
         })
         .await?;
     for (id, schedule, request) in due {
+        if runtime.operations.stopping() {
+            break;
+        }
+        runtime.operations.scheduler(true);
         let key = id.clone();
         runtime
             .store
@@ -220,8 +224,9 @@ async fn tick(runtime: &Runtime) -> Result<()> {
 }
 pub async fn run(runtime: Runtime) {
     let mut last_error = None;
-    loop {
+    while !runtime.operations.stopping() {
         let result = tick(&runtime).await;
+        runtime.operations.scheduler(result.is_ok());
         if let Err(error) = result {
             if last_error != Some(error) {
                 super::telemetry::error("scheduler.tick", error);
@@ -230,7 +235,7 @@ pub async fn run(runtime: Runtime) {
         } else {
             last_error = None;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::select! { _=tokio::time::sleep(Duration::from_secs(1))=>{}, _=runtime.operations.stopped()=>{} }
     }
 }
 

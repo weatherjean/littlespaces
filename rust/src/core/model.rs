@@ -177,6 +177,7 @@ errors! {
     ModelTimeout,
     StreamInterrupted,
     RateLimited,
+    LoginThrottled,
     ProviderUnavailable,
     ProviderAccess,
     ProviderRequest,

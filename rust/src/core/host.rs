@@ -3,6 +3,7 @@ use super::*;
 pub struct Host {
     pub origin: String,
     pub callback: String,
+    pub trust_proxy: bool,
 }
 impl Host {
     pub fn new(origin: String, callback: String) -> Result<Self> {
@@ -31,6 +32,7 @@ impl Host {
         Ok(Self {
             origin: public.origin().ascii_serialization(),
             callback: local.to_string(),
+            trust_proxy: false,
         })
     }
     pub fn authority(url: &str) -> Result<String> {

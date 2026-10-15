@@ -161,7 +161,13 @@ fn limits() -> Result<()> {
                 rlim_cur: 512 * 1024 * 1024,
                 rlim_max: 512 * 1024 * 1024,
             };
-            if libc::setrlimit(libc::RLIMIT_AS, &memory) != 0
+            let expected_parent = std::env::args()
+                .nth(2)
+                .and_then(|s| s.parse::<libc::pid_t>().ok())
+                .unwrap_or_else(|| libc::getppid());
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
+                || libc::getppid() != expected_parent
+                || libc::setrlimit(libc::RLIMIT_AS, &memory) != 0
                 || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
             {
                 return Err(Error::Limit);
@@ -251,36 +257,7 @@ pub(crate) fn evaluate(
 ) -> Result<(Value, Records, Vec<u8>, Vec<notifications::Change>)> {
     #[cfg(unix)]
     {
-        use std::{
-            os::fd::OwnedFd,
-            os::unix::net::UnixStream,
-            process::{Command, Stdio},
-        };
-        control.check()?;
-        let (parent, child) = UnixStream::pair().map_err(|_| Error::Script)?;
-        parent
-            .set_read_timeout(Some(Duration::from_millis(25)))
-            .map_err(|_| Error::Script)?;
-        parent
-            .set_write_timeout(Some(Duration::from_millis(25)))
-            .map_err(|_| Error::Script)?;
-        let stdin: OwnedFd = child.try_clone().map_err(|_| Error::Script)?.into();
-        let stdout: OwnedFd = child.into();
-        let _child = Child(
-            Command::new(std::env::current_exe().map_err(|_| Error::Script)?)
-                .arg("--action-worker")
-                .env_clear()
-                .current_dir("/")
-                .stdin(Stdio::from(stdin))
-                .stdout(Stdio::from(stdout))
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|_| Error::Script)?,
-        );
-        let mut pipe = Pipe {
-            stream: parent,
-            control: control.clone(),
-        };
+        let (_child, mut pipe) = spawn("--action-worker", control)?;
         let input = Input {
             revision: revision.clone(),
             action: action.clone(),
@@ -330,6 +307,159 @@ pub(crate) fn evaluate(
         let _ = (
             revision, action, input, records, sqlite, host, readonly, control,
         );
+        Err(Error::Limit)
+    }
+}
+
+#[cfg(unix)]
+fn spawn(mode: &str, control: &Control) -> Result<(Child, Pipe)> {
+    use std::{
+        os::fd::OwnedFd,
+        os::unix::net::UnixStream,
+        process::{Command, Stdio},
+    };
+    control.check()?;
+    let (parent, child) = UnixStream::pair().map_err(|_| Error::Script)?;
+    parent
+        .set_read_timeout(Some(Duration::from_millis(25)))
+        .map_err(|_| Error::Script)?;
+    parent
+        .set_write_timeout(Some(Duration::from_millis(25)))
+        .map_err(|_| Error::Script)?;
+    let stdin: OwnedFd = child.try_clone().map_err(|_| Error::Script)?.into();
+    let stdout: OwnedFd = child.into();
+    let child = Child(
+        Command::new(std::env::current_exe().map_err(|_| Error::Script)?)
+            .arg(mode)
+            .arg(std::process::id().to_string())
+            .env_clear()
+            .current_dir("/")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| Error::Script)?,
+    );
+    let pipe = Pipe {
+        stream: parent,
+        control: control.clone(),
+    };
+    Ok((child, pipe))
+}
+
+/// SQL copies never receive a workspace path or credentials.
+#[derive(Serialize, Deserialize)]
+pub(crate) enum SqlRequest {
+    Inspect {
+        #[serde(with = "blob")]
+        sqlite: Vec<u8>,
+        query: Option<releases::Query>,
+    },
+    Migrate {
+        #[serde(with = "blob")]
+        before: Vec<u8>,
+        #[serde(with = "blob")]
+        sqlite: Vec<u8>,
+        queries: Vec<releases::Query>,
+    },
+}
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SqlOutput {
+    #[serde(with = "blob")]
+    pub sqlite: Vec<u8>,
+    pub report: Value,
+    pub statements: Vec<Value>,
+}
+#[derive(Serialize, Deserialize)]
+struct SqlInput {
+    request: SqlRequest,
+    timeout_ms: u64,
+}
+fn sql_local(request: SqlRequest, control: &Control) -> Result<SqlOutput> {
+    use app_sqlite::Database;
+    match request {
+        SqlRequest::Inspect { sqlite, query } => {
+            let db = Database::open(&sqlite, true, control.clone())?;
+            let report = if let Some(query) = query {
+                db.run(&query.sql, &query.params, true)?
+            } else {
+                db.run("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name", &serde_json::json!([]), true)?
+            };
+            Ok(SqlOutput {
+                sqlite: vec![],
+                report,
+                statements: vec![],
+            })
+        }
+        SqlRequest::Migrate {
+            before,
+            sqlite,
+            queries,
+        } => {
+            if queries.len() > 64 {
+                return Err(Error::Limit);
+            }
+            let original = Database::open(&before, true, control.clone())?;
+            let staged = Database::open(&sqlite, false, control.clone())?;
+            let mut statements = Vec::new();
+            for query in queries {
+                statements.push(staged.run(&query.sql, &query.params, false)?);
+            }
+            let report = original.preservation_report(&staged)?;
+            staged.check_integrity()?;
+            Ok(SqlOutput {
+                sqlite: staged.image()?,
+                report,
+                statements,
+            })
+        }
+    }
+}
+pub fn run_sql() -> Result<()> {
+    limits()?;
+    let input: SqlInput = receive(&mut std::io::stdin())?;
+    let control = Control::new(
+        Cancellation::default(),
+        Duration::from_millis(input.timeout_ms.min(300_000)),
+    );
+    send(&mut std::io::stdout(), &sql_local(input.request, &control))
+}
+static SQL_SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+pub(crate) fn sql_available() -> usize {
+    SQL_SLOTS
+        .get_or_init(|| tokio::sync::Semaphore::new(4))
+        .available_permits()
+}
+pub(crate) fn sql(request: SqlRequest, control: &Control) -> Result<SqlOutput> {
+    let _permit = SQL_SLOTS
+        .get_or_init(|| tokio::sync::Semaphore::new(4))
+        .try_acquire()
+        .map_err(|_| Error::Saturated)?;
+    control.check()?;
+    #[cfg(test)]
+    {
+        sql_local(request, control)
+    }
+    #[cfg(all(unix, not(test)))]
+    {
+        let (_child, mut pipe) = spawn("--sql-worker", control)?;
+        let input = SqlInput {
+            request,
+            timeout_ms: control
+                .deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis() as u64,
+        };
+        let result = (|| {
+            send(&mut pipe, &input)?;
+            receive::<Result<SqlOutput>>(&mut pipe)?
+        })();
+        control.check()?;
+        result
+    }
+    #[cfg(all(not(unix), not(test)))]
+    {
+        let _ = request;
         Err(Error::Limit)
     }
 }

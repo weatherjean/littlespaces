@@ -1,11 +1,49 @@
 //! Durable inbox and encrypted Web Push. Script notifications commit with app records.
 use super::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use p256::{elliptic_curve::sec1::ToEncodedPoint, pkcs8::EncodePrivateKey};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
-use web_push::{ContentEncoding, SubscriptionInfo, VapidSignatureBuilder, WebPushMessageBuilder};
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SubscriptionInfo {
+    pub endpoint: String,
+    pub keys: SubscriptionKeys,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SubscriptionKeys {
+    pub p256dh: String,
+    pub auth: String,
+}
+impl SubscriptionInfo {
+    #[cfg(test)]
+    fn new(
+        endpoint: impl Into<String>,
+        p256dh: impl Into<String>,
+        auth: impl Into<String>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            keys: SubscriptionKeys {
+                p256dh: p256dh.into(),
+                auth: auth.into(),
+            },
+        }
+    }
+}
+struct PushMessage {
+    content: Vec<u8>,
+    authorization: String,
+}
+fn vapid_key(encoded: &str) -> Result<p256::SecretKey> {
+    let bytes = zeroize::Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| Error::Storage)?,
+    );
+    p256::SecretKey::from_slice(&bytes).map_err(|_| Error::Storage)
+}
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -145,9 +183,12 @@ fn private_key(store: &Store, secrets: &secrets::Secrets) -> Result<String> {
 }
 pub fn public_key(store: &Store, secrets: &secrets::Secrets) -> Result<String> {
     let key = private_key(store, secrets)?;
-    let builder = VapidSignatureBuilder::from_base64_no_sub(&key, base64_legacy::URL_SAFE_NO_PAD)
-        .map_err(|_| Error::Storage)?;
-    Ok(URL_SAFE_NO_PAD.encode(builder.get_public_key()))
+    Ok(URL_SAFE_NO_PAD.encode(
+        vapid_key(&key)?
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes(),
+    ))
 }
 pub fn subscribe(store: &Store, secrets: &secrets::Secrets, sub: SubscriptionInfo) -> Result<()> {
     validate_subscription(&sub)?;
@@ -198,24 +239,38 @@ pub fn initialize_jobs(store: &Store) -> Result<()> {
     store.open()?.execute("INSERT OR IGNORE INTO notifications(id,key,title,body,href,due_at,created_at,is_read) VALUES('push-job-watermark',COALESCE((SELECT id FROM jobs ORDER BY rowid DESC LIMIT 1),''),'','','/',9223372036854775807,0,1)",[])?;
     Ok(())
 }
-fn encrypt_message(
-    key: &str,
-    sub: &SubscriptionInfo,
-    payload: &[u8],
-) -> Result<web_push::WebPushMessage> {
-    let mut signature =
-        VapidSignatureBuilder::from_base64(key, base64_legacy::URL_SAFE_NO_PAD, sub)
-            .map_err(|_| Error::Storage)?;
-    signature.add_claim(
-        "sub",
-        std::env::var("VAPID_SUBJECT").unwrap_or_else(|_| "mailto:owner@example.com".into()),
-    );
-    let mut builder = WebPushMessageBuilder::new(sub);
-    builder.set_ttl(86400);
-    builder.set_vapid_signature(signature.build().map_err(|_| Error::Storage)?);
-    builder.set_payload(ContentEncoding::Aes128Gcm, payload);
-    builder.build().map_err(|_| Error::Storage)
+fn encrypt_message(key: &str, sub: &SubscriptionInfo, payload: &[u8]) -> Result<PushMessage> {
+    validate_subscription(sub)?;
+    // RFC 8292 ES256 VAPID plus RFC 8291 aes128gcm. Both cryptographic
+    // operations use existing libraries; no unused RSA signing dependency.
+    let key = vapid_key(key)?;
+    let public = URL_SAFE_NO_PAD.encode(key.public_key().to_encoded_point(false).as_bytes());
+    let private = key.to_pkcs8_der().map_err(|_| Error::Storage)?;
+    let audience = url::Url::parse(&sub.endpoint)
+        .map_err(|_| Error::Validation)?
+        .origin()
+        .ascii_serialization();
+    let claims = json!({"aud":audience,"exp":owner::now()+12*3600,
+        "sub":std::env::var("VAPID_SUBJECT").unwrap_or_else(|_|"mailto:owner@example.com".into())});
+    let jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_ec_der(private.as_bytes()),
+    )
+    .map_err(|_| Error::Storage)?;
+    let recipient = URL_SAFE_NO_PAD
+        .decode(sub.keys.p256dh.trim_end_matches('='))
+        .map_err(|_| Error::Validation)?;
+    let auth = URL_SAFE_NO_PAD
+        .decode(sub.keys.auth.trim_end_matches('='))
+        .map_err(|_| Error::Validation)?;
+    let content = ece::encrypt(&recipient, &auth, payload).map_err(|_| Error::Storage)?;
+    Ok(PushMessage {
+        content,
+        authorization: format!("vapid t={jwt}, k={public}"),
+    })
 }
+
 fn reserve_attempt(store: &Store, endpoint: &str, id: &str, version: i64) -> Result<()> {
     let mut db = store.open()?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -264,7 +319,11 @@ fn finish_attempt(
 pub fn delivery_status(store: &Store) -> Result<Value> {
     Ok(store.open()?.query_row("SELECT COUNT(*),COALESCE(SUM(terminal),0) FROM push_attempts",[],|r|Ok(json!({"retrying":r.get::<_,i64>(0)?-r.get::<_,i64>(1)?,"failed":r.get::<_,i64>(1)?})))?)
 }
-pub async fn run(store: Store, secrets: secrets::Secrets) {
+pub(crate) async fn run(
+    store: Store,
+    secrets: secrets::Secrets,
+    operations: super::operations::Operations,
+) {
     let Ok(client) = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
@@ -272,7 +331,7 @@ pub async fn run(store: Store, secrets: secrets::Secrets) {
     else {
         return;
     };
-    loop {
+    while !operations.stopping() {
         let s = secrets.clone();
         let batch=store.blocking(move |store| {
             completed_jobs(&store)?;
@@ -289,11 +348,16 @@ pub async fn run(store: Store, secrets: secrets::Secrets) {
             }
             Ok(result)
         }).await;
+        operations.push(batch.is_ok());
         if let Err(error) = &batch {
             super::telemetry::error("push.batch", *error);
         }
         if let Ok(batch) = batch {
             for (endpoint, id, version, message) in batch {
+                if operations.stopping() {
+                    break;
+                }
+                operations.push(true);
                 let e = endpoint.clone();
                 let i = id.clone();
                 let pending=store.blocking(move |store|Ok(store.open()?.query_row("SELECT EXISTS(SELECT 1 FROM push_subscriptions s, notifications n WHERE s.endpoint=? AND n.id=? AND n.version=? AND n.is_read=0 AND NOT EXISTS(SELECT 1 FROM archived_apps a WHERE a.app=n.app) AND n.due_at<=?)",params![e,i,version,now()],|r|r.get::<_,bool>(0))?)).await;
@@ -309,16 +373,13 @@ pub async fn run(store: Store, secrets: secrets::Secrets) {
                     super::telemetry::error("push.reserve", error);
                     continue;
                 }
-                let payload = message.payload.as_ref().expect("encrypted payload");
-                let mut request = client
+                let request = client
                     .post(&endpoint)
-                    .header("TTL", message.ttl)
+                    .header("TTL", 86400)
                     .header("Content-Type", "application/octet-stream")
-                    .header("Content-Encoding", payload.content_encoding.to_str())
-                    .body(payload.content.clone());
-                for (name, value) in &payload.crypto_headers {
-                    request = request.header(*name, value.as_str());
-                }
+                    .header("Content-Encoding", "aes128gcm")
+                    .header("Authorization", message.authorization)
+                    .body(message.content);
                 let response = request.send().await;
                 let status = response.as_ref().ok().map(|r| r.status().as_u16());
                 let retry_after = response
@@ -337,7 +398,7 @@ pub async fn run(store: Store, secrets: secrets::Secrets) {
                 }
             }
         }
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        tokio::select! { _=tokio::time::sleep(Duration::from_secs(15))=>{}, _=operations.stopped()=>{} }
     }
 }
 
@@ -402,15 +463,36 @@ mod tests {
             URL_SAFE_NO_PAD.encode(p256::SecretKey::random(&mut rand::thread_rng()).to_bytes());
         let plain = br#"{"title":"Ready","body":"Saved","href":"/chat/example"}"#;
         let message = encrypt_message(&private, &sub, plain).unwrap();
-        let payload = message.payload.unwrap();
-        assert!(payload
-            .crypto_headers
-            .iter()
-            .any(|(name, value)| *name == "Authorization" && value.starts_with("vapid t=")));
+        let token = message
+            .authorization
+            .strip_prefix("vapid t=")
+            .unwrap()
+            .split(", k=")
+            .next()
+            .unwrap();
+        let public = vapid_key(&private)
+            .unwrap()
+            .public_key()
+            .to_encoded_point(false);
+        let decoding = jsonwebtoken::DecodingKey::from_ec_components(
+            &URL_SAFE_NO_PAD.encode(public.x().unwrap()),
+            &URL_SAFE_NO_PAD.encode(public.y().unwrap()),
+        )
+        .unwrap();
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
+        validation.set_audience(&["https://fcm.googleapis.com"]);
+        let claims = jsonwebtoken::decode::<Value>(token, &decoding, &validation)
+            .unwrap()
+            .claims;
+        assert!(claims["exp"].as_i64().unwrap() > owner::now());
+        assert!(claims["exp"].as_i64().unwrap() <= owner::now() + 24 * 3600);
+        assert!(message
+            .authorization
+            .ends_with(&URL_SAFE_NO_PAD.encode(public.as_bytes())));
         let decoded = ece::decrypt(
             &recipient.raw_components().unwrap(),
             &auth,
-            &payload.content,
+            &message.content,
         )
         .unwrap();
         assert_eq!(decoded, plain);
@@ -418,7 +500,7 @@ mod tests {
         assert!(ece::decrypt(
             &other.raw_components().unwrap(),
             &other_auth,
-            &payload.content
+            &message.content
         )
         .is_err());
     }
@@ -434,7 +516,7 @@ mod tests {
         let valid = SubscriptionInfo::new(
             "https://fcm.googleapis.com/test",
             &key,
-            &URL_SAFE_NO_PAD.encode([1u8; 16]),
+            URL_SAFE_NO_PAD.encode([1u8; 16]),
         );
         subscribe(&store, &secrets, valid).unwrap();
         let db = store.open().unwrap();
@@ -453,7 +535,7 @@ mod tests {
             assert!(validate_subscription(&SubscriptionInfo::new(
                 endpoint,
                 &key,
-                &URL_SAFE_NO_PAD.encode([1u8; 16])
+                URL_SAFE_NO_PAD.encode([1u8; 16])
             ))
             .is_err());
         }

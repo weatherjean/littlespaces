@@ -97,14 +97,18 @@ impl Store {
             let s = self.snapshot(app)?;
             (s.records, s.sqlite)
         };
-        let db = app_sqlite::Database::open(&sqlite, true, control(Cancellation::default()))?;
-        if let Some(query) = query {
-            return db.run(&query.sql, &query.params, true);
+        let bytes = sqlite.len();
+        let inspection = query.is_some();
+        let result = worker::sql(
+            worker::SqlRequest::Inspect { sqlite, query },
+            &control(Cancellation::default()),
+        )?;
+        if inspection {
+            return Ok(result.report);
         }
-        Ok(
-            json!({"records":records,"schema":db.run("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",&json!([]),true)?,"sqliteBytes":sqlite.len()}),
-        )
+        Ok(json!({"records":records,"schema":result.report,"sqliteBytes":bytes}))
     }
+
     pub fn release_plans(&self, app: &AppId) -> Result<Value> {
         let db = self.open()?;
         let mut q=db.prepare("SELECT id,report,needs_approval,applied_release,data_version,(data_version=(SELECT record_version FROM apps WHERE id=p.app) AND base_revision IS (SELECT published_revision FROM apps WHERE id=p.app)) FROM release_plans p WHERE app=? ORDER BY rowid DESC LIMIT 32")?;
@@ -121,6 +125,18 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows.into_iter().map(|(id,report,approval,applied,version,current)|Ok(json!({"id":id,"report":serde_json::from_str::<Value>(&report).map_err(|_|Error::Storage)?,"needsApproval":approval,"appliedRelease":applied,"dataVersion":version,"current":current}))).collect::<Result<Vec<_>>>().map(|v|json!(v))
+    }
+    /// Discarding a dry run never changes live code or app data.
+    pub fn discard_release_plan(&self, app: &AppId, plan: &str) -> Result<()> {
+        let db = self.open()?;
+        if db.execute(
+            "DELETE FROM release_plans WHERE id=? AND app=? AND applied_release IS NULL",
+            params![plan, app.0],
+        )? == 0
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
     }
     /// Called inside every publication transaction, including legacy owner/CLI publication.
     pub(crate) fn record_release(
@@ -321,18 +337,12 @@ impl Runtime {
             for (k,v) in &p.records { if let Some(v)=v { records.insert(k.clone(),v.clone()); } else { records.remove(k); } }
             store::validate_records(&records)?;
             if !candidate.code.sqlite && !p.sql.is_empty() { return Err(Error::Validation); }
-            let original=app_sqlite::Database::open(&before.sqlite,true,control(c.clone()))?;
-            let staged=app_sqlite::Database::open(&sqlite,false,control(c.clone()))?;
-            let mut statements=Vec::new();
-            for (index,query) in p.sql.iter().enumerate() {
-                match staged.run(&query.sql,&query.params,false) {
-                    Ok(result)=>statements.push(result),
-                    Err(error)=>{ diagnostic_runtime.diagnostic(&candidate,"release","migration",json!({"statement":index,"error":error,"detail":staged.last_error()})); return Err(error); }
-                }
-            }
-            let preservation=original.preservation_report(&staged)?;
-            staged.check_integrity()?;
-            let sqlite=staged.image()?;
+            let migrated = worker::sql(worker::SqlRequest::Migrate { before: before.sqlite.clone(), sqlite, queries: p.sql.clone() }, &control(c.clone())).inspect_err(|error| {
+                diagnostic_runtime.diagnostic(&candidate,"release","migration",json!({"error":error}));
+            })?;
+            let preservation=migrated.report;
+            let statements=migrated.statements;
+            let sqlite=migrated.sqlite;
             let removed:Vec<_>=before.records.iter().filter(|(k,v)|records.get(*k)!=Some(*v)).map(|(k,_)|k.clone()).collect();
             let added:Vec<_>=records.keys().filter(|k|!before.records.contains_key(*k)).cloned().collect();
             let approval=p.source.is_some() || !removed.is_empty() || preservation["preservesData"]!=true;
