@@ -27,6 +27,10 @@ export function BrandMark({ size = 36 }) {
   );
 }
 const paths = {
+  image: 'M3 3h18v18H3zM3 16l5-5 4 4 3-3 6 6M8 7h.01',
+  archive: 'M3 3h18v5H3zM5 8v13h14V8M9 12h6',
+  info: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
+  bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
   mic: 'M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8',
   search: 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
   chevron: 'm6 9 6 6 6-6',
@@ -39,13 +43,14 @@ const paths = {
   grid: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
   send: 'm5 12 7-7 7 7M12 5v14',
   chat: 'M21 11a9 9 0 0 1-9 9H3l2-5a9 9 0 1 1 16-4ZM8 10h8M8 14h5',
+  reload: 'M20 7v5h-5M20 12a8 8 0 1 0-2 5',
   history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2',
   stop: 'M6 6h12v12H6z',
   close: 'm6 6 12 12M6 18 18 6',
   check: 'm5 12 4 4L19 6',
   spark: 'm12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z',
-  code: 'm8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',
-  key: 'M15 7a5 5 0 1 1-4 8L3 23v-5l4-4M21 7h.01',
+  code: 'M8 7 3 12 8 17M16 7 21 12 16 17M14 4 10 20',
+  key: 'M21 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM14 10 3 21M5 19l-2-2M8 16l-2-2',
   clock: 'M12 8v4l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
 };
 export function Icon({ name, size = 20 }) {
@@ -71,6 +76,7 @@ export function appEmoji(name = '') {
     [/plant|garden|watering/, '🪴'],
     [/calori|meal|food|recipe|nutrition/, '🍽️'],
     [/budget|money|expense|finance/, '💰'],
+    [/fast|omad|rhythm/, '⏱️'],
     [/fitness|workout|exercise/, '💪'],
     [/travel|trip/, '🧳'],
     [/music|playlist/, '🎵'],
@@ -99,5 +105,14 @@ export function ConnectionNotice({ connection, banner = false, onConnect }) {
         {reconnect ? 'Reconnect' : 'Connect'} <span aria-hidden="true">↗</span>
       </button>
     </section>
+  );
+}
+
+export function Notice({ error = false, children }) {
+  return (
+    <div class={`chat-notice ${error ? 'is-error' : ''}`} role={error ? 'alert' : 'status'}>
+      <Icon name="info" size={18} />
+      <div>{children}</div>
+    </div>
   );
 }

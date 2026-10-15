@@ -1,0 +1,102 @@
+{
+  "name": "Release migrations and recovery",
+  "steps": [
+    {
+      "name": "Build and automatically release",
+      "prompt": "Build and release a tiny SQLite notes app with an accessible UI for listing/adding notes. Use table notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL), actions init, list_notes and add_note. init uses CREATE TABLE IF NOT EXISTS; list_notes returns only id and body. Backend tests start empty, call init before list/add. Frontend tests initialize via init before displaying notes. On release initialize the LIVE database via release.sql and insert id=1 body='original' in the migration, and set record marker to {value: 'keep'}. Do not insert seed data in init or the UI. Use the authoring release tool to publish automatically; finish only after the published result. This is an isolated test; no external integrations.",
+      "minReleases": 1,
+      "queries": [
+        {
+          "sql": "SELECT id,body FROM notes ORDER BY id",
+          "expected": [
+            {
+              "id": 1,
+              "body": "original"
+            }
+          ]
+        }
+      ],
+      "recordChecks": {
+        "marker": {
+          "value": "keep"
+        }
+      }
+    },
+    {
+      "name": "Additive migration preserves old data",
+      "prompt": "Update and automatically release this app. Add an optional tag TEXT column to notes. Ensure init creates the new schema for fresh installs. Keep list_notes selecting only id,body. Use release.sql to add tag to current data and insert id=2 body='newer' tag='work'. Keep the original note and marker record exactly intact. Add release probes verifying both notes on the migrated copy. Do not change existing row values. Complete the release.",
+      "minReleases": 2,
+      "queries": [
+        {
+          "sql": "SELECT id,body,tag FROM notes ORDER BY id",
+          "expected": [
+            {
+              "id": 1,
+              "body": "original",
+              "tag": null
+            },
+            {
+              "id": 2,
+              "body": "newer",
+              "tag": "work"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Restore old version while preserving newer note",
+      "prompt": "Prepare a revert to first revision $FIRST_REVISION using the saved data from release $FIRST_RELEASE (source before=false). Inspect the current and saved SQL data. Preserve note id=2 body='newer' by adding it to the older snapshot before restoring. Preserve marker. The old schema should have only id and body, dropping tag. Use prepare_release with an explicit probe for the two preserved notes, then stop for owner data review. Do not try to confirm yourself.",
+      "approveDataChanges": true,
+      "minReleases": 3,
+      "queries": [
+        {
+          "sql": "SELECT id,body FROM notes ORDER BY id",
+          "expected": [
+            {
+              "id": 1,
+              "body": "original"
+            },
+            {
+              "id": 2,
+              "body": "newer"
+            }
+          ]
+        },
+        {
+          "sql": "SELECT instr(lower(sql),'tag') AS tag_position FROM sqlite_schema WHERE name='notes'",
+          "expected": [
+            {
+              "tag_position": 0
+            }
+          ]
+        }
+      ],
+      "recordChecks": {
+        "marker": {
+          "value": "keep"
+        }
+      }
+    },
+    {
+      "name": "Destructive dry run leaves live data intact",
+      "prompt": "Prepare, but DO NOT apply, a data repair that deletes note id=2. Use prepare_release for the current published revision and dry-run SQL DELETE FROM notes WHERE id=2. Do not edit code or invoke live app actions. Stop and request owner review. Verify with inspect_data that live notes still contain both notes.",
+      "expectPending": true,
+      "queries": [
+        {
+          "sql": "SELECT id,body FROM notes ORDER BY id",
+          "expected": [
+            {
+              "id": 1,
+              "body": "original"
+            },
+            {
+              "id": 2,
+              "body": "newer"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

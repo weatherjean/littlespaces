@@ -1,0 +1,12 @@
+{
+  "name": "Targeted repair and actionable browser diagnostics",
+  "steps": [
+    {
+      "name": "Diagnose, patch, and release a deliberately failing fixture",
+      "prompt": "This is an isolated regression test, not a real user app. Build the smallest app: one read-only Rhai action greet(input) returning {message:\"Hello\"}, its input/output contracts and exact backend test, and a Preact frontend with an h1 containing Draft and one input with aria-label Name. First save the whole initial AppCode using edit_draft. Set frontend_tests to fill the input with Ada, assert its value equals Ada, assert it is enabled, then assert h1 contains Ready (deliberately wrong). Call release BEFORE repairing this intentional mismatch. It must return released:false and browser diagnostics. Read those diagnostics using read_diagnostics with the returned revision. Then use patch_draft to replace just the frontend heading Draft with Ready, leaving backend, contracts and test expectations unchanged. Release the repaired draft successfully. Do not remove or weaken the failing assertion. Finish with a brief factual result. No SQL, records, secrets or integrations are needed.",
+      "minReleases": 1,
+      "requiredTools": ["patch_draft", "read_diagnostics"],
+      "expectReleaseFailure": true
+    }
+  ]
+}

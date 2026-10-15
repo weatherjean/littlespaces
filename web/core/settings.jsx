@@ -1,7 +1,15 @@
+import { StorageSettings } from './storage.jsx';
 import { h, Fragment } from 'preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { Icon } from './ui.jsx';
+import { PushSettings } from './notifications.jsx';
 import { Modal } from './chat.jsx';
+function scheduleLabel(expression) {
+  if (expression === '0 * * * *') return 'Every hour';
+  const match = expression.match(/^(\d+) (\d+) \* \* (\*|1-5|1)$/);
+  if (!match) return `Custom: ${expression} (UTC)`;
+  return `${match[3] === '1-5' ? 'Weekdays' : match[3] === '1' ? 'Mondays' : 'Every day'} at ${match[2].padStart(2, '0')}:${match[1].padStart(2, '0')} UTC`;
+}
 export function Settings({
   api,
   attempt,
@@ -24,12 +32,39 @@ export function Settings({
   const [secretOpen, setSecretOpen] = useState(false),
     [secretName, setSecretName] = useState(''),
     [scheduleOpen, setScheduleOpen] = useState(false),
-    [scheduleApp, setScheduleApp] = useState(selected || '');
+    [scheduleApp, setScheduleApp] = useState(selected || ''),
+    [formError, setFormError] = useState(''),
+    [saving, setSaving] = useState(false),
+    [frequency, setFrequency] = useState('daily');
+  const savingRef = useRef(false);
+  useEffect(() => {
+    setFormError('');
+  }, [secretOpen, scheduleOpen]);
+  useEffect(() => {
+    if (formError)
+      document.querySelector('dialog[open] .error')?.scrollIntoView({ block: 'nearest' });
+  }, [formError]);
+  async function submitForm(work) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setFormError('');
+    try {
+      await work();
+    } catch (error) {
+      setFormError(
+        error.message === 'validation' ? 'Check the values below and try again.' : error.message,
+      );
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
   const saveSecret = (e) => {
     e.preventDefault();
     const data = new FormData(e.currentTarget),
       form = e.currentTarget;
-    attempt(async () => {
+    submitForm(async () => {
       await api('/api/secrets', { name: data.get('name'), value: data.get('value') });
       form.reset();
       setSecrets(await api('/api/secrets'));
@@ -48,6 +83,8 @@ export function Settings({
         </button>
       </header>
       <div class="settings-content">
+        <PushSettings api={api} />
+        <StorageSettings api={api} />
         <section class="setting-card chatgpt-card">
           <span class="setting-icon">
             <Icon name="spark" size={24} />
@@ -174,12 +211,12 @@ export function Settings({
             </div>
             <button
               class="secondary-button"
-              disabled={!apps.some((a) => a.revision)}
+              disabled={!apps.some((a) => a.revision && !a.archived)}
               onClick={() => {
                 const app =
                   selected && apps.find((a) => a.id === selected)?.revision
                     ? selected
-                    : apps.find((a) => a.revision)?.id;
+                    : apps.find((a) => a.revision && !a.archived)?.id;
                 setScheduleApp(app);
                 onSelectApp(app);
                 setScheduleOpen(true);
@@ -198,7 +235,12 @@ export function Settings({
                       {apps.find((a) => a.id === s.app)?.title || 'App'} · {s.action}
                     </strong>
                     <small>
-                      {s.expression} (UTC) · {s.enabled ? 'Active' : 'Paused'}
+                      {scheduleLabel(s.expression)} ·{' '}
+                      {apps.find((a) => a.id === s.app)?.archived
+                        ? 'Paused while archived'
+                        : s.enabled
+                          ? 'Active'
+                          : 'Paused'}
                     </small>
                   </div>
                   <button
@@ -216,7 +258,50 @@ export function Settings({
                 </div>
               ))
             ) : (
-              <p class="setting-empty">No schedules yet.</p>
+              <p class="setting-empty">
+                {apps.some((a) => a.revision && !a.archived)
+                  ? 'No schedules yet. Set one up for a recurring task.'
+                  : 'Publish an app to set up its recurring tasks.'}
+              </p>
+            )}
+          </div>
+        </section>
+        <section class="setting-card setting-section">
+          <div class="setting-section-heading">
+            <span class="setting-icon">
+              <Icon name="archive" size={24} />
+            </span>
+            <div>
+              <h3>Archived apps</h3>
+              <p>Restore an app to bring it back to Home. Its data stays saved.</p>
+            </div>
+          </div>
+          <div class="setting-section-body">
+            {apps.some((a) => a.archived) ? (
+              apps
+                .filter((a) => a.archived)
+                .map((a) => (
+                  <div class="schedule-row" key={a.id}>
+                    <div>
+                      <strong>{a.title}</strong>
+                      <small>Schedules paused while archived</small>
+                    </div>
+                    <button
+                      class="secondary-button"
+                      aria-label={`Restore ${a.title}`}
+                      onClick={() =>
+                        attempt(async () => {
+                          await api(`/api/apps/${a.id}/archive`, { archived: false });
+                          await onRefresh();
+                        })
+                      }
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))
+            ) : (
+              <p class="setting-empty">No archived apps. Archive an app from its menu.</p>
             )}
           </div>
         </section>
@@ -282,7 +367,12 @@ export function Settings({
             <Icon name="close" />
           </button>
         </header>
-        <form class="dialog-body stack" onSubmit={saveSecret}>
+        <form class="dialog-body stack" onSubmit={saveSecret} aria-busy={saving}>
+          {formError && (
+            <p class="error" role="alert">
+              {formError}
+            </p>
+          )}
           <label>
             Name
             <input
@@ -307,7 +397,9 @@ export function Settings({
               maxLength={16000}
             />
           </label>
-          <button class="primary-button">{secretName ? 'Replace secret' : 'Save secret'}</button>
+          <button class="primary-button" disabled={saving}>
+            {saving ? 'Saving…' : secretName ? 'Replace secret' : 'Save secret'}
+          </button>
         </form>
       </Modal>
       <Modal
@@ -334,19 +426,40 @@ export function Settings({
           onSubmit={(e) => {
             e.preventDefault();
             const data = new FormData(e.currentTarget);
-            attempt(async () => {
+            submitForm(async () => {
+              let input;
+              try {
+                input = JSON.parse(data.get('input'));
+              } catch {
+                throw Error('Action input must be valid JSON. Check brackets, quotes, and commas.');
+              }
+              const [hour, minute] = String(data.get('time') || '09:00')
+                .split(':')
+                .map(Number);
+              const expression =
+                frequency === 'custom'
+                  ? data.get('expression')
+                  : frequency === 'hourly'
+                    ? '0 * * * *'
+                    : `${minute} ${hour} * * ${frequency === 'weekdays' ? '1-5' : frequency === 'weekly' ? '1' : '*'}`;
               await api('/api/schedules', {
                 app: scheduleApp,
                 revision: detail.revision.id,
                 action: data.get('action'),
-                input: JSON.parse(data.get('input')),
-                expression: data.get('expression'),
+                input,
+                expression,
               });
               setSchedules(await api('/api/schedules'));
               setScheduleOpen(false);
             });
           }}
+          aria-busy={saving}
         >
+          {formError && (
+            <p class="error" role="alert">
+              {formError}
+            </p>
+          )}
           <label>
             App
             <select
@@ -368,22 +481,67 @@ export function Settings({
           </label>
           <label>
             Action
-            <select name="action" disabled={detail?.app !== scheduleApp}>
+            <select
+              name="action"
+              aria-label="Action"
+              required
+              disabled={detail?.app !== scheduleApp}
+            >
+              {detail?.app !== scheduleApp && <option value="">Loading actions…</option>}
               {detail?.app === scheduleApp &&
                 detail?.revision?.code.actions.map((a) => <option key={a.name}>{a.name}</option>)}
             </select>
           </label>
           <label>
-            When (UTC)
-            <input name="expression" defaultValue="0 9 * * *" required />
-            <small>A cron expression, for example every day at 09:00.</small>
+            Repeat
+            <select
+              aria-label="Repeat"
+              value={frequency}
+              onChange={(e) => setFrequency(e.currentTarget.value)}
+            >
+              <option value="daily">Every day</option>
+              <option value="weekdays">Weekdays</option>
+              <option value="weekly">Every Monday</option>
+              <option value="hourly">Every hour</option>
+              <option value="custom">Custom schedule</option>
+            </select>
           </label>
+          {frequency !== 'custom' && frequency !== 'hourly' && (
+            <label>
+              Time (UTC)
+              <input name="time" type="time" defaultValue="09:00" required />
+            </label>
+          )}
+          {frequency === 'hourly' && <p class="field-help">Runs at the start of every hour.</p>}
+          {frequency === 'custom' && (
+            <label>
+              Schedule (UTC)
+              <input
+                name="expression"
+                defaultValue="0 9 * * *"
+                required
+                spellCheck={false}
+                autoCapitalize="off"
+              />
+              <small>Five cron fields: minute, hour, day, month, weekday.</small>
+            </label>
+          )}
+          <p class="field-help">Schedule times use UTC.</p>
           <label>
             Action input
-            <textarea name="input" defaultValue="{}" required />
+            <textarea
+              name="input"
+              defaultValue="{}"
+              required
+              spellCheck={false}
+              autoCapitalize="off"
+            />
+            <small>
+              Use {} when the action needs no input. Otherwise, enter its values as JSON.
+            </small>
           </label>
-          <button class="primary-button" disabled={detail?.app !== scheduleApp}>
-            Add schedule
+          <button class="primary-button" disabled={saving || detail?.app !== scheduleApp}>
+            {saving ? 'Saving…' : 'Add schedule'}
           </button>
         </form>
       </Modal>

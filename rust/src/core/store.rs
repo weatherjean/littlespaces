@@ -17,14 +17,16 @@ pub struct Snapshot {
     pub revision: Option<RevisionId>,
     pub version: i64,
     pub records: Records,
+    pub sqlite: Vec<u8>,
 }
 impl Store {
     pub fn create(path: &Path) -> Result<Self> {
-        if path.exists() {
+        let existing = path.exists();
+        if existing {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let marker: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if marker != 1280528978 || version != 4 {
+            if marker != 1280528978 || ![4, super::migrations::VERSION].contains(&version) {
                 return Err(Error::Storage);
             }
         } else {
@@ -42,13 +44,49 @@ impl Store {
             tx.execute_batch(include_str!("schema.sql"))?;
             tx.commit()?;
         }
-        Ok(Self { path: path.into() })
+        let store = Self { path: path.into() };
+        let mut db = store.open()?;
+        let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if existing && version == 4 {
+            // Snapshot the database before any schema change. Encryption keys are unchanged.
+            let backup = path.with_extension("pre-v5.sqlite");
+            if !backup.exists() {
+                db.execute("VACUUM INTO ?", [backup.to_str().ok_or(Error::Storage)?])?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600))
+                        .map_err(|_| Error::Storage)?;
+                }
+            }
+        }
+        super::migrations::install(&mut db)?;
+        Ok(store)
     }
     pub(crate) fn open(&self) -> Result<Connection> {
         let db = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         db.busy_timeout(Duration::from_millis(250))?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(db)
+    }
+    pub fn archive_app(&self, app: &AppId, archived: bool) -> Result<()> {
+        let db = self.open()?;
+        if !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM apps WHERE id=?)",
+            [&app.0],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Err(Error::Validation);
+        }
+        if archived {
+            db.execute(
+                "INSERT OR IGNORE INTO archived_apps(app,archived_at) VALUES(?,?)",
+                params![app.0, chrono::Utc::now().timestamp_millis()],
+            )?;
+        } else {
+            db.execute("DELETE FROM archived_apps WHERE app=?", [&app.0])?;
+        }
+        Ok(())
     }
     pub fn create_app(&self, title: &str) -> Result<AppId> {
         if title.is_empty() || title.len() > 200 {
@@ -182,6 +220,15 @@ impl Store {
         id: &RevisionId,
         expected: Option<&RevisionId>,
     ) -> Result<()> {
+        Self::record_release(tx, app, id, None, &serde_json::json!({"kind":"code_only"}))?;
+        Self::publish_checked_in(tx, app, id, expected)
+    }
+    pub(crate) fn publish_checked_in(
+        tx: &rusqlite::Transaction<'_>,
+        app: &AppId,
+        id: &RevisionId,
+        expected: Option<&RevisionId>,
+    ) -> Result<()> {
         let code: String = tx
             .query_row(
                 "SELECT code FROM revisions WHERE app=? AND id=?",
@@ -233,21 +280,55 @@ impl Store {
             }
         }
         validate_records(&records)?;
+        let sqlite = tx
+            .query_row("SELECT image FROM app_sqlite WHERE app=?", [&app.0], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or_default();
         tx.commit()?;
         Ok(Snapshot {
             app: app.clone(),
             revision: revision.map(RevisionId),
             version,
             records,
+            sqlite,
         })
     }
+    #[cfg(test)]
     pub(crate) fn commit(
         &self,
         before: &Snapshot,
         after: &Records,
+        notices: &[notifications::Change],
+        check: impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        self.commit_with_sqlite(before, after, &before.sqlite, notices, check)
+    }
+    #[cfg(test)]
+    pub(crate) fn commit_with_sqlite(
+        &self,
+        before: &Snapshot,
+        after: &Records,
+        sqlite: &[u8],
+        notices: &[notifications::Change],
+        check: impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        self.commit_action(before, after, sqlite, notices, None, check)
+    }
+    pub(crate) fn commit_action(
+        &self,
+        before: &Snapshot,
+        after: &Records,
+        sqlite: &[u8],
+        notices: &[notifications::Change],
+        completed: Option<(&InvocationId, &runtime::Outcome)>,
         check: impl Fn() -> Result<()>,
     ) -> Result<()> {
         validate_records(after)?;
+        if sqlite.len() > app_sqlite::MAX_BYTES {
+            return Err(Error::Limit);
+        }
         let mut db = self.open()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if tx.execute("UPDATE apps SET record_version=record_version+1 WHERE id=? AND record_version=? AND published_revision IS ?",params![before.app.0,before.version,before.revision.as_ref().map(|r| &r.0)])? != 1 { return Err(Error::Conflict); }
@@ -262,6 +343,13 @@ impl Store {
             .filter(|(k, v)| before.records.get(*k) != Some(*v))
         {
             tx.execute("INSERT INTO records VALUES(?,?,?) ON CONFLICT(app,key) DO UPDATE SET value=excluded.value",params![before.app.0,key,value.to_string()])?;
+        }
+        if sqlite != before.sqlite {
+            tx.execute("INSERT INTO app_sqlite(app,image) VALUES(?,?) ON CONFLICT(app) DO UPDATE SET image=excluded.image", params![before.app.0, sqlite])?;
+        }
+        notifications::apply(&tx, &before.app, notices)?;
+        if let Some((id, outcome)) = completed {
+            Self::save_invocation_outcome(&tx, id, &Ok(outcome))?;
         }
         check()?;
         tx.commit()?;
@@ -290,8 +378,40 @@ fn encode(v: &impl serde::Serialize) -> Result<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn failed_additive_schema_installation_rolls_back_and_can_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        // An incompatible extension makes the late index creation fail, after
+        // notification/lifecycle tables would previously have been committed.
+        db.execute_batch("CREATE TABLE model_request_events(id INTEGER PRIMARY KEY);")
+            .unwrap();
+        assert!(Store::create(&path).is_err());
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='notifications')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            4
+        );
+        db.execute_batch("DROP TABLE model_request_events;")
+            .unwrap();
+        let store = Store::create(&path).unwrap();
+        let app = store.create_app("Survives reopen").unwrap();
+        let reopened = Store::create(&path).unwrap();
+        assert!(reopened.snapshot(&app).is_ok());
+    }
     fn code() -> AppCode {
         AppCode {
+            sqlite: false,
             backend: "fn list(input) { [] }".into(),
             frontend: "".into(),
             actions: vec![ActionContract {
@@ -319,13 +439,13 @@ mod tests {
         let mut records = before.records.clone();
         records.insert("keep".into(), json!(1));
         assert_eq!(
-            store.commit(&before, &records, || Err(Error::Cancelled)),
+            store.commit(&before, &records, &[], || Err(Error::Cancelled)),
             Err(Error::Cancelled)
         );
         assert!(store.snapshot(&app).unwrap().records.is_empty());
-        store.commit(&before, &records, || Ok(())).unwrap();
+        store.commit(&before, &records, &[], || Ok(())).unwrap();
         assert_eq!(
-            store.commit(&before, &Records::new(), || Ok(())),
+            store.commit(&before, &Records::new(), &[], || Ok(())),
             Err(Error::Conflict)
         );
         let next = store.freeze_draft(&draft.id, 1).unwrap();
@@ -353,7 +473,7 @@ mod tests {
                     barrier.wait();
                     let mut records = before.records.clone();
                     records.insert("winner".into(), json!(n));
-                    store.commit(&before, &records, || Ok(()))
+                    store.commit(&before, &records, &[], || Ok(()))
                 })
             })
             .collect();
@@ -447,6 +567,67 @@ impl Store {
                 request.action
             ],
         )?;
+        tx.execute(
+            "INSERT INTO invocation_outcomes(invocation,request) VALUES(?,?)",
+            params![request.id.0, encode(request)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn invocation_outcome(
+        &self,
+        request: &runtime::Invocation,
+    ) -> Result<Option<Result<runtime::Outcome>>> {
+        let row: Option<(String, Option<String>)> = self
+            .open()?
+            .query_row(
+                "SELECT request,outcome FROM invocation_outcomes WHERE invocation=?",
+                [&request.id.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((original, outcome)) => {
+                if original != encode(request)? {
+                    return Err(Error::DuplicateInvocation);
+                }
+                outcome
+                    .map(|s| serde_json::from_str(&s).map_err(|_| Error::Storage))
+                    .transpose()
+            }
+            None => Ok(None),
+        }
+    }
+    pub(crate) fn save_invocation_outcome(
+        db: &Connection,
+        id: &InvocationId,
+        outcome: &Result<&runtime::Outcome>,
+    ) -> Result<()> {
+        db.execute(
+            "UPDATE invocations SET state=? WHERE id=?",
+            params![
+                if outcome.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                },
+                id.0
+            ],
+        )?;
+        db.execute(
+            "UPDATE invocation_outcomes SET outcome=? WHERE invocation=?",
+            params![encode(outcome)?, id.0],
+        )?;
+        Ok(())
+    }
+    pub(crate) fn finish_invocation(
+        &self,
+        id: &InvocationId,
+        outcome: &Result<runtime::Outcome>,
+    ) -> Result<()> {
+        let mut db = self.open()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::save_invocation_outcome(&tx, id, &outcome.as_ref().map_err(|e| *e))?;
         tx.commit()?;
         Ok(())
     }
@@ -482,6 +663,7 @@ mod effect_tests {
         let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
         let app = store.create_app("External").unwrap();
         let code = AppCode {
+            sqlite: false,
             backend: "fn run(input) { [] }".into(),
             frontend: "".into(),
             actions: vec![ActionContract {

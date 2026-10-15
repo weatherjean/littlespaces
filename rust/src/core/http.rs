@@ -103,7 +103,7 @@ impl Broker {
     ) -> Result<Value> {
         let host = url.host_str().ok_or(Error::Network)?;
         let addresses = tokio::time::timeout(
-            Duration::from_millis(500),
+            Duration::from_secs(30),
             tokio::net::lookup_host((host, 443)),
         )
         .await
@@ -116,8 +116,8 @@ impl Broker {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_millis(500))
-            .connect_timeout(Duration::from_millis(250))
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .resolve_to_addrs(host, &addresses)
             .build()
             .map_err(|_| Error::Network)?;
@@ -279,6 +279,7 @@ mod tests {
             .create_draft(
                 &app,
                 AppCode {
+                    sqlite: false,
                     backend: "fn run(input) { [] }".into(),
                     frontend: "".into(),
                     actions: vec![ActionContract {

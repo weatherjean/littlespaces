@@ -32,7 +32,7 @@ impl BrowserConfig {
 pub(crate) struct Preview {
     pub app: AppId,
     pub revision: RevisionId,
-    pub records: Arc<tokio::sync::Mutex<Records>>,
+    pub records: Arc<tokio::sync::Mutex<(Records, Vec<u8>)>>,
     pub http: super::http::MockHttp,
     expires: i64,
 }
@@ -56,9 +56,9 @@ impl Previews {
             Preview {
                 app,
                 revision,
-                records: Arc::new(tokio::sync::Mutex::new(Records::new())),
+                records: Arc::new(tokio::sync::Mutex::new((Records::new(), Vec::new()))),
                 http,
-                expires: now() + 120,
+                expires: now() + 15 * 60,
             },
         );
         Ok(ticket)
@@ -142,6 +142,9 @@ pub async fn test(
                     Ok(())
                 })
                 .await?;
+        }
+        if report["passed"] != true {
+            runtime.diagnostic(&revision, "frontend", "browser", report.clone());
         }
         Ok(report)
     };

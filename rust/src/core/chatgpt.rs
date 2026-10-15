@@ -307,7 +307,7 @@ impl ChatGpt {
             ])
             .send()
             .await
-            .map_err(|_| Error::Authentication)?;
+            .map_err(|_| Error::Network)?;
         let tokens: Tokens = self.bounded_json(response).await?;
         validate_tokens(&tokens)?;
         let keys: JwkSet = self
@@ -316,7 +316,7 @@ impl ChatGpt {
                     .get(JWKS)
                     .send()
                     .await
-                    .map_err(|_| Error::Authentication)?,
+                    .map_err(|_| Error::Network)?,
             )
             .await?;
         let identity = validate_identity(&tokens.id_token, &client_id, &attempt.nonce, &keys)?;
@@ -349,10 +349,10 @@ impl ChatGpt {
         limit_error: Error,
     ) -> Result<T> {
         if !response.status().is_success() {
-            return Err(Error::Authentication);
+            return Err(super::provider_errors::response_error(response).await);
         }
         let mut bytes = Zeroizing::new(Vec::new());
-        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Authentication)? {
+        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Network)? {
             if bytes.len() + chunk.len() > max_bytes {
                 return Err(limit_error);
             }
@@ -385,7 +385,7 @@ impl ChatGpt {
                 ])
                 .send()
                 .await
-                .map_err(|_| Error::Authentication)?;
+                .map_err(|_| Error::Network)?;
             let t: Tokens = self.bounded_json(response).await?;
             validate_tokens(&t)?;
             c.access_token = t.access_token.clone();
@@ -427,7 +427,7 @@ impl ChatGpt {
             .iter()
             .filter(|m| m["visibility"] == "list")
             .filter_map(|m| Some(
-                json!({"slug":m["slug"].as_str()?,"display_name":m["display_name"].as_str()?})
+                json!({"slug":m["slug"].as_str()?,"display_name":m["display_name"].as_str()?,"efforts":m["supported_reasoning_levels"].as_array().map(|levels| levels.iter().filter_map(|level|level.as_str().or_else(||level["effort"].as_str())).filter(|level|["none","minimal","low","medium","high","xhigh","max","ultra"].contains(level)).collect::<Vec<_>>()).unwrap_or_default()})
             ))
             .collect::<Vec<_>>()))
     }

@@ -17,3 +17,30 @@ pub mod interactions;
 pub mod owner;
 pub mod schedules;
 pub mod server;
+
+pub mod notifications;
+
+pub mod images;
+
+pub mod app_sqlite;
+
+mod skills;
+
+mod provider_errors;
+mod workflow;
+
+pub mod releases;
+
+#[cfg(debug_assertions)]
+pub mod testing;
+pub mod workspace;
+
+mod migrations;
+mod telemetry;
+
+mod evaluator;
+pub mod worker;
+
+pub mod history;
+
+pub mod maintenance;

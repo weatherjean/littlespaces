@@ -1,41 +1,45 @@
+import { useChatSync } from './chat-sync.js';
+import { useAppletBridge } from './applet-bridge.js';
+import { releaseActions } from './releases.js';
+import { useHistory } from './history.js';
+import { ReleaseReview } from './release-review.jsx';
+import { prepareImage } from './images.js';
 import { h, render, Fragment } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { BrandMark, Icon, appEmoji, ConnectionNotice } from './ui.jsx';
 import { ChatPanel, Modal, useChatViewport } from './chat.jsx';
+import { Notifications } from './notifications.jsx';
 import { Settings } from './settings.jsx';
-const errors = {
-  limit:
-    'This request exceeded a workspace safety limit. Your draft is kept; you can edit it or start a new conversation.',
-  model_catalog_limit:
-    'ChatGPT returned an unusually large model catalog. Your message draft is kept. Retry model loading or reconnect ChatGPT.',
-  authentication: 'Reconnect ChatGPT and confirm permission to use your plan.',
-  model: 'ChatGPT could not complete this request. Check your connection and account settings.',
-  usage_limit: 'Your ChatGPT usage limit has been reached. Check Usage in ChatGPT Settings.',
-  usage_unavailable: 'ChatGPT plan usage is unavailable for this account or workspace.',
-  model_incomplete:
-    'ChatGPT returned an incomplete response. No tools from that response were dispatched.',
-  stream_interrupted:
-    'The response stream ended before completion. No tools from that response were dispatched.',
-  browser_unavailable:
-    'Automated browser verification is unavailable. Review the isolated preview before publishing.',
-  external_uncertain:
-    'An external operation needs owner review before another live call. Inspect effect evidence before retrying.',
-  unauthorized: 'Sign in to your workspace again.',
-  untested: 'This revision still needs backend tests and frontend verification.',
-};
-function explain(error) {
-  return errors[error] || String(error);
-}
+import { explain, ApiError } from './errors.js';
 let csrf = '';
 async function api(path, body) {
-  const response = await fetch(path, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: body === undefined ? {} : { 'content-type': 'application/json', 'x-csrf-token': csrf },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const value = await response.json();
-  if (!response.ok) throw Error(explain(value.error || 'Request failed'));
-  return value;
+  const controller = new AbortController();
+  // GETs reconnect quickly. Writes may legitimately run a bounded app action;
+  // never automatically retry them after a lost response.
+  const timer = setTimeout(() => controller.abort(), body === undefined ? 15000 : 330000);
+  try {
+    const response = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers:
+        body === undefined ? {} : { 'content-type': 'application/json', 'x-csrf-token': csrf },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    let value;
+    try {
+      value = await response.json();
+    } catch {
+      throw new ApiError('model');
+    }
+    if (!response.ok)
+      throw new ApiError(value.error || (response.status === 401 ? 'unauthorized' : 'model'));
+    return value;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError('connection_lost');
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function initialRoute() {
   const p = location.pathname;
@@ -64,23 +68,35 @@ function App() {
   const initial = useRef(initialRoute()).current;
   const [session, setSession] = useState(null),
     [error, setError] = useState(''),
+    [authBusy, setAuthBusy] = useState(false),
     [apps, setApps] = useState([]),
     [selected, setSelected] = useState(initial.app),
     [detail, setDetail] = useState(null),
     [view, setView] = useState(initial.view),
-    [conversation, setConversation] = useState(initial.conversation),
+    [conversation, setConversationState] = useState(initial.conversation),
     [conversations, setConversations] = useState([]),
+    [conversationInfo, setConversationInfo] = useState(null),
     [messages, setMessages] = useState([]),
+    [historyLoading, setHistoryLoading] = useState(!!initial.conversation),
     [prompt, setPrompt] = useState(''),
+    [attachments, setAttachments] = useState([]),
+    [uploading, setUploading] = useState(false),
     [job, setJob] = useState(null),
+    [reconnecting, setReconnecting] = useState(false),
+    [reconnectEpoch, setReconnectEpoch] = useState(0),
     [models, setModels] = useState([]),
     [model, setModel] = useState(readPreference('little-spaces-model')),
+    [effort, setEffort] = useState(
+      readPreference(`little-spaces-effort:${readPreference('little-spaces-model')}`, 'default'),
+    ),
     [modelsLoading, setModelsLoading] = useState(false),
     [connection, setConnection] = useState(null),
     [secretNames, setSecretNames] = useState([]),
     [scheduleList, setScheduleList] = useState([]),
     [preview, setPreview] = useState(null),
     [previewUrl, setPreviewUrl] = useState(null),
+    [previewActionUrl, setPreviewActionUrl] = useState(null),
+    [previewTicket, setPreviewTicket] = useState(null),
     [previewVersion, setPreviewVersion] = useState(null),
     [expert, setExpertState] = useState(readPreference('little-spaces-expert') === 'true'),
     [setupToken, setSetupToken] = useState(
@@ -90,6 +106,10 @@ function App() {
     [optionsOpen, setOptionsOpen] = useState(false),
     [versionsOpen, setVersionsOpen] = useState(false),
     [versions, setVersions] = useState([]),
+    [releases, setReleases] = useState([]),
+    [releasePlans, setReleasePlans] = useState([]),
+    [releaseReview, setReleaseReview] = useState(null),
+    [releaseBusy, setReleaseBusy] = useState(false),
     [search, setSearch] = useState(''),
     [frameEpoch, setFrameEpoch] = useState(0),
     [busy, setBusy] = useState(false),
@@ -100,10 +120,29 @@ function App() {
     bridgeCount = useRef(0),
     selection = useRef(selected),
     jobRef = useRef(job),
-    chatEpoch = useRef(0);
+    chatEpoch = useRef(0),
+    conversationRef = useRef(conversation),
+    sending = useRef(false),
+    uploadLatch = useRef(false),
+    previewImages = useRef(new Map());
   selection.current = selected;
   jobRef.current = job;
   useChatViewport();
+  // Invalidate outstanding reads immediately, before Preact renders the new chat.
+  function setConversation(id) {
+    if (conversationRef.current !== id) {
+      chatEpoch.current++;
+      conversationRef.current = id;
+      setMessages([]);
+      setHistoryLoading(!!id);
+      setProposals([]);
+      jobRef.current = null;
+      setJob(null);
+      setPrompt('');
+      setAttachments([]);
+    }
+    setConversationState(id);
+  }
   async function attempt(work) {
     setError('');
     try {
@@ -125,6 +164,7 @@ function App() {
   }
   function selectModel(value) {
     setModel(value);
+    setEffort(readPreference(`little-spaces-effort:${value}`, 'default'));
     preference('little-spaces-model', value);
   }
   function navigate(next, { app = selected, chat = conversation } = {}) {
@@ -152,10 +192,18 @@ function App() {
       setPreviewUrl(null);
     } else setSelected(app);
   }
+  const historyPages = useHistory(
+    api,
+    setMessages,
+    setConversations,
+    conversationRef,
+    setError,
+    session?.authenticated,
+  );
   async function refresh() {
     const [list, chats, account] = await Promise.all([
       api('/api/apps'),
-      api('/api/conversations'),
+      historyPages.list(),
       api('/api/chatgpt'),
     ]);
     setApps(list);
@@ -164,7 +212,10 @@ function App() {
     const app = selection.current;
     if (app) {
       const data = await api(`/api/apps/${app}`);
-      if (selection.current === app) setDetail(data);
+      if (selection.current === app) {
+        setDetail(data);
+        setReleasePlans(await api(`/api/apps/${app}/release-plans`));
+      }
     }
   }
   useEffect(() => {
@@ -198,63 +249,39 @@ function App() {
     setDetail(null);
     attempt(async () => {
       const data = await api(`/api/apps/${selected}`);
-      if (active) setDetail(data);
+      if (active) {
+        setDetail(data);
+        const plans = await api(`/api/apps/${selected}/release-plans`);
+        if (active) setReleasePlans(plans);
+      }
     });
     return () => {
       active = false;
     };
   }, [selected, session?.authenticated]);
-  useEffect(() => {
-    if (!conversation || !session?.authenticated) {
-      setMessages([]);
-      return;
-    }
-    const epoch = ++chatEpoch.current;
-    attempt(async () => {
-      const values = await api(`/api/conversations/${conversation}`);
-      if (chatEpoch.current === epoch) {
-        setMessages(values);
-        setProposals(await api(`/api/conversations/${conversation}/proposals`));
-      }
-    });
-  }, [conversation, session?.authenticated]);
-  useEffect(() => {
-    if ((view === 'chat' || view === 'voice') && conversation && !selected) {
-      const current = conversations.find((c) => c.id === conversation);
-      if (current?.app) setSelected(current.app);
-      if (current?.job && !job) attempt(async () => setJob(await api(`/api/jobs/${current.job}`)));
-    }
-  }, [conversations, conversation, view]);
-  useEffect(() => {
-    if (!session?.authenticated || !job || job.state !== 'running') return;
-    let active = true,
-      inFlight = false;
-    const timer = setInterval(async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const value = await api(`/api/jobs/${job.id}`);
-        if (!active) return;
-        setJob(value);
-        if (value.state !== 'running') {
-          const values = await api(`/api/conversations/${conversation}`);
-          if (active) {
-            setMessages(values);
-            setProposals(await api(`/api/conversations/${conversation}/proposals`));
-          }
-          await refresh();
-        }
-      } catch (e) {
-        if (active) setError(e.message);
-      } finally {
-        inFlight = false;
-      }
-    }, 300);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [job?.id, job?.state, conversation, session?.authenticated]);
+  useChatSync({
+    api,
+    conversation,
+    session,
+    job,
+    reconnectEpoch,
+    chatEpoch,
+    jobRef,
+    sending,
+    setMessages,
+    setProposals,
+    setJob,
+    setHistoryLoading,
+    setReconnecting,
+    setReconnectEpoch,
+    setError,
+    setConversations,
+    setConversationInfo,
+    setSelected,
+    setFrameEpoch,
+    refresh,
+    historyPages,
+  });
   useEffect(() => {
     if (view === 'settings' && session?.authenticated)
       attempt(async () => {
@@ -262,48 +289,7 @@ function App() {
         setScheduleList(await api('/api/schedules'));
       });
   }, [view, session?.authenticated]);
-  useEffect(() => {
-    async function onMessage(e) {
-      const c = context.current;
-      if (e.source !== frame.current?.contentWindow || !c || !e.data || typeof e.data !== 'object')
-        return;
-      if (e.data.kind === 'diagnostic') {
-        const message = String(e.data.message).slice(0, 2000);
-        setError(message);
-        api(`/api/diagnostics/${c.app}/${c.revision}`, { message }).catch(() => {});
-        return;
-      }
-      if (
-        e.data.kind !== 'action' ||
-        !Number.isSafeInteger(e.data.id) ||
-        typeof e.data.action !== 'string' ||
-        bridgeCount.current >= 16
-      )
-        return;
-      bridgeCount.current++;
-      let result, error;
-      try {
-        const value = await api('/api/action', {
-          id: crypto.randomUUID(),
-          app: c.app,
-          revision: c.revision,
-          action: e.data.action,
-          input: e.data.input,
-          mode: c.preview ? 'dry_run' : 'commit',
-        });
-        if (value.error) throw Error(explain(value.error));
-        result = value.result.result;
-      } catch (e) {
-        error = e.message;
-      } finally {
-        bridgeCount.current--;
-      }
-      if (context.current?.app !== c.app || context.current?.revision !== c.revision) return;
-      e.source.postMessage({ kind: 'result', id: e.data.id, result, error }, '*');
-    }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
+  useAppletBridge({ api, context, frame, bridgeCount, previewImages, setError });
   async function loadModels() {
     if (modelsLoading) return;
     setModelsLoading(true);
@@ -324,24 +310,29 @@ function App() {
     });
   }
   function openConversation(c, overlay = false) {
+    if (c.id === conversationRef.current) return;
     setPrompt('');
     setJob(null);
     setConversation(c.id);
     setSelected(c.app);
-    if (c.job) attempt(async () => setJob(await api(`/api/jobs/${c.job}`)));
     if (overlay) setChatOpen(true);
-    else navigate('chat', { app: c.app, chat: c.id });
+    else navigate(view === 'voice' ? 'voice' : 'chat', { app: c.app, chat: c.id });
   }
   async function newChat(app = null, overlay = false, voice = false) {
-    const value = await api('/api/conversations', { app });
-    setMessages([]);
-    setPrompt('');
-    setJob(null);
-    setConversation(value.conversation);
-    setSelected(app);
-    if (overlay) setChatOpen(true);
-    else navigate(voice ? 'voice' : 'chat', { app, chat: value.conversation });
-    await refresh();
+    if (sending.current) return;
+    sending.current = true;
+    setBusy(true);
+    try {
+      const value = await api('/api/conversations', { app });
+      setConversation(value.conversation);
+      setSelected(app);
+      if (overlay) setChatOpen(true);
+      else navigate(voice ? 'voice' : 'chat', { app, chat: value.conversation });
+      await refresh();
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
   }
   async function openAppChat() {
     await newChat(selected, true);
@@ -367,30 +358,95 @@ function App() {
     navigate('chat', { app: selected, chat: value.conversation });
     await refresh();
   }
+  async function attachImages(files) {
+    if (uploadLatch.current) return;
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length + attachments.length > 4) {
+      setError('Attach up to four images per message.');
+      return;
+    }
+    uploadLatch.current = true;
+    setUploading(true);
+    const epoch = chatEpoch.current;
+    try {
+      for (const file of selectedFiles) {
+        const dataUrl = await prepareImage(file);
+        const image = await api('/api/images', {
+          name: file.name,
+          dataUrl,
+          app: active?.app || (view === 'app' ? selected : null),
+        });
+        if (epoch !== chatEpoch.current) return;
+        setAttachments((items) => [...items, image]);
+      }
+    } catch (e) {
+      if (epoch === chatEpoch.current) setError(e.message);
+    } finally {
+      uploadLatch.current = false;
+      setUploading(false);
+    }
+  }
   async function send(voiceText) {
-    if (busy) return;
+    const sentPrompt = (typeof voiceText === 'string' ? voiceText : prompt).trim();
+    const sentImages = typeof voiceText === 'string' ? [] : attachments;
+    if (
+      uploadLatch.current ||
+      sending.current ||
+      ['running', 'queued'].includes(jobRef.current?.state) ||
+      (!sentPrompt && !sentImages.length) ||
+      !model
+    )
+      return;
+    sending.current = true;
     setBusy(true);
-    const sentPrompt = typeof voiceText === 'string' ? voiceText : prompt;
-    await attempt(async () => {
-      let id = conversation;
+    setError('');
+    // Keep dictated words editable if the request fails.
+    if (typeof voiceText === 'string') setPrompt(sentPrompt);
+    let id = conversationRef.current;
+    let epoch = chatEpoch.current;
+    try {
       if (!id) {
         const value = await api('/api/conversations', { app: selected });
+        if (epoch !== chatEpoch.current) return;
         id = value.conversation;
         setConversation(id);
+        setPrompt(sentPrompt);
+        setAttachments(sentImages);
         if (view === 'chat' || view === 'voice')
           history.replaceState(null, '', `${view === 'voice' ? '/voice' : '/chat'}/${id}`);
       }
       const value = await api(`/api/conversations/${id}/send`, {
         message: sentPrompt,
         model,
+        effort: models.find((m) => m.slug === model)?.efforts?.includes(effort)
+          ? effort
+          : undefined,
         voice: view === 'voice',
+        images: sentImages.map((image) => image.id),
       });
-      setJob({ id: value.job, state: 'running', payload: { text: '' } });
-      setPrompt((current) => (current === sentPrompt ? '' : current));
-      setMessages(await api(`/api/conversations/${id}`));
+      if (conversationRef.current !== id) return;
+      const running = { id: value.job, state: 'running', payload: { text: '' } };
+      jobRef.current = running;
+      setJob(running);
+      setPrompt((current) => (current.trim() === sentPrompt ? '' : current));
+      setAttachments((items) =>
+        items.filter((image) => !sentImages.some((sent) => sent.id === image.id)),
+      );
+      const values = await historyPages.read(id);
+      if (conversationRef.current === id) setMessages(values);
       await refresh();
-    });
-    setBusy(false);
+    } catch (e) {
+      if (conversationRef.current === id) {
+        setError(e.message);
+        if (e.code === 'connection_lost') {
+          setReconnecting(true);
+          setReconnectEpoch((value) => value + 1);
+        }
+      }
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
   }
   async function decideProposal(id, confirm) {
     if (proposalBusy) return;
@@ -398,14 +454,18 @@ function App() {
     await attempt(async () => {
       const result = await api(`/api/conversations/${conversation}/proposals/${id}`, { confirm });
       setProposals(await api(`/api/conversations/${conversation}/proposals`));
-      if (result.app && confirm) {
+      if (confirm) await refresh();
+      if (result.app && result.conversation && confirm) {
         setSelected(result.app);
         setConversation(result.conversation);
         navigate('chat', { app: result.app, chat: result.conversation });
         await refresh();
         await api(`/api/conversations/${result.conversation}/send`, {
-          message: `Build the approved app: ${result.purpose}`,
+          message: `Implement the approved app changes: ${result.purpose}`,
           model,
+          effort: models.find((m) => m.slug === model)?.efforts?.includes(effort)
+            ? effort
+            : undefined,
         }).then((v) => setJob({ id: v.job, state: 'running', payload: { text: '' } }));
       }
     });
@@ -416,20 +476,44 @@ function App() {
     const draft = await api(`/api/authoring/${conversation}`, { tool: 'read_draft' });
     setPreview(id);
     setPreviewUrl(value.url);
+    setPreviewActionUrl(value.actionUrl);
+    setPreviewTicket(value.ticket);
     setPreviewVersion(draft.version);
     navigate('app', { app: selected });
   }
-  async function showVersions() {
-    setOptionsOpen(false);
-    const items = await api(`/api/revisions/${selected}`);
-    setVersions(items);
-    setVersionsOpen(true);
-  }
+  useEffect(() => {
+    if (!preview || !previewTicket) return;
+    return () => {
+      previewImages.current.clear();
+      api('/api/owner-preview-close', { ticket: previewTicket }).catch(() => {});
+    };
+  }, [preview, previewTicket]);
+  const { showVersions, prepareRevert, applyRelease } = releaseActions({
+    api,
+    selected,
+    releaseBusy,
+    releaseReview,
+    setOptionsOpen,
+    setVersions,
+    setReleases,
+    setReleasePlans,
+    setVersionsOpen,
+    setReleaseBusy,
+    setError,
+    setReleaseReview,
+    setFrameEpoch,
+    setReconnectEpoch,
+    refresh,
+  });
   const appName = apps.find((a) => a.id === selected)?.title,
-    active = conversations.find((c) => c.id === conversation),
+    active =
+      conversations.find((c) => c.id === conversation) ||
+      (conversationInfo?.id === conversation ? conversationInfo : null),
     revision = preview || detail?.revision?.id;
   context.current =
-    view === 'app' && selected && revision ? { app: selected, revision, preview: !!preview } : null;
+    view === 'app' && selected && revision
+      ? { app: selected, revision, preview: !!preview, actionUrl: previewActionUrl }
+      : null;
   if (!session)
     return (
       <main class="login-page">
@@ -479,6 +563,8 @@ function App() {
                 e.preventDefault();
                 const data = new FormData(e.currentTarget),
                   password = data.get('password');
+                if (authBusy) return;
+                setAuthBusy(true);
                 attempt(async () => {
                   if (registering) {
                     if (password !== data.get('confirmation'))
@@ -489,7 +575,7 @@ function App() {
                   const value = await api('/api/login', { password });
                   csrf = value.csrf;
                   setSession({ configured: true, authenticated: true });
-                });
+                }).finally(() => setAuthBusy(false));
               }}
             >
               <label for="password">Password</label>
@@ -497,6 +583,7 @@ function App() {
                 id="password"
                 name="password"
                 type="password"
+                aria-describedby={registering ? 'password-help' : undefined}
                 minLength={registering ? 15 : undefined}
                 required
                 autoComplete={registering ? 'new-password' : 'current-password'}
@@ -522,22 +609,44 @@ function App() {
                   {error}
                 </p>
               )}
-              <button class="primary-button">{registering ? 'Create account' : 'Sign in'}</button>
+              <button class="primary-button" disabled={authBusy}>
+                {authBusy
+                  ? registering
+                    ? 'Creating account…'
+                    : 'Signing in…'
+                  : registering
+                    ? 'Create account'
+                    : 'Sign in'}
+              </button>
             </form>
           )}
         </section>
       </main>
     );
   }
+  const homeApps = apps.filter((app) => !app.archived);
   const chatProps = {
+    historyPages,
     apps,
     conversations,
+    conversationInfo: conversationInfo?.id === conversation ? conversationInfo : null,
     conversation,
     messages,
     job,
+    loading: historyLoading,
+    sending: busy,
     prompt,
     setPrompt,
+    attachments,
+    uploading,
+    onAttachImages: attachImages,
+    onRemoveImage: (id) => setAttachments((items) => items.filter((image) => image.id !== id)),
     model,
+    effort,
+    setEffort: (value) => {
+      setEffort(value);
+      preference(`little-spaces-effort:${model}`, value);
+    },
     setModel: selectModel,
     models,
     modelsLoading,
@@ -557,6 +666,19 @@ function App() {
     onSelect: (c) => openConversation(c, chatOpen),
     onSend: () => send(),
     onVoiceSend: send,
+    onSeenReply: (id) => api('/api/notifications', { seenJob: id }),
+    reconnecting,
+    onResume: () =>
+      attempt(async () => {
+        try {
+          const result = await api(`/api/jobs/${job.id}/resume`, {});
+          setJob(await api(`/api/jobs/${result.job}`));
+        } finally {
+          setReconnectEpoch((value) => value + 1);
+        }
+      }),
+    releasePlans,
+    onReviewRelease: (plan) => setReleaseReview({ ...plan, app: selected }),
     proposals,
     proposalBusy,
     onDecide: decideProposal,
@@ -622,16 +744,24 @@ function App() {
                 </span>
                 <span>
                   <strong>Start a chat</strong>
-                  <small>Ask a question or plan your day</small>
+                  <small>Ask, plan, or create an app</small>
                 </span>
                 <Icon name="plus" />
               </button>
             </div>
             <div class="apps-heading">
               <h2>Your apps</h2>
-              <span>{apps.length}</span>
+              <span>{homeApps.length}</span>
+
+              <button
+                class="icon-button reload-home"
+                aria-label="Reload home"
+                onClick={() => attempt(refresh)}
+              >
+                <Icon name="reload" size={17} />
+              </button>
             </div>
-            {apps.length > 6 && (
+            {homeApps.length > 6 && (
               <label class="app-search">
                 <Icon name="search" />
                 <input
@@ -641,16 +771,27 @@ function App() {
                   value={search}
                   onInput={(e) => setSearch(e.target.value)}
                 />
+                {search && (
+                  <button
+                    type="button"
+                    class="icon-button"
+                    aria-label="Clear app search"
+                    onClick={() => setSearch('')}
+                  >
+                    <Icon name="close" size={18} />
+                  </button>
+                )}
               </label>
             )}
             <div class="app-grid">
-              {apps
+              {homeApps
                 .filter((a) => a.title.toLowerCase().includes(search.trim().toLowerCase()))
                 .map((a, i) => (
                   <button
                     class="app-tile"
                     key={a.id}
                     aria-label={a.title}
+                    title={a.title}
                     onClick={() => {
                       setPreview(null);
                       setPreviewUrl(null);
@@ -659,14 +800,14 @@ function App() {
                   >
                     <span class={`app-icon icon-tone-${i % 4}`}>
                       <span class="app-emoji" aria-hidden="true">
-                        {appEmoji(a.title)}
+                        {a.emoji || appEmoji(a.title)}
                       </span>
                     </span>
                     <span>{a.title}</span>
                     {!a.revision && <small>In progress</small>}
                   </button>
                 ))}
-              {!!apps.length && (
+              {!!homeApps.length && (
                 <button class="app-tile create-tile" onClick={() => attempt(() => newChat())}>
                   <span class="app-icon">
                     <Icon name="plus" size={28} />
@@ -675,7 +816,8 @@ function App() {
                 </button>
               )}
             </div>
-            {!apps.length && (
+
+            {!homeApps.length && (
               <div class="launcher-empty">
                 <span class="empty-symbol">
                   <Icon name="grid" size={28} />
@@ -691,12 +833,28 @@ function App() {
                 </button>
               </div>
             )}
-            {apps.length > 0 &&
-              !apps.some((a) => a.title.toLowerCase().includes(search.trim().toLowerCase())) && (
+            {homeApps.length > 0 &&
+              !homeApps.some((a) =>
+                a.title.toLowerCase().includes(search.trim().toLowerCase()),
+              ) && (
                 <p class="launcher-hint" role="status">
                   No apps match “{search}”.
                 </p>
               )}
+            <Notifications
+              api={api}
+              attempt={attempt}
+              navigate={(href) => {
+                const match = href.match(/^\/(chat|apps)\/(.+)$/);
+                if (match) {
+                  if (match[1] === 'chat') setConversation(match[2]);
+                  navigate(
+                    match[1] === 'chat' ? 'chat' : 'app',
+                    match[1] === 'chat' ? { chat: match[2] } : { app: match[2] },
+                  );
+                } else navigate('home');
+              }}
+            />
           </section>
         </main>
       )}
@@ -705,10 +863,9 @@ function App() {
           {preview && (
             <div class="preview-banner">
               <div>
-                <strong>Tested app preview</strong>
+                <strong>App preview</strong>
                 <p>
-                  Isolated records and mocked HTTP. Review before publishing; published backends can
-                  use workspace secrets.
+                  Try the app with temporary data. Changes here won’t affect your saved records.
                 </p>
               </div>
               <button
@@ -726,7 +883,10 @@ function App() {
                   })
                 }
               >
-                Approve preview and publish
+                Use this app
+              </button>
+              <button class="secondary-button" onClick={() => setFrameEpoch((n) => n + 1)}>
+                Reload preview
               </button>
               <button
                 class="icon-button"
@@ -743,7 +903,7 @@ function App() {
           <div class="app-canvas">
             {detail && revision ? (
               <iframe
-                key={`${selected}:${revision}:${frameEpoch}`}
+                key={`${selected}:${revision}:${preview ? previewUrl : 'live'}:${frameEpoch}`}
                 ref={frame}
                 title="Applet"
                 sandbox="allow-scripts allow-forms"
@@ -753,7 +913,7 @@ function App() {
               <div class="empty-app">
                 <span class="app-icon icon-chat">
                   <span class="app-emoji" aria-hidden="true">
-                    {appEmoji(appName)}
+                    {apps.find((a) => a.id === selected)?.emoji || appEmoji(appName)}
                   </span>
                 </span>
                 <h1>{appName || 'Your app'}</h1>
@@ -780,7 +940,9 @@ function App() {
                 setFrameEpoch((n) => n + 1);
               }}
             >
-              <span aria-hidden="true">{appEmoji(appName)}</span>
+              <span aria-hidden="true">
+                {apps.find((a) => a.id === selected)?.emoji || appEmoji(appName)}
+              </span>
             </button>
             <button class="dock-chat" onClick={() => attempt(openAppChat)}>
               <Icon name="chat" size={19} />
@@ -804,7 +966,7 @@ function App() {
       )}
       {(view === 'chat' || view === 'voice') && (
         <main class="builtin-app mobile-chat">
-          <ChatPanel {...chatProps} standalone />
+          <ChatPanel key={`${view}:${conversation}`} {...chatProps} standalone />
         </main>
       )}
       {view === 'settings' && (
@@ -891,7 +1053,7 @@ function App() {
               attempt(refresh);
             }}
           >
-            <Icon name="history" size={19} />
+            <Icon name="reload" size={19} />
             Refresh app
           </button>
           <button
@@ -906,6 +1068,19 @@ function App() {
           <button disabled={!detail?.revision} onClick={() => attempt(showVersions)}>
             <Icon name="history" size={19} />
             Versions & tests
+          </button>
+          <button
+            onClick={() =>
+              attempt(async () => {
+                await api(`/api/apps/${selected}/archive`, { archived: true });
+                setOptionsOpen(false);
+                await refresh();
+                navigate('home');
+              })
+            }
+          >
+            <Icon name="archive" size={19} />
+            Archive app
           </button>
           <button
             onClick={() => {
@@ -938,6 +1113,50 @@ function App() {
           </button>
         </header>
         <div class="dialog-body version-list">
+          <p>
+            Revert code while keeping current data, or restore a saved snapshot. Every change is
+            tested before applying.
+          </p>
+          {releasePlans
+            .filter((p) => p.current && !p.appliedRelease)
+            .map((p) => (
+              <button
+                class="secondary-button"
+                onClick={() => setReleaseReview({ ...p, app: selected })}
+              >
+                Review pending data changes
+              </button>
+            ))}
+          {releases.map((r, i) => (
+            <article class="version-entry" key={r.id}>
+              <strong>Release {releases.length - i}</strong>
+              <p>{new Date(r.createdAt * 1000).toLocaleString()}</p>
+              <button
+                class="secondary-button"
+                disabled={releaseBusy || detail?.revision?.id === r.revision}
+                onClick={() => prepareRevert(r.revision)}
+              >
+                Revert code, keep current data
+              </button>
+              <button
+                class="secondary-button"
+                disabled={releaseBusy}
+                onClick={() => prepareRevert(r.revision, { release: r.id, before: false })}
+              >
+                Restore this release’s data…
+              </button>
+              {r.previousRevision && (
+                <button
+                  class="secondary-button"
+                  disabled={releaseBusy}
+                  onClick={() => prepareRevert(r.previousRevision, { release: r.id, before: true })}
+                >
+                  Restore before this release…
+                </button>
+              )}
+            </article>
+          ))}
+
           {versions.map((v, i) => (
             <article class="version-entry" key={v.id}>
               <div class="version-heading">
@@ -963,6 +1182,13 @@ function App() {
           ))}
         </div>
       </Modal>
+      <ReleaseReview
+        plan={releaseReview}
+        busy={releaseBusy}
+        error={error}
+        onClose={() => setReleaseReview(null)}
+        onApply={applyRelease}
+      />
       <Modal
         open={chatOpen && view === 'app'}
         onClose={() => setChatOpen(false)}
@@ -972,7 +1198,7 @@ function App() {
         <header class="modal-header">
           <span class="modal-app-icon">
             <span class="app-emoji" aria-hidden="true">
-              {appEmoji(appName)}
+              {apps.find((a) => a.id === selected)?.emoji || appEmoji(appName)}
             </span>
           </span>
           <div>
@@ -990,9 +1216,15 @@ function App() {
             <Icon name="close" />
           </button>
         </header>
-        {chatOpen && view === 'app' && <ChatPanel {...chatProps} />}
+        {chatOpen && view === 'app' && <ChatPanel key={conversation} {...chatProps} />}
       </Modal>
     </div>
   );
 }
 render(<App />, document.getElementById('root'));
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker
+    .register('/service-worker.js')
+    .catch((error) => console.warn('Offline support unavailable:', error.message));
+}

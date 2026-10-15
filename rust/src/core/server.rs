@@ -42,11 +42,15 @@ impl From<Error> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if self.0 == Error::Storage {
+            super::telemetry::error("http.request", self.0);
+        }
         let code = match self.0 {
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::Saturated => StatusCode::SERVICE_UNAVAILABLE,
             Error::Conflict | Error::Untested | Error::ExternalUncertain => StatusCode::CONFLICT,
+            Error::Storage => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::BAD_REQUEST,
         };
         (code, Json(json!({"error":self.0}))).into_response()
@@ -132,19 +136,34 @@ async fn security_headers(
 }
 pub fn router(server: Arc<Server>) -> Router {
     let private = Router::new()
+        .route("/api/storage", get(storage_status))
+        .route("/api/storage/cleanup", post(storage_cleanup))
+        .route("/api/notifications", get(notice_list).post(notice_read))
+        .route("/api/settings/push", get(push_settings).post(push_update))
+        .route("/api/settings/push/test", post(push_test))
+        .route(
+            "/api/images",
+            post(upload_image).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route("/api/images/:id", get(image_data))
+        .route("/api/apps/:app/images", get(app_images))
+        .route("/api/apps/:app/images/:id", get(app_image))
         .route("/api/apps", get(apps).post(create_app))
         .route("/api/apps/:id", get(app_detail))
+        .route("/api/apps/:id/archive", post(archive_app))
         .route("/api/revisions/:app", get(revisions))
         .route("/api/action", post(action))
         .route("/api/build/:id", post(build))
         .route("/api/authoring/:id", post(author_tool))
         .route("/api/owner-preview/:app/:revision", post(owner_preview))
+        .route("/api/owner-preview-close", post(owner_preview_close))
         .route("/api/owner-publish/:conversation", post(owner_publish))
         .route(
             "/api/conversations",
             get(conversations).post(create_conversation),
         )
         .route("/api/conversations/:id", get(history))
+        .route("/api/conversations/:id/info", get(conversation_info))
         .route("/api/conversations/:id/send", post(send))
         .route("/api/conversations/:id/proposals", get(proposals))
         .route(
@@ -153,6 +172,17 @@ pub fn router(server: Arc<Server>) -> Router {
         )
         .route("/api/jobs/:id", get(job))
         .route("/api/jobs/:id/cancel", post(cancel_job))
+        .route("/api/jobs/:id/resume", post(resume_job))
+        .route("/api/apps/:id/releases", get(app_releases))
+        .route("/api/apps/:id/data/query", post(inspect_app_data))
+        .route(
+            "/api/apps/:id/release-plans",
+            get(app_release_plans).post(prepare_app_release),
+        )
+        .route(
+            "/api/apps/:id/release-plans/:plan/apply",
+            post(apply_app_release),
+        )
         .route("/api/secrets", get(secret_names).post(secret_put))
         .route("/api/secrets/:name/delete", post(secret_delete))
         .route("/api/chatgpt", get(chatgpt_status))
@@ -185,8 +215,10 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/setup", post(setup))
         .route("/api/login", post(login))
         .route("/preview-test/:ticket", get(preview_test))
+        .route("/preview-test/:ticket/frame", get(preview_frame))
         .route("/preview-test/:ticket/action", post(preview_test_action))
         .route("/auth/callback", get(callback))
+        .fallback(public_asset)
         .merge(private)
         .layer(DefaultBodyLimit::max(512 * 1024))
         .layer(middleware::from_fn_with_state(
@@ -196,7 +228,19 @@ pub fn router(server: Arc<Server>) -> Router {
         .with_state(server)
 }
 async fn index() -> impl IntoResponse {
-    axum::response::Html("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>LittleSpaces</title><link rel=stylesheet href=/style.css><div id=root></div><script src=/shell.js defer></script></html>")
+    axum::response::Html("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content'><meta name=theme-color content='#141b30'><meta name=apple-mobile-web-app-capable content=yes><meta name=apple-mobile-web-app-status-bar-style content=black-translucent><meta name=apple-mobile-web-app-title content=LittleSpaces><link rel=manifest href=/manifest.webmanifest><link rel=icon href=/favicon.ico sizes=any><link rel=icon href=/icon.svg type=image/svg+xml><link rel=apple-touch-icon href=/apple-touch-icon.png sizes=180x180><title>LittleSpaces</title><link rel=stylesheet href=/style.css><div id=root></div><script src=/shell.js defer></script></html>")
+}
+async fn public_asset(uri: axum::http::Uri) -> Response {
+    match assets::public_asset(uri.path()) {
+        Some((content, kind)) => {
+            let mut response = asset(content, kind);
+            if uri.path() == "/offline.html" {
+                response.headers_mut().insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"));
+            }
+            response
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 fn asset(content: &'static [u8], kind: &'static str) -> Response {
     ([("content-type", kind)], Body::from(content)).into_response()
@@ -282,8 +326,66 @@ fn text(v: &Value, k: &str) -> Result<String> {
         .map(str::to_owned)
         .ok_or(Error::Validation)
 }
+async fn upload_image(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<Value> {
+    let data = v["dataUrl"].as_str().ok_or(Error::Validation)?.to_owned();
+    let name = v["name"].as_str().unwrap_or("Image").to_owned();
+    let app = v["app"].as_str().map(str::to_owned);
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| images::save(&store, app, name, data))
+            .await?,
+    ))
+}
+async fn image_data(
+    State(s): State<Arc<Server>>,
+    Path(id): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let (mime, bytes) = s
+        .runtime
+        .store
+        .blocking(move |store| images::data(&store, &id))
+        .await?;
+    let mut response = bytes.into_response();
+    response.headers_mut().insert(
+        "content-type",
+        HeaderValue::from_str(&mime).map_err(|_| Error::Storage)?,
+    );
+    Ok(response)
+}
+async fn app_images(State(s): State<Arc<Server>>, Path(app): Path<String>) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| images::list(&store, &app))
+            .await?,
+    ))
+}
+async fn app_image(
+    State(s): State<Arc<Server>>,
+    Path((app, id)): Path<(String, String)>,
+) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| images::app_image(&store, &app, &id))
+            .await?,
+    ))
+}
 async fn apps(State(s): State<Arc<Server>>) -> Api<Value> {
-    Ok(Json(s.runtime.store.blocking(|store|{let db=store.open()?;let mut q=db.prepare("SELECT id,title,published_revision FROM apps ORDER BY rowid")?;let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"revision":r.get::<_,Option<String>>(2)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!(rows))}).await?))
+    Ok(Json(s.runtime.store.blocking(|store|{let db=store.open()?;let mut q=db.prepare("SELECT id,title,published_revision,EXISTS(SELECT 1 FROM archived_apps a WHERE a.app=apps.id),(SELECT emoji FROM app_identity i WHERE i.app=apps.id) FROM apps ORDER BY rowid")?;let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"revision":r.get::<_,Option<String>>(2)?,"archived":r.get::<_,bool>(3)?,"emoji":r.get::<_,Option<String>>(4)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;Ok(json!(rows))}).await?))
+}
+async fn archive_app(
+    State(s): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(v): Json<Value>,
+) -> Api<Value> {
+    let archived = v["archived"].as_bool().ok_or(Error::Validation)?;
+    s.runtime
+        .store
+        .blocking(move |store| store.archive_app(&AppId(id), archived))
+        .await?;
+    Ok(Json(json!({"ok":true})))
 }
 async fn create_app(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<Value> {
     let title = text(&v, "title")?;
@@ -294,6 +396,7 @@ async fn create_app(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<V
             .blocking(move |store| {
                 let app = store.create_app(&title)?;
                 let code = AppCode {
+                    sqlite: false,
                     backend: "fn list(input) { db_list() }".into(),
                     frontend: "".into(),
                     actions: vec![ActionContract {
@@ -486,9 +589,12 @@ async fn preview(
         .store
         .blocking(move |store| Ok(store.revision(&AppId(app), &RevisionId(id))?.code.frontend))
         .await?;
-    let html = frame_html(&code, &s.origin);
+    frame_response(&code, &s.origin)
+}
+fn frame_response(code: &str, origin: &str) -> std::result::Result<Response, ApiError> {
+    let html = frame_html(code, origin);
     let mut response = axum::response::Html(html).into_response();
-    let policy=format!("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {}; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",s.origin);
+    let policy=format!("sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {origin}; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'");
     response.headers_mut().insert(
         "content-security-policy",
         HeaderValue::from_str(&policy).map_err(|_| Error::Validation)?,
@@ -503,8 +609,19 @@ pub fn frame_html(code: &str, origin: &str) -> String {
         .replace('&', "\\u0026");
     format!("<!doctype html><html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' {origin}; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'\"><meta name=viewport content='width=device-width,initial-scale=1'><style>body{{margin:0;padding:16px;font:16px system-ui;color:#23332f}}button,input{{font:inherit;padding:8px}}</style><div id=app></div><script src=/applet.js></script><script>{FRAME_BRIDGE}\ntry{{new Function({encoded})();}}catch(e){{parent.postMessage({{kind:'diagnostic',message:String(e)}},'*');}}</script></html>")
 }
-const FRAME_BRIDGE: &str = r#"let serial=0;const pending=new Map();window.applet=Object.freeze({call:(action,input={})=>new Promise((resolve,reject)=>{if(pending.size>=16)return reject(Error('Too many calls'));const id=++serial;const timer=setTimeout(()=>{pending.delete(id);reject(Error('Action timed out'));},15000);pending.set(id,{resolve,reject,timer});parent.postMessage({kind:'action',id,action,input},'*');})});addEventListener('message',e=>{if(e.source!==parent||e.data?.kind!=='result')return;const p=pending.get(e.data.id);if(!p)return;clearTimeout(p.timer);pending.delete(e.data.id);e.data.error?p.reject(Error(e.data.error)):p.resolve(e.data.result);});addEventListener('error',e=>parent.postMessage({kind:'diagnostic',message:String(e.message)},'*'));addEventListener('unhandledrejection',e=>parent.postMessage({kind:'diagnostic',message:String(e.reason)},'*'));"#;
-async fn conversations(State(s): State<Arc<Server>>) -> Api<Value> {
+const FRAME_BRIDGE: &str = r#"let serial=0;const pending=new Map();function request(kind,fields){return new Promise((resolve,reject)=>{if(pending.size>=16)return reject(Error('Too many calls'));const id=++serial;const timer=setTimeout(()=>{pending.delete(id);reject(Error('Request timed out'));},30000);pending.set(id,{resolve,reject,timer});parent.postMessage({kind,id,...fields},'*');});}window.applet=Object.freeze({call:(action,input={})=>request('action',{action,input}),images:()=>request('image-list',{}),image:(image)=>request('image-get',{image}),uploadImage:(dataUrl,name='Image')=>request('image-upload',{dataUrl,name})});addEventListener('message',e=>{if(e.source!==parent||e.data?.kind!=='result')return;const p=pending.get(e.data.id);if(!p)return;clearTimeout(p.timer);pending.delete(e.data.id);e.data.error?p.reject(Error(e.data.error)):p.resolve(e.data.result);});addEventListener('error',e=>parent.postMessage({kind:'diagnostic',message:String(e.message)},'*'));addEventListener('unhandledrejection',e=>parent.postMessage({kind:'diagnostic',message:String(e.reason)},'*'));"#;
+async fn conversations(
+    State(s): State<Arc<Server>>,
+    Query(query): Query<super::history::PageQuery>,
+) -> Api<Value> {
+    if query.page == Some(true) || query.before.is_some() {
+        return Ok(Json(
+            s.runtime
+                .store
+                .blocking(move |store| super::history::conversations(&store, query.before))
+                .await?,
+        ));
+    }
     Ok(Json(s.agent.conversations().await?))
 }
 async fn create_conversation(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<Value> {
@@ -512,7 +629,19 @@ async fn create_conversation(State(s): State<Arc<Server>>, Json(v): Json<Value>)
         json!({"conversation":s.agent.create_conversation(v["app"].as_str().map(|v|AppId(v.into()))).await?}),
     ))
 }
-async fn history(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+async fn history(
+    State(s): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Query(query): Query<super::history::PageQuery>,
+) -> Api<Value> {
+    if query.page == Some(true) || query.before.is_some() {
+        return Ok(Json(
+            s.runtime
+                .store
+                .blocking(move |store| super::history::messages(&store, &id, query.before, 120))
+                .await?,
+        ));
+    }
     Ok(Json(s.agent.history(ConversationId(id)).await?))
 }
 async fn send(
@@ -521,11 +650,14 @@ async fn send(
     Json(v): Json<Value>,
 ) -> Api<Value> {
     Ok(Json(
-        json!({"job":s.agent.start_with_voice(ConversationId(id),text(&v,"message")?,text(&v,"model")?,v["voice"].as_bool().unwrap_or(false)).await?}),
+        json!({"job":s.agent.start_with_images(ConversationId(id),text(&v,"message")?,text(&v,"model")?,v["voice"].as_bool().unwrap_or(false),serde_json::from_value(v.get("images").cloned().unwrap_or(json!([]))).map_err(|_|Error::Validation)?,v["effort"].as_str().filter(|value| !value.is_empty() && *value!="default").map(str::to_owned)).await?}),
     ))
 }
 async fn job(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(s.agent.job(id).await?))
+}
+async fn resume_job(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(s.agent.resume(id).await?))
 }
 async fn cancel_job(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
     s.agent.cancel(&id).await?;
@@ -556,21 +688,7 @@ pub async fn serve(
     if !assets::READY {
         return Err("Build frontend assets first: cd web && npm ci && npm run build".into());
     }
-    #[cfg(unix)]
-    let _instance_lock = {
-        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
-        let lock = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(directory.join("server.lock"))?;
-        // Advisory lock is released by the OS after a crash; recovery never interrupts another host.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("This workspace already has a running LittleSpaces server".into());
-        }
-        lock
-    };
+    let _instance_lock = workspace::WorkspaceLock::acquire(&directory)?;
     let store = Store::create(&directory.join("workspace.sqlite"))?;
     let secrets = Secrets::open(store.clone(), &directory.join("secrets.key"))?;
     let mut runtime = Runtime::new(store.clone(), secrets.clone(), 4)?;
@@ -602,13 +720,26 @@ pub async fn serve(
         directory,
         host,
     });
+    notifications::initialize_jobs(&store)?;
+    let push_worker = tokio::spawn(notifications::run(store, server.secrets.clone()));
     let scheduler = tokio::spawn(super::schedules::run(runtime));
-    let result = axum::serve(listener, router(server))
+    let routes = router(server.clone());
+    #[cfg(debug_assertions)]
+    let mut routes = routes;
+    #[cfg(debug_assertions)]
+    if std::env::var("LITTLESPACES_ENABLE_LIVE_TESTS").as_deref() == Ok("1") {
+        routes = routes.merge(testing::router(testing::Service::enable(
+            server.directory.clone(),
+            server.chatgpt.clone(),
+        )?));
+    }
+    let result = axum::serve(listener, routes)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await;
     scheduler.abort();
+    push_worker.abort();
     result?;
     Ok(())
 }
@@ -633,6 +764,26 @@ async fn preview_test(
     response.headers_mut().insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"));
     Ok(response)
 }
+// The owner shell embeds the same isolated app frame directly. The harness
+// wrapper is a top-level document and intentionally forbids being embedded.
+async fn preview_frame(
+    State(s): State<Arc<Server>>,
+    Path(ticket): Path<String>,
+) -> std::result::Result<Response, ApiError> {
+    let preview = s.runtime.previews.get(&ticket).await?;
+    let code = s
+        .runtime
+        .store
+        .blocking(move |store| {
+            Ok(store
+                .revision(&preview.app, &preview.revision)?
+                .code
+                .frontend)
+        })
+        .await?;
+    frame_response(&code, &s.origin)
+}
+
 async fn preview_test_action(
     State(s): State<Arc<Server>>,
     Path(ticket): Path<String>,
@@ -640,18 +791,19 @@ async fn preview_test_action(
 ) -> Api<Value> {
     let preview = s.runtime.previews.get(&ticket).await?;
     let mut records = preview.records.lock().await;
-    let (result, next) = s
+    let (result, next, sqlite) = s
         .runtime
         .preview_action(
             preview.app,
             preview.revision,
             text(&v, "action")?,
             v["input"].clone(),
-            records.clone(),
+            records.0.clone(),
+            records.1.clone(),
             preview.http,
         )
         .await?;
-    *records = next;
+    *records = (next, sqlite);
     Ok(Json(json!({"result":result})))
 }
 
@@ -695,8 +847,15 @@ async fn owner_preview(
             .collect(),
     );
     let ticket = s.runtime.previews.create(a, r, mocks).await?;
-    Ok(Json(json!({"url":format!("/preview-test/{ticket}")})))
+    Ok(Json(
+        json!({"ticket":ticket,"url":format!("/preview-test/{ticket}/frame"),"actionUrl":format!("/preview-test/{ticket}/action")}),
+    ))
 }
+async fn owner_preview_close(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<Value> {
+    s.runtime.previews.remove(&text(&v, "ticket")?).await;
+    Ok(Json(json!({"closed":true})))
+}
+
 async fn owner_publish(
     State(s): State<Arc<Server>>,
     Path(id): Path<String>,
@@ -770,6 +929,199 @@ async fn decide_proposal(
     let confirm = v["confirm"].as_bool().ok_or(Error::Validation)?;
     Ok(Json(
         super::interactions::decide(s.runtime.clone(), ConversationId(id), proposal, confirm)
+            .await?,
+    ))
+}
+
+async fn notice_list(State(s): State<Arc<Server>>) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(|store| notifications::list(&store))
+            .await?,
+    ))
+}
+async fn notice_read(State(s): State<Arc<Server>>, Json(value): Json<Value>) -> Api<Value> {
+    if let Some(job) = value.get("seenJob").and_then(Value::as_str) {
+        let job = job.to_owned();
+        s.runtime
+            .store
+            .blocking(move |store| notifications::acknowledge_job(&store, &job))
+            .await?;
+        return Ok(Json(json!({"ok":true})));
+    }
+    let id = value.get("id").and_then(Value::as_str).map(str::to_owned);
+    if id.is_none() && value.get("all") != Some(&Value::Bool(true)) {
+        return Err(Error::Validation.into());
+    }
+    s.runtime
+        .store
+        .blocking(move |store| notifications::read(&store, id.as_deref()))
+        .await?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn push_settings(State(s): State<Arc<Server>>) -> Api<Value> {
+    let secrets = s.secrets.clone();
+    let key = s
+        .runtime
+        .store
+        .blocking(move |store| notifications::public_key(&store, &secrets))
+        .await?;
+    let delivery = s
+        .runtime
+        .store
+        .blocking(|store| notifications::delivery_status(&store))
+        .await?;
+    Ok(Json(json!({"publicKey":key,"delivery":delivery})))
+}
+async fn push_update(State(s): State<Arc<Server>>, Json(value): Json<Value>) -> Api<Value> {
+    let secrets = s.secrets.clone();
+    s.runtime
+        .store
+        .blocking(move |store| {
+            if value.get("enabled") == Some(&Value::Bool(false)) {
+                notifications::unsubscribe(
+                    &store,
+                    value
+                        .get("endpoint")
+                        .and_then(Value::as_str)
+                        .ok_or(Error::Validation)?,
+                )
+            } else {
+                let sub = serde_json::from_value(
+                    value
+                        .get("subscription")
+                        .cloned()
+                        .ok_or(Error::Validation)?,
+                )
+                .map_err(|_| Error::Validation)?;
+                notifications::subscribe(&store, &secrets, sub)
+            }
+        })
+        .await?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn push_test(State(s): State<Arc<Server>>) -> Api<Value> {
+    s.runtime
+        .store
+        .blocking(|store| notifications::test_notice(&store))
+        .await?;
+    Ok(Json(json!({"ok":true})))
+}
+
+async fn conversation_info(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(s.runtime.store.blocking(move |store| {
+        Ok(store.open()?.query_row("SELECT c.id,c.app,c.title,EXISTS(SELECT 1 FROM authoring_sessions a WHERE a.conversation=c.id),(SELECT id FROM jobs j WHERE j.conversation=c.id AND j.state IN ('running','queued') ORDER BY j.rowid DESC LIMIT 1),(SELECT id FROM jobs j WHERE j.conversation=c.id AND j.state IN ('completed','failed','interrupted','cancelled') ORDER BY j.rowid DESC LIMIT 1) FROM conversations c WHERE c.id=?",[id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"app":r.get::<_,Option<String>>(1)?,"title":r.get::<_,String>(2)?,"build":r.get::<_,bool>(3)?,"job":r.get::<_,Option<String>>(4)?,"latestReplyJob":r.get::<_,Option<String>>(5)?})))?)
+    }).await?))
+}
+
+async fn app_releases(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| store.releases(&AppId(id)))
+            .await?,
+    ))
+}
+async fn app_release_plans(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| store.release_plans(&AppId(id)))
+            .await?,
+    ))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DataQuery {
+    #[serde(default)]
+    source: Option<releases::SavedData>,
+    #[serde(default)]
+    query: Option<releases::Query>,
+}
+async fn inspect_app_data(
+    State(s): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(input): Json<DataQuery>,
+) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| store.inspect_data(&AppId(id), input.source, input.query))
+            .await?,
+    ))
+}
+async fn prepare_app_release(
+    State(s): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(plan): Json<releases::Plan>,
+) -> Api<Value> {
+    Ok(Json(
+        s.runtime
+            .prepare_release(AppId(id), plan, None, Cancellation::default())
+            .await?,
+    ))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmRelease {
+    confirm: bool,
+}
+async fn apply_app_release(
+    State(s): State<Arc<Server>>,
+    Path((id, plan)): Path<(String, String)>,
+    Json(input): Json<ConfirmRelease>,
+) -> Api<Value> {
+    // Once accepted, a lost HTTP response cannot interrupt the atomic release.
+    let task = tokio::spawn(async move {
+        s.runtime
+            .store
+            .blocking(move |store| {
+                store.apply_release(&AppId(id), &plan, input.confirm, Cancellation::default())
+            })
+            .await
+    });
+    Ok(Json(task.await.map_err(|_| ApiError(Error::Storage))??))
+}
+
+async fn storage_status(
+    State(s): State<Arc<Server>>,
+    Query(policy): Query<StoragePolicy>,
+) -> Api<Value> {
+    let policy = policy.into_policy();
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| maintenance::status(&store, &policy))
+            .await?,
+    ))
+}
+#[derive(Default, serde::Deserialize)]
+struct StoragePolicy {
+    keep_releases: Option<usize>,
+    orphan_days: Option<i64>,
+    confirm: Option<bool>,
+}
+impl StoragePolicy {
+    fn into_policy(self) -> maintenance::Retention {
+        maintenance::Retention {
+            keep_releases: self.keep_releases.unwrap_or(20),
+            orphan_days: self.orphan_days.unwrap_or(30),
+        }
+    }
+}
+async fn storage_cleanup(
+    State(s): State<Arc<Server>>,
+    Json(policy): Json<StoragePolicy>,
+) -> Api<Value> {
+    if policy.confirm != Some(true) {
+        return Err(Error::ApprovalRequired.into());
+    }
+    let policy = policy.into_policy();
+    Ok(Json(
+        s.runtime
+            .store
+            .blocking(move |store| maintenance::cleanup(&store, &policy))
             .await?,
     ))
 }

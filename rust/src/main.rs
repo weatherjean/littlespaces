@@ -2,8 +2,24 @@ use little_spaces::core::{http::MockHttp, secrets::Secrets, store::ExternalDecis
 use serde_json::{json, Value};
 use std::{io::Read, path::Path};
 
-#[tokio::main]
-async fn main() {
+mod worker_allocator;
+#[global_allocator]
+static ALLOCATOR: worker_allocator::Budget = worker_allocator::Budget;
+fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--action-worker") {
+        worker_allocator::ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        if little_spaces::core::worker::run().is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(host_main());
+}
+async fn host_main() {
     if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);
@@ -11,7 +27,7 @@ async fn main() {
 }
 async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let command=args.next().ok_or("Usage: little-spaces <init|serve|owner-reset|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence|effect-resolve> <workspace-directory> ...")?;
+    let command=args.next().ok_or("Usage: little-spaces <init|serve|backup|storage|owner-reset|create|test|publish|run|dry-run|secrets|secret-put|secret-delete|evidence|effect-resolve> <workspace-directory> ...")?;
     let directory = args.next().ok_or("Provide a workspace directory")?;
     let directory = Path::new(&directory);
     if command == "init" {
@@ -26,9 +42,6 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     } else if !directory.join("workspace.sqlite").exists() {
         return Err("Initialize a fresh workspace first".into());
     }
-    let store = Store::create(&directory.join("workspace.sqlite"))?;
-    let secrets = Secrets::open(store.clone(), &directory.join("secrets.key"))?;
-    let runtime = Runtime::new(store.clone(), secrets.clone(), 4)?;
     if command == "serve" {
         let port = args
             .next()
@@ -37,6 +50,10 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(5175);
         return little_spaces::core::server::serve(directory.to_path_buf(), port).await;
     }
+    let _workspace_lock = workspace::WorkspaceLock::acquire(directory)?;
+    let store = Store::create(&directory.join("workspace.sqlite"))?;
+    let secrets = Secrets::open(store.clone(), &directory.join("secrets.key"))?;
+    let runtime = Runtime::new(store.clone(), secrets.clone(), 4)?;
     if command == "owner-reset" {
         let mut password = zeroize::Zeroizing::new(String::new());
         std::io::stdin().take(1025).read_to_string(&mut password)?;
@@ -49,6 +66,16 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut next = || args.next().ok_or("Missing command argument");
     let result: Value = match command.as_str() {
         "init" => json!({"initialized":true}),
+        "backup" => {
+            let destination = next()?;
+            maintenance::backup(
+                &store,
+                Path::new(&destination),
+                &directory.join("secrets.key"),
+            )?;
+            json!({"backedUp":true})
+        }
+        "storage" => maintenance::status(&store, &maintenance::Retention::default())?,
         "create" => {
             let title = next()?;
             let path = next()?;

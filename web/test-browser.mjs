@@ -1,6 +1,12 @@
+import { testHistoryAndStorage } from './test-history.mjs';
 // Focused development fixture: actual streamed Rust agent/tools/backend/Preact/browser path.
 // This does not establish real-model generation or real ChatGPT sign-in.
 import { startHarness } from './browser-harness.mjs';
+import { testMobileReview } from './test-mobile.mjs';
+import { testPwa } from './test-pwa.mjs';
+import { testImages } from './test-images.mjs';
+import { testReleases } from './test-releases.mjs';
+import { testChatLifecycle } from './test-chat.mjs';
 import { chromium } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
@@ -14,6 +20,19 @@ const token = randomBytes(32).toString('hex');
 const harness = await startHarness({ token });
 let code = JSON.parse(await readFile(path.join(root, 'examples/tasks-rhai.json'), 'utf8'));
 let appForVoice = '';
+const brokenAttempts = [];
+function verifyRetrySchedule() {
+  assert.equal(
+    brokenAttempts.length,
+    5,
+    'initial request, three retries, then explicit continuation',
+  );
+  for (let i = 1; i <= 3; i++)
+    assert.ok(
+      brokenAttempts[i] - brokenAttempts[i - 1] >= [0, 9500, 19500, 29500][i],
+      'retry waits for its scheduled backoff',
+    );
+}
 let turn = 0,
   mode = 'proposal',
   testedRevision;
@@ -25,11 +44,105 @@ const provider = http.createServer(async (req, res) => {
     assert.equal(request.store, false);
     assert.equal(request.stream, true);
     assert.equal(request.model, 'fixture');
+    assert.ok(request.tools.some((tool) => tool.type === 'web_search'));
+    for (const name of ['read_skill', 'read_sdk', 'fetch_docs']) {
+      assert.ok(request.tools.some((tool) => tool.name === name));
+    }
     if (turn === 0) await new Promise((resolve) => setTimeout(resolve, 3000));
     let output;
     const previous = request.input.filter((v) => v.type === 'function_call_output').at(-1);
     const report = previous ? JSON.parse(previous.output) : null;
-    if (mode === 'voice')
+    if (mode === 'capabilities') {
+      const steps = [
+        () => call('read_skill', { name: 'planning' }),
+        () => {
+          assert.match(report.ok.instructions, /SQLite/);
+          return call('read_sdk', {});
+        },
+        () => {
+          assert.match(report.ok.sdk, /sql_query/);
+          return call('read_skill', { name: 'updating' });
+        },
+        () => {
+          assert.match(report.ok.instructions, /propose_update/);
+          return call('propose_update', {
+            app: appForVoice,
+            summary: 'Preserve data and add search',
+          });
+        },
+        () => {
+          assert.equal(report.ok.status, 'pending');
+          return call('read_skill', { name: 'managing' });
+        },
+        () => {
+          assert.match(report.ok.instructions, /propose_archive/);
+          return call('propose_archive', {
+            app: appForVoice,
+            archived: true,
+            summary: 'Archive this app and keep its data',
+          });
+        },
+      ];
+      output =
+        turn < steps.length
+          ? [steps[turn++]()]
+          : [
+              {
+                type: 'web_search_call',
+                id: 'ws_fixture',
+                status: 'completed',
+                action: { type: 'search', query: 'Rhai documentation' },
+              },
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: 'Rhai documentation and app changes are ready for review.',
+                    annotations: [
+                      {
+                        type: 'url_citation',
+                        url: 'https://rhai.rs/book/',
+                        title: 'Rhai Book',
+                        start_index: 0,
+                        end_index: 18,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ];
+    } else if (mode === 'owner')
+      output =
+        turn++ === 0
+          ? [call('authoring', { tool: 'test_draft', expected_version: 2 })]
+          : [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Review the tested owner preview.' }],
+              },
+            ];
+    else if (mode === 'echo') {
+      let message = request.input.filter((v) => v.role === 'user').at(-1).content;
+      if (Array.isArray(message)) {
+        const images = message.filter((part) => part.type === 'input_image');
+        assert.ok(images.length > 0);
+        assert.ok(images.every((part) => part.image_url.startsWith('data:image/jpeg;base64,')));
+        message = `Received ${images.length} image with actual pixel data`;
+      }
+      if (message === 'first conversation') assert.equal(request.reasoning?.effort, 'high');
+      if (message === 'slow reply') await new Promise((resolve) => setTimeout(resolve, 10000));
+      output = [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: `Reply: ${message}` }],
+        },
+      ];
+      turn++;
+    } else if (mode === 'voice')
       output =
         turn++ === 0
           ? [
@@ -51,8 +164,16 @@ const provider = http.createServer(async (req, res) => {
       output =
         turn++ === 0
           ? [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [
+                  { type: 'output_text', text: 'I will prepare a clear plan before building.' },
+                ],
+              },
               call('propose_app', {
                 title: 'Task app',
+                emoji: '✅',
                 purpose: 'Track tasks and mark them complete.',
               }),
             ]
@@ -144,6 +265,19 @@ const provider = http.createServer(async (req, res) => {
         `data: ${JSON.stringify({ type: 'response.output_item.done', output_index, item })}\n\n`,
       );
     }
+    if (
+      mode === 'echo' &&
+      request.input.filter((v) => v.role === 'user').at(-1)?.content === 'broken model stream'
+    ) {
+      brokenAttempts.push(Date.now());
+      if (brokenAttempts.length <= 4) {
+        res.write(
+          `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', name: 'read_sdk' } })}\n\n`,
+        );
+        res.end();
+        return;
+      }
+    }
     res.end(
       `data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [] } })}\n\n`,
     );
@@ -173,7 +307,7 @@ async function child(command, args) {
     p.on('exit', (code) => (code === 0 ? resolve() : reject(Error(error))));
   });
 }
-try {
+checks: try {
   const binary = path.join(root, 'rust/target/debug/little-spaces');
   await child(binary, ['init', workspace]);
   server = spawn(binary, ['serve', workspace, '0'], {
@@ -183,6 +317,7 @@ try {
       LITTLESPACES_BROWSER_HARNESS: harness.url,
       LITTLESPACES_BROWSER_TOKEN: token,
       LITTLESPACES_TEST_PROVIDER: providerUrl,
+      LITTLESPACES_ENABLE_LIVE_TESTS: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -219,7 +354,25 @@ try {
     'rgb(16, 24, 39)',
   );
   await authPage.screenshot({ path: path.join(snapshots, 'monolith-orbit-setup.png') });
+  for (const width of [320, 390]) {
+    await authPage.setViewportSize({ width, height: 600 });
+    assert.equal(
+      await authPage.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+    );
+    await authPage.screenshot({ path: path.join(snapshots, `review-setup-${width}.png`) });
+  }
 
+  await authPage.goto(`${origin}/#setup=${setup}`);
+  await authPage.reload();
+  await authPage.getByRole('heading', { name: 'Create account', exact: true }).waitFor();
+  await authPage.getByLabel('Password', { exact: true }).fill('synthetic owner password');
+  await authPage
+    .getByLabel('Confirm password', { exact: true })
+    .fill('different synthetic password');
+  await authPage.getByRole('button', { name: 'Create account', exact: true }).click();
+  await authPage.getByRole('alert').filter({ hasText: 'do not match' }).waitFor();
+  await authPage.screenshot({ path: path.join(snapshots, 'review-registration-error-390.png') });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   let csrf = '';
   async function api(route, body) {
@@ -235,9 +388,33 @@ try {
   assert.equal((await context.request.get(`${origin}/api/apps`)).status(), 401);
   await api('/api/setup', { token: setup, password: 'synthetic owner password' });
   csrf = (await api('/api/login', { password: 'synthetic owner password' })).csrf;
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'releases') {
+    await testReleases({ api, context, origin, workspace, snapshots });
+    break checks;
+  }
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'chat') {
+    mode = 'echo';
+    turn = 1;
+    await testChatLifecycle({ context, origin, api, snapshots });
+    verifyRetrySchedule();
+    break checks;
+  }
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'pwa') {
+    await testPwa({ context, origin, api });
+    break checks;
+  }
   await authPage.reload();
   await authPage.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
   await authPage.screenshot({ path: path.join(snapshots, 'monolith-orbit-login.png') });
+  for (const width of [320, 390]) {
+    await authPage.setViewportSize({ width, height: 600 });
+    assert.equal(
+      await authPage.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+    );
+    await authPage.screenshot({ path: path.join(snapshots, `review-login-${width}.png`) });
+  }
+
   await signedOut.close();
   assert.equal(
     (
@@ -259,6 +436,28 @@ try {
   await creating.getByLabel('Message', { exact: true }).fill('Create a task tracker');
   await creating.getByRole('button', { name: 'Send message', exact: true }).click();
   await creating.getByRole('button', { name: 'Build this app', exact: true }).waitFor();
+  assert.equal(await creating.locator('.proposal-emoji').innerText(), '✅');
+  await creating
+    .getByText('I will prepare a clear plan before building.', { exact: true })
+    .waitFor();
+  await creating.reload();
+  await creating
+    .getByText('I will prepare a clear plan before building.', { exact: true })
+    .waitFor();
+  assert.equal(
+    await creating
+      .getByText('I will prepare a clear plan before building.', { exact: true })
+      .count(),
+    1,
+  );
+  await creating.setViewportSize({ width: 320, height: 700 });
+  assert.equal(
+    await creating.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+    false,
+  );
+  await creating.screenshot({ path: path.join(snapshots, 'review-build-confirmation-320.png') });
+  await creating.setViewportSize({ width: 1280, height: 900 });
+
   for (
     let i = 0;
     i < 100 &&
@@ -271,9 +470,8 @@ try {
   turn = 0;
   const proposalConversation = new URL(creating.url()).pathname.slice(6);
   await creating.getByRole('button', { name: 'Build this app', exact: true }).click();
-  await creating.waitForURL(
-    (url) => url.pathname.startsWith('/chat/') && url.pathname.slice(6) !== proposalConversation,
-  );
+  await creating.getByRole('heading', { name: 'Build Task app', exact: true }).waitFor();
+  assert.equal(new URL(creating.url()).pathname, `/chat/${proposalConversation}`);
   const app = {
     app: (await api('/api/apps')).find((a) => a.title === 'Task app').id,
     conversation: new URL(creating.url()).pathname.slice(6),
@@ -302,7 +500,7 @@ try {
       await live.getByRole('link', { name: 'Chat', exact: true }).click();
       await live.getByRole('button', { name: /Choose conversation:/ }).click();
       await live.getByRole('button', { name: 'Create and test the task app', exact: true }).click();
-      await live.getByRole('status').filter({ hasText: 'Working…' }).first().waitFor();
+      await live.locator('.streaming-message [role="status"]').waitFor();
       await live.close();
     }
     for (let n = 0; n < 250; n++) {
@@ -315,13 +513,17 @@ try {
     throw Error('Agent fixture timed out');
   }
   assert.ok((await api(`/api/apps/${app.app}`)).revision);
+  assert.equal((await api('/api/apps')).find((a) => a.id === app.app).emoji, '✅');
   console.log('Fixture author/test/browser/publish passed');
   const detail = await api(`/api/apps/${app.app}`);
   assert.ok(detail.revision);
   assert.deepEqual(detail.records, {});
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('pageerror', (e) => {
+    errors.push(String(e));
+    console.error('Browser page error:', String(e));
+  });
   await page.goto(origin);
   await page.getByRole('heading', { name: 'Made for your everyday.' }).waitFor();
   assert.equal(
@@ -441,7 +643,8 @@ try {
   mode = 'chat';
   turn = 0;
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
-  await page.getByRole('status').filter({ hasText: 'Working…' }).waitFor();
+  await page.locator('.streaming-message [role="status"]').waitFor();
+  await page.getByRole('button', { name: 'Stop reply', exact: true }).waitFor();
   await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-phone-conversation.png') });
   for (let i = 0; i < 150; i++) {
     if (!(await page.getByRole('button', { name: 'Stop reply', exact: true }).count())) break;
@@ -475,7 +678,14 @@ try {
   await page.goto(`${origin}/voice`);
   await page.getByRole('button', { name: 'Tap to talk', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Tap to talk', exact: true }).click();
-  await page.getByRole('button', { name: 'Confirm change', exact: true }).waitFor();
+  await page
+    .getByRole('button', { name: 'Confirm change', exact: true })
+    .waitFor()
+    .catch(async (error) => {
+      console.error(await page.locator('body').innerText());
+      console.error('Browser errors:', errors);
+      throw error;
+    });
   assert.equal((await api(`/api/apps/${app.app}`)).records['voice-confirm'], undefined);
   for (
     let i = 0;
@@ -526,10 +736,12 @@ try {
     expected_version: 1,
     code: ownerCode,
   });
-  const ownerTest = await api(`/api/authoring/${ownerBuild.conversation}`, {
-    tool: 'test_draft',
-    expected_version: 2,
-  });
+  mode = 'owner';
+  turn = 0;
+  await runAgent(ownerBuild.conversation);
+  const ownerTest = (await api(`/api/conversations/${ownerBuild.conversation}`)).find(
+    (m) => m.result?.ok?.backendTestsPassed,
+  )?.result.ok;
   assert.equal(ownerTest.backendTestsPassed, true);
   const unverified = await context.request.post(
     `${origin}/api/authoring/${ownerBuild.conversation}`,
@@ -539,19 +751,68 @@ try {
     },
   );
   assert.equal(unverified.status(), 409);
-  const isolated = await api(`/api/owner-preview/${app.app}/${ownerTest.revision}`, {});
-  await page.goto(origin + isolated.url);
-  const preview = page.frameLocator('#frame');
+  await page.goto(`${origin}/chat/${ownerBuild.conversation}`);
+  await page.getByRole('button', { name: 'Preview app', exact: true }).click();
+  await page.getByRole('button', { name: 'Use this app', exact: true }).waitFor();
+  const preview = page.frameLocator('iframe[title="Applet"]');
+  assert.equal(
+    await page.locator('iframe[title="Applet"]').getAttribute('sandbox'),
+    'allow-scripts allow-forms',
+  );
   await preview.getByLabel('Task title').fill('Isolated owner preview');
   await preview.getByRole('button', { name: 'Add task' }).click();
   await preview.locator('li').filter({ hasText: 'Isolated owner preview' }).waitFor();
+  await page.getByRole('button', { name: 'Reload preview', exact: true }).click();
+  await preview.locator('li').filter({ hasText: 'Isolated owner preview' }).waitFor();
   assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
-  await api(`/api/owner-publish/${ownerBuild.conversation}`, {
-    confirmed: true,
-    revision: ownerTest.revision,
-    expected_version: 2,
+  await page.screenshot({ path: path.join(snapshots, 'monolith-glass-owner-preview.png') });
+  await page.getByRole('button', { name: 'Use this app', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Use this app', exact: true })
+    .waitFor({ state: 'hidden' });
+  await preview.locator('li').filter({ hasText: 'Owner task' }).waitFor();
+  assert.equal(
+    await preview.locator('li').filter({ hasText: 'Isolated owner preview' }).count(),
+    0,
+  );
+  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
+  mode = 'capabilities';
+  turn = 0;
+  appForVoice = app.app;
+  const research = await api('/api/conversations', {});
+  await runAgent(research.conversation);
+  await page.goto(`${origin}/chat/${research.conversation}`);
+  await page.getByRole('link', { name: 'Source 1', exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole('link', { name: 'Source 1', exact: true }).getAttribute('href'),
+    'https://rhai.rs/book/',
+  );
+  await page.getByRole('button', { name: 'Archive app', exact: true }).click();
+  await page.getByRole('button', { name: 'Archive app', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal((await api('/api/apps')).find((item) => item.id === app.app).archived, true);
+  assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
+  await api(`/api/apps/${app.app}/archive`, { archived: false });
+  const proposals = await api(`/api/conversations/${research.conversation}/proposals`);
+  const updateProposal = proposals.find((p) => p.details.kind === 'update');
+  const updateResult = await api(
+    `/api/conversations/${research.conversation}/proposals/${updateProposal.id}`,
+    { confirm: true },
+  );
+  const updateDraft = await api(`/api/authoring/${updateResult.conversation}`, {
+    tool: 'read_draft',
   });
+  assert.equal(updateDraft.code.backend, ownerCode.backend);
   assert.deepEqual((await api(`/api/apps/${app.app}`)).records, afterVoice);
+  mode = 'echo';
+  turn = 1;
+  await testChatLifecycle({ context, origin, api, snapshots });
+  await testReleases({ api, context, origin, workspace, snapshots });
+  verifyRetrySchedule();
+  await testImages({ context, origin, api, snapshots, app: app.app });
+  await testPwa({ context, origin, api });
+  await testMobileReview({ context, origin, app: app.app, api, snapshots });
+  await testHistoryAndStorage({ context, origin, api, workspace });
+  assert.deepEqual(errors, []);
   console.log(
     'Rust agent fixture, failure/fix, browser-tested and owner-reviewed publication, real UI/chat invocation and record-preserving updates passed. No real-model milestone claimed.',
   );

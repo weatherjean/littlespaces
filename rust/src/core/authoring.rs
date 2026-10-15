@@ -4,13 +4,135 @@ use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+// One contract table drives provider schemas and actionable argument feedback.
+pub(crate) const TOOL_CONTRACTS: &[(&str, &[&str], &[&str])] = &[
+    ("read_sdk", &[], &[]),
+    ("read_draft", &[], &[]),
+    ("name_app", &["title"], &["emoji"]),
+    ("secret_names", &[], &[]),
+    ("read_diagnostics", &["revision"], &[]),
+    ("edit_draft", &["expected_version", "code"], &[]),
+    ("patch_draft", &["expected_version"], &["edits", "fields"]),
+    ("test_draft", &["expected_version"], &[]),
+    ("test_frontend", &["revision"], &[]),
+    ("dry_run", &["revision", "action", "input"], &[]),
+    ("publish", &["revision", "expected_version"], &[]),
+    ("list_releases", &[], &[]),
+    ("inspect_data", &[], &["source", "query"]),
+    ("prepare_release", &["plan"], &["expected_version"]),
+    ("apply_release", &["plan"], &[]),
+    (
+        "release",
+        &["expected_version"],
+        &["records", "sql", "probes"],
+    ),
+];
+
+pub(crate) fn argument_feedback(args: &Value) -> Option<Value> {
+    let failure = match serde_json::from_value::<AuthoringTool>(args.clone()) {
+        Ok(_) => return None,
+        Err(error) => error,
+    };
+    if let Some(code) = args.get("code") {
+        if let Err(error) = serde_path_to_error::deserialize::<_, AppCode>(code.clone()) {
+            return Some(
+                json!({"message":error.inner().to_string().chars().take(512).collect::<String>(),"path":format!("code.{}",error.path()),"hint":"Use the declared nested schema. Backend tests require action, input and expected JSON; expected_error is not supported. Preserve input validation rather than weakening contracts to make tests pass."}),
+            );
+        }
+    }
+    let contract = TOOL_CONTRACTS
+        .iter()
+        .find(|(name, _, _)| Some(*name) == args["tool"].as_str());
+    Some(match contract {
+        Some((name, required, optional)) => json!({
+            "message":failure.to_string().chars().take(512).collect::<String>(),
+            "tool":name,"required":required,"optional":optional,
+            "missing":required.iter().filter(|key| args.get(**key).is_none()).collect::<Vec<_>>(),
+            "hint":"test_draft uses expected_version and returns revision. test_frontend and read_diagnostics require that revision, not expected_version."
+        }),
+        None => {
+            json!({"message":"Unknown authoring tool. Choose a tool from the declared schema."})
+        }
+    })
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftTextEdit {
+    pub field: String,
+    pub old: String,
+    pub new: String,
+}
+
+fn patch_code(
+    code: AppCode,
+    edits: &[DraftTextEdit],
+    fields: &std::collections::BTreeMap<String, Value>,
+) -> Result<AppCode> {
+    if edits.len() > 64 || (edits.is_empty() && fields.is_empty()) {
+        return Err(Error::Validation);
+    }
+    let mut value = serde_json::to_value(code).map_err(|_| Error::Validation)?;
+    for edit in edits {
+        if !matches!(edit.field.as_str(), "backend" | "frontend") || edit.old.is_empty() {
+            return Err(Error::Validation);
+        }
+        let source = value[&edit.field].as_str().ok_or(Error::Validation)?;
+        // Include overlapping matches: never guess which occurrence the model intended.
+        let matches = source
+            .char_indices()
+            .filter(|(i, _)| source[*i..].starts_with(&edit.old))
+            .count();
+        if matches != 1 {
+            return Err(Error::Conflict);
+        }
+        value[&edit.field] = json!(source.replacen(&edit.old, &edit.new, 1));
+    }
+    for (field, replacement) in fields {
+        if !matches!(
+            field.as_str(),
+            "actions" | "tests" | "frontend_tests" | "sqlite"
+        ) {
+            return Err(Error::Validation);
+        }
+        value[field] = replacement.clone();
+    }
+    serde_json::from_value(value).map_err(|_| Error::Validation)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthoringTool {
     ReadSdk,
+    ListReleases,
+    InspectData {
+        #[serde(default)]
+        source: Option<releases::SavedData>,
+        #[serde(default)]
+        query: Option<releases::Query>,
+    },
+    PrepareRelease {
+        plan: releases::Plan,
+        #[serde(default)]
+        expected_version: Option<i64>,
+    },
+    ApplyRelease {
+        plan: String,
+    },
+    Release {
+        expected_version: i64,
+        #[serde(default)]
+        records: std::collections::BTreeMap<String, Option<Value>>,
+        #[serde(default)]
+        sql: Vec<releases::Query>,
+        #[serde(default)]
+        probes: Vec<releases::Probe>,
+    },
     ReadDraft,
     NameApp {
         title: String,
+        #[serde(default)]
+        emoji: Option<String>,
     },
     SecretNames,
     TestFrontend {
@@ -18,6 +140,13 @@ pub enum AuthoringTool {
     },
     ReadDiagnostics {
         revision: RevisionId,
+    },
+    PatchDraft {
+        expected_version: i64,
+        #[serde(default)]
+        edits: Vec<DraftTextEdit>,
+        #[serde(default)]
+        fields: std::collections::BTreeMap<String, Value>,
     },
     EditDraft {
         expected_version: i64,
@@ -132,8 +261,12 @@ impl AuthoringSession {
                 json!({"sdk":include_str!("../../../docs/rhai/sdk.md"),"example":include_str!("../../../examples/tasks-rhai.json")}),
             ),
             AuthoringTool::ReadDraft => {
-                serde_json::to_value(self.runtime.store.draft(&app, &draft)?)
-                    .map_err(|_| Error::Storage)
+                let mut value = serde_json::to_value(self.runtime.store.draft(&app, &draft)?)
+                    .map_err(|_| Error::Storage)?;
+                let (title, emoji): (String, Option<String>) = self.runtime.store.open()?.query_row("SELECT title,(SELECT emoji FROM app_identity WHERE app=apps.id) FROM apps WHERE id=?", [&app.0], |r| Ok((r.get(0)?,r.get(1)?)))?;
+                value["name"] = json!(title);
+                value["emoji"] = json!(emoji);
+                Ok(value)
             }
             AuthoringTool::SecretNames => {
                 serde_json::to_value(self.runtime.secret_names()?).map_err(|_| Error::Storage)
@@ -141,18 +274,147 @@ impl AuthoringSession {
             AuthoringTool::ReadDiagnostics { revision } => {
                 self.runtime.store.diagnostics(&app, revision)
             }
+            AuthoringTool::ListReleases => Ok(
+                json!({"releases":self.runtime.store.releases(&app)?,"plans":self.runtime.store.release_plans(&app)?}),
+            ),
+            AuthoringTool::InspectData { source, query } => {
+                self.runtime
+                    .store
+                    .inspect_data(&app, source.clone(), query.clone())
+            }
             _ if !approved => Err(Error::ApprovalRequired),
-            AuthoringTool::NameApp { title } => {
-                if title.trim().is_empty() || title.len() > 200 {
-                    Err(Error::Validation)
-                } else {
-                    let _gate = cancel.commit_gate()?;
-                    self.runtime
-                        .store
-                        .open()?
-                        .execute("UPDATE apps SET title=? WHERE id=?", params![title, app.0])?;
-                    Ok(json!({"name":title}))
+            AuthoringTool::PrepareRelease {
+                plan,
+                expected_version,
+            } => {
+                if self.runtime.store.snapshot(&app)?.revision != base {
+                    return Err(Error::Conflict);
                 }
+                if expected_version.is_none()
+                    && !self.runtime.store.open()?.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM app_releases WHERE app=? AND (revision=? OR previous_revision=?))",
+                        params![app.0, plan.revision.0, plan.revision.0],
+                        |r| r.get::<_, bool>(0),
+                    )?
+                {
+                    return Err(Error::Validation);
+                }
+                let binding =
+                    expected_version.map(|v| (self.conversation.clone(), draft.clone(), v));
+                let result = self
+                    .runtime
+                    .prepare_release(app.clone(), plan.clone(), binding, cancel.clone())
+                    .await?;
+                self.runtime.store.open()?.execute(
+                    "UPDATE release_plans SET conversation=? WHERE id=?",
+                    params![
+                        self.conversation.0,
+                        result["plan"].as_str().ok_or(Error::Storage)?
+                    ],
+                )?;
+                Ok(result)
+            }
+            AuthoringTool::ApplyRelease { plan } => {
+                let scoped:bool=self.runtime.store.open()?.query_row("SELECT EXISTS(SELECT 1 FROM release_plans WHERE id=? AND app=? AND conversation=?)",params![plan,app.0,self.conversation.0],|r|r.get(0))?;
+                if !scoped {
+                    return Err(Error::NotFound);
+                }
+                self.runtime
+                    .store
+                    .apply_release(&app, plan, false, cancel.clone())
+            }
+            AuthoringTool::Release {
+                expected_version,
+                records,
+                sql,
+                probes,
+            } => {
+                if self.runtime.store.snapshot(&app)?.revision != base {
+                    return Err(Error::Conflict);
+                }
+                let revision = self.runtime.store.freeze_draft(&draft, *expected_version)?;
+                let plan = releases::Plan {
+                    revision: revision.id.clone(),
+                    source: None,
+                    records: records.clone(),
+                    sql: sql.clone(),
+                    probes: probes.clone(),
+                };
+                let prepared = self
+                    .runtime
+                    .prepare_release(
+                        app.clone(),
+                        plan,
+                        Some((self.conversation.clone(), draft.clone(), *expected_version)),
+                        cancel.clone(),
+                    )
+                    .await;
+                let prepared = match prepared {
+                    Ok(value) => value,
+                    Err(Error::Cancelled) => return Err(Error::Cancelled),
+                    Err(error) => {
+                        return Ok(
+                            json!({"released":false,"error":error,"revision":revision.id,"diagnostics":self.runtime.store.diagnostics(&app, &revision.id)?,"next":"Inspect these diagnostics, patch the affected code or test, then release the new draft version."}),
+                        )
+                    }
+                };
+                if prepared["needsApproval"] == true {
+                    Ok(prepared)
+                } else {
+                    self.runtime.store.apply_release(
+                        &app,
+                        prepared["plan"].as_str().ok_or(Error::Storage)?,
+                        false,
+                        cancel.clone(),
+                    )
+                }
+            }
+
+            AuthoringTool::NameApp { title, emoji } => {
+                if title.trim().is_empty()
+                    || title.len() > 200
+                    || emoji.as_ref().is_some_and(|e| {
+                        e.trim().is_empty() || e.len() > 64 || e.chars().any(char::is_control)
+                    })
+                {
+                    return Err(Error::Validation);
+                }
+                let _gate = cancel.commit_gate()?;
+                let mut db = self.runtime.store.open()?;
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let (old_title, old_emoji): (String, Option<String>) = tx.query_row("SELECT title,(SELECT emoji FROM app_identity WHERE app=apps.id) FROM apps WHERE id=?", [&app.0], |r| Ok((r.get(0)?,r.get(1)?)))?;
+                let changed = old_title != *title
+                    || emoji
+                        .as_ref()
+                        .is_some_and(|e| Some(e) != old_emoji.as_ref());
+                if old_title != *title {
+                    tx.execute("UPDATE apps SET title=? WHERE id=?", params![title, app.0])?;
+                }
+                if let Some(emoji) = emoji {
+                    if Some(emoji) != old_emoji.as_ref() {
+                        tx.execute("INSERT INTO app_identity(app,emoji) VALUES(?,?) ON CONFLICT(app) DO UPDATE SET emoji=excluded.emoji", params![app.0,emoji])?;
+                    }
+                }
+                tx.commit()?;
+                Ok(
+                    json!({"name":title,"emoji":emoji.as_ref().or(old_emoji.as_ref()),"changed":changed}),
+                )
+            }
+            AuthoringTool::PatchDraft {
+                expected_version,
+                edits,
+                fields,
+            } => {
+                let current = self.runtime.store.draft(&app, &draft)?;
+                if current.version != *expected_version {
+                    return Err(Error::Conflict);
+                }
+                let code = patch_code(current.code, edits, fields)?;
+                let _gate = cancel.commit_gate()?;
+                self.runtime
+                    .store
+                    .edit_draft(&draft, *expected_version, code)?;
+                Ok(json!({"version":expected_version+1,"patched":true}))
             }
             AuthoringTool::EditDraft {
                 expected_version,
@@ -203,9 +465,42 @@ impl AuthoringSession {
                 revision,
                 expected_version,
             } => {
-                let _gate = cancel.commit_gate()?;
-                self.publish(&app, &draft, revision, *expected_version, base.as_ref())
-                    .map(|()| json!({"published":revision}))
+                // Legacy publish consumes existing evidence; the new release tool runs validation itself.
+                let candidate = self.runtime.store.revision(&app, revision)?;
+                let db = self.runtime.store.open()?;
+                let tested: bool = db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM revision_tests WHERE revision=? AND digest=?)",
+                    params![revision.0, candidate.digest],
+                    |r| r.get(0),
+                )?;
+                let frontend:bool=candidate.code.frontend.is_empty() || db.query_row("SELECT EXISTS(SELECT 1 FROM frontend_checks WHERE revision=? AND digest=?)",params![revision.0,candidate.digest],|r|r.get::<_,bool>(0))?;
+                if !tested || !frontend {
+                    return Err(Error::Untested);
+                }
+                if self.runtime.store.snapshot(&app)?.revision != base {
+                    return Err(Error::Conflict);
+                }
+                let prepared = self
+                    .runtime
+                    .prepare_release(
+                        app.clone(),
+                        releases::Plan {
+                            revision: revision.clone(),
+                            source: None,
+                            records: Default::default(),
+                            sql: vec![],
+                            probes: vec![],
+                        },
+                        Some((self.conversation.clone(), draft.clone(), *expected_version)),
+                        cancel.clone(),
+                    )
+                    .await?;
+                self.runtime.store.apply_release(
+                    &app,
+                    prepared["plan"].as_str().ok_or(Error::Storage)?,
+                    false,
+                    cancel.clone(),
+                )
             }
         };
         let payload = json!({"tool":tool,"result":match &result { Ok(v)=>json!({"ok":v}),Err(e)=>json!({"error":e}) }});
@@ -219,46 +514,153 @@ impl AuthoringSession {
         )?;
         result
     }
-    fn publish(
-        &self,
-        app: &AppId,
-        draft: &DraftId,
-        revision: &RevisionId,
-        expected_version: i64,
-        base: Option<&RevisionId>,
-    ) -> Result<()> {
-        let mut db = self.runtime.store.open()?;
-        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (version, code): (i64, String) = tx.query_row(
-            "SELECT version,code FROM drafts WHERE app=? AND id=?",
-            params![app.0, draft.0],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let code: AppCode = serde_json::from_str(&code).map_err(|_| Error::Storage)?;
-        let digest: String = tx
-            .query_row(
-                "SELECT digest FROM revisions WHERE app=? AND id=?",
-                params![app.0, revision.0],
-                |r| r.get(0),
-            )
-            .optional()?
-            .ok_or(Error::NotFound)?;
-        if version != expected_version || code.digest()? != digest {
-            return Err(Error::Conflict);
-        }
-        Store::publish_in(&tx, app, revision, base)?;
-        tx.execute(
-            "UPDATE authoring_sessions SET base_revision=? WHERE conversation=?",
-            params![revision.0, self.conversation.0],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn targeted_patches_preserve_other_fields_and_reject_partial_or_stale_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets =
+            super::super::secrets::Secrets::open(store.clone(), &dir.path().join("secrets.key"))
+                .unwrap();
+        let runtime = Runtime::new(store.clone(), secrets, 4).unwrap();
+        let app = store.create_app("Patch test").unwrap();
+        let mut code: AppCode =
+            serde_json::from_str(include_str!("../../../examples/tasks-rhai.json")).unwrap();
+        code.frontend = "// unique αβ marker; repeat repeat; aaa".into();
+        let draft = store.create_draft(&app, code.clone()).unwrap();
+        let session = AuthoringSession::begin(runtime, &app, &draft.id, true).unwrap();
+        let named = session
+            .dispatch(
+                AuthoringTool::NameApp {
+                    title: "Patch test".into(),
+                    emoji: Some("🧠".into()),
+                },
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(named["changed"], true);
+        let unchanged = session
+            .dispatch(
+                AuthoringTool::NameApp {
+                    title: "Patch test".into(),
+                    emoji: None,
+                },
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unchanged["changed"], false);
+        assert_eq!(unchanged["emoji"], "🧠");
+        let identity = session
+            .dispatch(
+                AuthoringTool::ReadDraft,
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(identity["name"], "Patch test");
+        assert_eq!(identity["emoji"], "🧠");
+        assert_eq!(
+            session
+                .dispatch(
+                    AuthoringTool::NameApp {
+                        title: "Unwanted rename".into(),
+                        emoji: Some("\n".into())
+                    },
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await,
+            Err(Error::Validation)
+        );
+        assert_eq!(
+            store
+                .open()
+                .unwrap()
+                .query_row("SELECT title FROM apps WHERE id=?", [&app.0], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "Patch test"
+        );
+        let patch = |version, edits: Vec<(&str, &str)>| AuthoringTool::PatchDraft {
+            expected_version: version,
+            edits: edits
+                .into_iter()
+                .map(|(old, new)| DraftTextEdit {
+                    field: "frontend".into(),
+                    old: old.into(),
+                    new: new.into(),
+                })
+                .collect(),
+            fields: Default::default(),
+        };
+        for edits in [
+            vec![("αβ", "changed"), ("missing", "x")],
+            vec![("repeat", "x")],
+            vec![("aa", "x")],
+            vec![("", "x")],
+        ] {
+            assert!(session
+                .dispatch(
+                    patch(1, edits),
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await
+                .is_err());
+            let current = store.draft(&app, &draft.id).unwrap();
+            assert_eq!(current.version, 1);
+            assert_eq!(current.code.frontend, code.frontend);
+        }
+        let mut valid = patch(1, vec![("αβ", "γδ")]);
+        if let AuthoringTool::PatchDraft { fields, .. } = &mut valid {
+            fields.insert("sqlite".into(), json!(true));
+        }
+        assert_eq!(
+            session
+                .dispatch(valid, MockHttp::default(), Cancellation::default())
+                .await
+                .unwrap()["version"],
+            2
+        );
+        let current = store.draft(&app, &draft.id).unwrap();
+        assert_eq!(current.code.frontend, code.frontend.replace("αβ", "γδ"));
+        assert_eq!(current.code.backend, code.backend);
+        assert_eq!(
+            serde_json::to_value(&current.code.tests).unwrap(),
+            serde_json::to_value(&code.tests).unwrap()
+        );
+        assert!(current.code.sqlite);
+        assert_eq!(
+            session
+                .dispatch(
+                    patch(1, vec![("γδ", "stale")]),
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await,
+            Err(Error::Conflict)
+        );
+        let invalid = AuthoringTool::PatchDraft {
+            expected_version: 2,
+            edits: vec![],
+            fields: std::collections::BTreeMap::from([("actions".into(), json!("invalid"))]),
+        };
+        assert!(session
+            .dispatch(invalid, MockHttp::default(), Cancellation::default())
+            .await
+            .is_err());
+        assert_eq!(store.draft(&app, &draft.id).unwrap().version, 2);
+    }
+
     #[tokio::test]
     async fn persisted_authoring_fixes_failed_backend_and_rejects_stale_publication() {
         let dir = tempfile::tempdir().unwrap();

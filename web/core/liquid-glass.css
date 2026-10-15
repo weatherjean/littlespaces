@@ -424,3 +424,174 @@ body {
     padding: 16px;
   }
 }
+
+/* Settings use one shared phone-first alignment, including section actions. */
+.shell .settings-content .setting-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px 12px;
+  padding: 20px;
+}
+.shell .settings-content .setting-card.setting-section {
+  display: block;
+}
+.shell .settings-content .setting-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 14px;
+}
+.shell .setting-icon svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+.shell .settings-content .setting-card h3 {
+  font-size: 15px;
+  line-height: 1.4;
+  margin: 0 0 4px;
+}
+.shell .settings-content .setting-card p {
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.shell .settings-content .setting-card > button {
+  grid-column: 2;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+.shell .settings-content .setting-card:has(> input[type='checkbox']) {
+  grid-template-columns: 42px minmax(0, 1fr) 44px;
+  align-items: center;
+}
+.shell .settings-content .setting-card > input[type='checkbox'] {
+  width: 24px;
+  height: 24px;
+  margin: 10px;
+}
+.shell .settings-content .setting-section-heading {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px 12px;
+}
+.shell .settings-content .setting-section-heading > button {
+  grid-column: 2;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+}
+.shell .settings-content .setting-section-body {
+  padding: 16px 0 0;
+}
+.shell .notification-settings-body {
+  display: grid;
+  gap: 16px;
+}
+.shell .notification-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.shell .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.shell .status-dot.enabled {
+  background: var(--success);
+}
+.shell .notification-settings .setting-actions {
+  display: grid;
+  gap: 10px;
+}
+.shell .notification-settings .setting-actions button {
+  width: 100%;
+  min-height: 44px;
+}
+.shell .notification-feedback {
+  margin: 0;
+}
+@media (min-width: 701px) {
+  .shell .settings-content .setting-card {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    padding: 24px;
+    gap: 17px;
+  }
+  .shell .settings-content .setting-card > button {
+    grid-column: 3;
+    width: auto;
+  }
+  .shell .settings-content .setting-section-heading {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 17px;
+  }
+  .shell .settings-content .setting-section-heading > button {
+    grid-column: 3;
+    width: auto;
+  }
+  .shell .settings-content .setting-section-body {
+    padding-left: 59px;
+  }
+  .shell .notification-settings .setting-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .shell .notification-settings .setting-actions button {
+    width: auto;
+  }
+}
+
+.shell .settings-content .setting-card > input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.shell .settings-content .setting-card > input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  inset: 9px 0;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.shell .settings-content .setting-card > input[type='checkbox']::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.shell .settings-content .setting-card > input[type='checkbox']:checked::before {
+  background: var(--accent);
+}
+.shell .settings-content .setting-card > input[type='checkbox']:checked::after {
+  left: 22px;
+  background: var(--on-accent);
+}
+.shell .settings-content .setting-card > input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}

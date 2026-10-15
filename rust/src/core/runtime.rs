@@ -2,19 +2,12 @@ use super::{
     control::{CancelOnDrop, Control},
     http::{Broker, HttpRequest, MockHttp},
     secrets::Secrets,
-    store::{validate_records, Records},
+    store::Records,
     *,
 };
-use rhai::{Dynamic, Engine, EvalAltResult, Scope};
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +26,7 @@ pub struct Invocation {
     pub input: Value,
     pub mode: ExecutionMode,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Outcome {
     pub result: Value,
     pub committed: bool,
@@ -45,14 +38,11 @@ pub struct Runtime {
     admission: Arc<tokio::sync::Semaphore>,
     pub(crate) authoring_admission: Arc<tokio::sync::Semaphore>,
     pub deadline: Duration,
+    pub(crate) offline_actions: bool,
     pub browser: Option<super::browser::BrowserConfig>,
     pub(crate) previews: super::browser::Previews,
 }
-struct Session {
-    records: Records,
-    error: Option<Error>,
-    http_calls: usize,
-}
+
 impl Runtime {
     pub fn new(store: Store, secrets: Secrets, slots: usize) -> Result<Self> {
         if slots == 0 || slots > 16 {
@@ -63,7 +53,15 @@ impl Runtime {
             secrets,
             admission: Arc::new(tokio::sync::Semaphore::new(slots)),
             authoring_admission: Arc::new(tokio::sync::Semaphore::new(slots)),
-            deadline: Duration::from_millis(750),
+            deadline: Duration::from_secs(
+                std::env::var("LITTLESPACES_ACTION_TIMEOUT_SECONDS")
+                    .ok()
+                    .map(|s| s.parse::<u64>().map_err(|_| Error::Validation))
+                    .transpose()?
+                    .unwrap_or(60)
+                    .clamp(1, 300),
+            ),
+            offline_actions: false,
             browser: None,
             previews: Default::default(),
         })
@@ -138,6 +136,11 @@ impl Runtime {
         handle: tokio::runtime::Handle,
     ) -> Result<Outcome> {
         control.check()?;
+        if request.mode == ExecutionMode::Commit {
+            if let Some(outcome) = self.store.invocation_outcome(&request)? {
+                return outcome;
+            }
+        }
         let revision = self.store.revision(&request.app, &request.revision)?;
         let action = revision
             .code
@@ -145,7 +148,6 @@ impl Runtime {
             .iter()
             .find(|a| a.name == request.action)
             .ok_or(Error::NotFound)?;
-        validate_json(&action.input, &request.input)?;
         let before = self.store.snapshot(&request.app)?;
         if request.mode != ExecutionMode::DryRun
             && before.revision.as_ref() != Some(&request.revision)
@@ -163,43 +165,52 @@ impl Runtime {
         };
         let live = request.mode != ExecutionMode::DryRun;
         let result = (|| {
-            let (result, records) = self.evaluate(
+            let (result, records, sqlite, notices) = self.evaluate(
                 &revision,
                 action,
                 request.input,
                 &before.records,
+                &before.sqlite,
                 &broker,
                 &request.id,
-                if live { None } else { Some(&mock) },
+                if live && !self.offline_actions {
+                    None
+                } else {
+                    Some(&mock)
+                },
                 request.mode == ExecutionMode::LiveProbe,
                 &control,
             )?;
             control.check()?;
             let committed = request.mode == ExecutionMode::Commit && !action.read_only;
+            let outcome = Outcome { result, committed };
             if committed {
                 // Cancellation is linearized with commit. Never retry commit after a conflict.
                 let _gate = control.cancel.commit_gate()?;
-                self.store
-                    .commit(&before, &records, || control.check_deadline())?;
+                self.store.commit_action(
+                    &before,
+                    &records,
+                    &sqlite,
+                    &notices,
+                    Some((&request.id, &outcome)),
+                    || control.check_deadline(),
+                )?;
             }
-            Ok(Outcome { result, committed })
+            Ok(outcome)
         })();
-        if request.mode == ExecutionMode::Commit {
-            // Uncertain evidence remains independently durable when this local action fails.
-            self.store.open()?.execute(
-                "UPDATE invocations SET state=? WHERE id=?",
-                params![
-                    if result.is_ok() {
-                        "completed"
-                    } else {
-                        "failed"
-                    },
-                    request.id.0
-                ],
-            )?;
+        if request.mode == ExecutionMode::Commit && !result.as_ref().is_ok_and(|o| o.committed) {
+            let mut reported = false;
+            while self.store.finish_invocation(&request.id, &result).is_err() {
+                if !reported {
+                    super::telemetry::error("invocation.finish", Error::Storage);
+                    reported = true;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
         }
         result
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn preview_action(
         &self,
         app: AppId,
@@ -207,8 +218,9 @@ impl Runtime {
         action: String,
         input: Value,
         records: Records,
+        sqlite: Vec<u8>,
         mock: MockHttp,
-    ) -> Result<(Value, Records)> {
+    ) -> Result<(Value, Records, Vec<u8>)> {
         let permit = self
             .admission
             .clone()
@@ -231,17 +243,20 @@ impl Runtime {
                 secrets: runtime.secrets.clone(),
                 handle,
             };
-            runtime.evaluate(
-                &revision,
-                contract,
-                input,
-                &records,
-                &broker,
-                &InvocationId::new(),
-                Some(&mock),
-                false,
-                &control,
-            )
+            runtime
+                .evaluate(
+                    &revision,
+                    contract,
+                    input,
+                    &records,
+                    &sqlite,
+                    &broker,
+                    &InvocationId::new(),
+                    Some(&mock),
+                    false,
+                    &control,
+                )
+                .map(|(value, records, sqlite, _)| (value, records, sqlite))
         })
         .await
         .map_err(|_| Error::Script)?
@@ -260,7 +275,7 @@ impl Runtime {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Saturated)?;
-        let control = Control::new(cancel.clone(), self.deadline);
+        let control = Control::new(cancel.clone(), self.deadline * 64);
         let mut guard = CancelOnDrop(Some(cancel));
         let runtime = self.clone();
         let handle = tokio::runtime::Handle::current();
@@ -282,6 +297,7 @@ impl Runtime {
                 handle,
             };
             let mut records = Records::new();
+            let mut sqlite = Vec::new();
             for (index, test) in revision.code.tests.iter().enumerate() {
                 let action = revision
                     .code
@@ -291,16 +307,18 @@ impl Runtime {
                     .ok_or(Error::Validation)?;
                 let mut fixtures = mock.clone();
                 fixtures.0.extend(test.http.clone());
-                let (value, next) = runtime.evaluate(
+                let case_control = Control::new(control.cancel.clone(), runtime.deadline);
+                let (value, next, next_sqlite, _) = runtime.evaluate(
                     &revision,
                     action,
                     test.input.clone(),
                     &records,
+                    &sqlite,
                     &broker,
                     &InvocationId::new(),
                     Some(&fixtures),
                     false,
-                    &control,
+                    &case_control,
                 )?;
                 if value != test.expected {
                     return Err(runtime.diagnostic(
@@ -311,6 +329,7 @@ impl Runtime {
                     ));
                 }
                 records = next;
+                sqlite = next_sqlite;
             }
             let _gate = control.cancel.commit_gate()?;
             control.check_deadline()?;
@@ -328,219 +347,78 @@ impl Runtime {
         action: &ActionContract,
         input: Value,
         records: &Records,
+        sqlite: &[u8],
         broker: &Broker,
         invocation: &InvocationId,
         mock: Option<&MockHttp>,
         force_readonly: bool,
         control: &Control,
-    ) -> Result<(Value, Records)> {
-        control.check()?;
-        validate_json(&action.input, &input).map_err(|_| {
-            self.diagnostic(
-                revision,
-                &action.name,
-                "input",
-                json!({"schema":action.input,"input":input}),
-            )
-        })?;
-        let readonly = action.read_only || force_readonly;
-        let session = Rc::new(RefCell::new(Session {
-            records: records.clone(),
-            error: None,
-            http_calls: 0,
-        }));
-        let mut engine = Engine::new();
-        engine.set_optimization_level(rhai::OptimizationLevel::None);
-        engine.set_max_operations(30000);
-        engine.set_max_call_levels(16);
-        engine.set_max_expr_depths(32, 32);
-        engine.set_max_string_size(16384);
-        engine.set_max_array_size(512);
-        engine.set_max_map_size(512);
-        engine.set_max_variables(32);
-        engine.set_max_functions(16);
-        for symbol in ["eval", "print", "debug", "import", "export"] {
-            engine.disable_symbol(symbol);
-        }
-        let progress = control.clone();
-        engine.on_progress(move |_| progress.check().err().map(|e| Dynamic::from(e.to_string())));
+    ) -> Result<(Value, Records, Vec<u8>, Vec<notifications::Change>)> {
+        let host = EvaluationBroker {
+            runtime: self.clone(),
+            revision: revision.clone(),
+            action: action.name.clone(),
+            broker: broker.clone(),
+            invocation: invocation.clone(),
+            mock: mock.cloned(),
+            readonly: action.read_only || force_readonly,
+            control: control.clone(),
+        };
         #[cfg(test)]
-        engine.register_fn("test_pause", |ms: i64| {
-            std::thread::sleep(Duration::from_millis(ms.clamp(0, 200) as u64));
-        });
-        let ctx = session.clone();
-        engine.register_fn("db_get", move |key: &str| {
-            dynamic(ctx.borrow().records.get(key).unwrap_or(&Value::Null))
-        });
-        let ctx = session.clone();
-        engine.register_fn("db_list", move || {
-            let values: Vec<_> = ctx
-                .borrow()
-                .records
-                .iter()
-                .map(|(key, value)| json!({"key":key,"value":value}))
-                .collect();
-            dynamic(&json!(values))
-        });
-        let ctx = session.clone();
-        let c = control.clone();
-        engine.register_fn(
-            "db_set",
-            move |key: &str, value: Dynamic| -> std::result::Result<(), Box<EvalAltResult>> {
-                let result = (|| {
-                    c.check()?;
-                    if readonly {
-                        return Err(Error::ReadOnly);
-                    }
-                    let value: Value =
-                        rhai::serde::from_dynamic(&value).map_err(|_| Error::Validation)?;
-                    let mut state = ctx.borrow_mut();
-                    let mut candidate = state.records.clone();
-                    candidate.insert(key.into(), value);
-                    validate_records(&candidate)?;
-                    state.records = candidate;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    ctx.borrow_mut().error = Some(error);
-                }
-                result.map_err(failure)
-            },
-        );
-        let ctx = session.clone();
-        let c = control.clone();
-        engine.register_fn(
-            "db_remove",
-            move |key: &str| -> std::result::Result<bool, Box<EvalAltResult>> {
-                let result = (|| {
-                    c.check()?;
-                    if readonly {
-                        return Err(Error::ReadOnly);
-                    }
-                    Ok(ctx.borrow_mut().records.remove(key).is_some())
-                })();
-                if let Err(error) = result {
-                    ctx.borrow_mut().error = Some(error);
-                }
-                result.map_err(failure)
-            },
-        );
-        engine.register_fn("uuid", || format!("{:032x}", rand::random::<u128>()));
-        engine.register_fn("now_ms", || {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64
-        });
-        engine.register_fn(
-            "json_parse",
-            |s: &str| -> std::result::Result<Dynamic, Box<EvalAltResult>> {
-                if s.len() > 16384 {
-                    return Err(failure(Error::Limit));
-                }
-                dynamic(&serde_json::from_str(s).map_err(|_| failure(Error::Validation))?)
-            },
-        );
-        engine.register_fn(
-            "json_stringify",
-            |v: Dynamic| -> std::result::Result<String, Box<EvalAltResult>> {
-                let v: Value =
-                    rhai::serde::from_dynamic(&v).map_err(|_| failure(Error::Validation))?;
-                let s = v.to_string();
-                if s.len() > 16384 {
-                    return Err(failure(Error::Limit));
-                }
-                Ok(s)
-            },
-        );
-        let ctx = session.clone();
-        let broker = broker.clone();
-        let invocation = invocation.clone();
-        let mock = mock.cloned();
-        let c = control.clone();
-        engine.register_fn(
-            "http_request",
-            move |request: Dynamic| -> std::result::Result<Dynamic, Box<EvalAltResult>> {
-                let result = (|| {
-                    c.check()?;
-                    {
-                        let mut state = ctx.borrow_mut();
-                        state.http_calls += 1;
-                        if state.http_calls > 2 {
-                            return Err(Error::Limit);
-                        }
-                    }
-                    let value: Value =
-                        rhai::serde::from_dynamic(&request).map_err(|_| Error::Validation)?;
-                    let request: HttpRequest =
-                        serde_json::from_value(value).map_err(|_| Error::Validation)?;
-                    let response =
-                        broker.request(&invocation, request, readonly, mock.as_ref(), &c)?;
-                    c.check()?;
-                    Ok(response)
-                })();
-                if let Err(error) = &result {
-                    ctx.borrow_mut().error = Some(*error);
-                }
-                dynamic(&result.map_err(failure)?)
-            },
-        );
-        let ast = engine.compile(&revision.code.backend).map_err(|e| {
-            self.diagnostic(
+        {
+            super::evaluator::evaluate(
                 revision,
-                &action.name,
-                "compile",
-                json!({"message":e.to_string().chars().take(4096).collect::<String>()}),
+                action,
+                input,
+                records,
+                sqlite,
+                std::rc::Rc::new(host),
+                force_readonly,
+                control,
             )
-        })?;
-        control.check()?;
-        let input = dynamic(&input).map_err(|_| Error::Validation)?;
-        let result = engine.call_fn::<Dynamic>(&mut Scope::new(), &ast, &action.name, (input,));
-        control.check()?;
-        if let Some(error) = session.borrow().error {
-            return Err(error);
         }
-        let result = result.map_err(|e| {
-            self.diagnostic(
+        #[cfg(not(test))]
+        {
+            super::worker::evaluate(
                 revision,
-                &action.name,
-                "script",
-                json!({"message":e.to_string().chars().take(4096).collect::<String>()}),
+                action,
+                input,
+                records,
+                sqlite,
+                host,
+                force_readonly,
+                control,
             )
-        })?;
-        let result: Value = rhai::serde::from_dynamic(&result).map_err(|_| Error::Validation)?;
-        // Secrets are never delivered to scripts; redact again at the tool/UI boundary.
-        let result = self.secrets.redact(result)?;
-        validate_json(&action.output, &result).map_err(|_| {
-            self.diagnostic(
-                revision,
-                &action.name,
-                "output",
-                json!({"schema":action.output,"actual":result}),
-            )
-        })?;
-        let state = session.borrow();
-        validate_records(&state.records)?;
-        if readonly && state.records != *records {
-            return Err(Error::ReadOnly);
         }
-        Ok((result, state.records.clone()))
     }
 }
-fn failure(error: Error) -> Box<EvalAltResult> {
-    error.to_string().into()
+pub(crate) struct EvaluationBroker {
+    runtime: Runtime,
+    revision: Revision,
+    action: String,
+    broker: Broker,
+    invocation: InvocationId,
+    mock: Option<MockHttp>,
+    readonly: bool,
+    control: Control,
 }
-fn dynamic(value: &Value) -> std::result::Result<Dynamic, Box<EvalAltResult>> {
-    rhai::serde::to_dynamic(value).map_err(|_| failure(Error::Validation))
-}
-fn validate_json(schema: &Value, value: &Value) -> Result<()> {
-    if value.to_string().len() > 65536 {
-        return Err(Error::Limit);
+impl super::evaluator::EvaluationHost for EvaluationBroker {
+    fn request(&self, request: HttpRequest) -> Result<Value> {
+        self.broker.request(
+            &self.invocation,
+            request,
+            self.readonly,
+            self.mock.as_ref(),
+            &self.control,
+        )
     }
-    jsonschema::validator_for(schema)
-        .map_err(|_| Error::Validation)?
-        .validate(value)
-        .map_err(|_| Error::Validation)
+    fn diagnostic(&self, phase: &str, details: Value) -> Error {
+        self.runtime
+            .diagnostic(&self.revision, &self.action, phase, details)
+    }
+    fn redact(&self, value: Value) -> Result<Value> {
+        self.runtime.secrets.redact(value)
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +433,15 @@ mod tests {
     }
     impl Fixture {
         async fn new(source: &str, readonly: bool, output: Value, expected: Value) -> Self {
+            Self::with_sqlite(source, readonly, output, expected, false).await
+        }
+        async fn with_sqlite(
+            source: &str,
+            readonly: bool,
+            output: Value,
+            expected: Value,
+            sqlite: bool,
+        ) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::create(&dir.path().join("workspace.sqlite")).unwrap();
             let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
@@ -564,6 +451,7 @@ mod tests {
                 .create_draft(
                     &app,
                     AppCode {
+                        sqlite,
                         backend: source.into(),
                         frontend: "".into(),
                         actions: vec![ActionContract {
@@ -626,6 +514,183 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn sqlite_is_isolated_and_commits_atomically_with_records() {
+        let source = r#"fn run(input) {
+            sql_execute("CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, title TEXT)", []);
+            sql_execute("INSERT INTO items(title) VALUES (?)", ["hello"]);
+            db_set("count", sql_query("SELECT count(*) AS n FROM items", [])[0].n);
+            db_get("count")
+        }"#;
+        let f =
+            Fixture::with_sqlite(source, false, json!({"type":"integer"}), json!(1), true).await;
+        f.publish().await;
+        assert!(f.runtime.store.snapshot(&f.app).unwrap().sqlite.is_empty());
+        let request = f.request(ExecutionMode::DryRun);
+        f.runtime
+            .invoke(request, MockHttp::default(), Cancellation::default())
+            .await
+            .unwrap();
+        assert!(f.runtime.store.snapshot(&f.app).unwrap().sqlite.is_empty());
+        f.runtime
+            .invoke(
+                f.request(ExecutionMode::Commit),
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = f.runtime.store.snapshot(&f.app).unwrap();
+        assert_eq!(snapshot.records["count"], json!(1));
+        assert!(!snapshot.sqlite.is_empty());
+        f.runtime
+            .invoke(
+                f.request(ExecutionMode::Commit),
+                MockHttp::default(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.runtime.store.snapshot(&f.app).unwrap().records["count"],
+            json!(2)
+        );
+        let other = f.runtime.store.create_app("Other").unwrap();
+        assert!(f.runtime.store.snapshot(&other).unwrap().sqlite.is_empty());
+        let preview = f
+            .runtime
+            .preview_action(
+                f.app.clone(),
+                f.revision.id.clone(),
+                "run".into(),
+                json!({}),
+                Records::new(),
+                vec![],
+                MockHttp::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.0, json!(1));
+        let preview = f
+            .runtime
+            .preview_action(
+                f.app.clone(),
+                f.revision.id.clone(),
+                "run".into(),
+                json!({}),
+                preview.1,
+                preview.2,
+                MockHttp::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.0, json!(2));
+        // Publication changes do not clear SQL data; conflicts/cancellation cannot commit it.
+        assert_eq!(
+            f.runtime
+                .store
+                .commit_with_sqlite(&snapshot, &snapshot.records, &[], &[], || Ok(())),
+            Err(Error::Conflict)
+        );
+        let snapshot = f.runtime.store.snapshot(&f.app).unwrap();
+        assert_eq!(
+            f.runtime
+                .store
+                .commit_with_sqlite(&snapshot, &Records::new(), &[], &[], || Err(
+                    Error::Cancelled
+                )),
+            Err(Error::Cancelled)
+        );
+        assert_eq!(
+            f.runtime.store.snapshot(&f.app).unwrap().sqlite,
+            snapshot.sqlite
+        );
+        let failed =
+            Fixture::with_sqlite(source, false, json!({"type":"string"}), json!(1), true).await;
+        assert!(failed
+            .runtime
+            .invoke(
+                failed.request(ExecutionMode::DryRun),
+                MockHttp::default(),
+                Cancellation::default()
+            )
+            .await
+            .is_err());
+        assert!(failed
+            .runtime
+            .store
+            .snapshot(&failed.app)
+            .unwrap()
+            .sqlite
+            .is_empty());
+        let disabled = Fixture::new(source, false, json!({}), json!(1)).await;
+        assert!(disabled
+            .runtime
+            .invoke(
+                disabled.request(ExecutionMode::DryRun),
+                MockHttp::default(),
+                Cancellation::default()
+            )
+            .await
+            .is_err());
+        let readonly = Fixture::with_sqlite(
+            r#"fn run(input) { try { sql_execute("CREATE TABLE nope(x)", []); } catch(e) {} 1 }"#,
+            true,
+            json!({}),
+            json!(1),
+            true,
+        )
+        .await;
+        assert!(matches!(
+            readonly
+                .runtime
+                .invoke(
+                    readonly.request(ExecutionMode::DryRun),
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await,
+            Err(Error::ReadOnly)
+        ));
+    }
+    #[tokio::test]
+    async fn notifications_follow_atomic_commit_and_readonly_rules() {
+        let source = r#"fn run(input) { db_set("task",1); notify(#{key:"task",title:"Task ready",body:"Review it"}); 1 }"#;
+        let f = Fixture::new(source, false, json!({"type":"integer"}), json!(1)).await;
+        f.publish().await;
+        assert_eq!(notifications::list(&f.runtime.store).unwrap(), json!([]));
+        f.invoke(ExecutionMode::DryRun).await.unwrap();
+        assert_eq!(notifications::list(&f.runtime.store).unwrap(), json!([]));
+        f.invoke(ExecutionMode::Commit).await.unwrap();
+        assert_eq!(
+            notifications::list(&f.runtime.store)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let f = Fixture::new(
+            r#"fn run(input) { notify(#{key:"task",title:"Task ready"}); throw "abort"; }"#,
+            false,
+            json!({"type":"integer"}),
+            json!(1),
+        )
+        .await;
+        assert!(f.invoke(ExecutionMode::DryRun).await.is_err());
+        assert_eq!(notifications::list(&f.runtime.store).unwrap(), json!([]));
+        let f = Fixture::new(
+            r#"fn run(input) { try { notify(#{key:"task",title:"Task ready"}); } catch(e) {} 1 }"#,
+            true,
+            json!({"type":"integer"}),
+            json!(1),
+        )
+        .await;
+        assert!(matches!(
+            f.invoke(ExecutionMode::DryRun).await,
+            Err(Error::ReadOnly)
+        ));
+    }
+    #[tokio::test]
     async fn generated_code_is_tested_bound_and_commits_atomically() {
         let f = Fixture::new(
             "fn run(input) { db_set(\"task\", #{title:\"Keep\"}); db_get(\"task\") }",
@@ -654,12 +719,19 @@ mod tests {
                 .unwrap()
                 .committed
         );
-        assert!(matches!(
+        let version = f.runtime.store.snapshot(&f.app).unwrap().version;
+        assert!(
             f.runtime
                 .invoke(request, MockHttp::default(), Cancellation::default())
-                .await,
-            Err(Error::DuplicateInvocation)
-        ));
+                .await
+                .unwrap()
+                .committed
+        );
+        assert_eq!(
+            f.runtime.store.snapshot(&f.app).unwrap().version,
+            version,
+            "replayed outcome must not execute twice"
+        );
         let next = f
             .runtime
             .store
@@ -816,6 +888,42 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn completion_failure_rolls_back_data_and_releases_invocation() {
+        let f = Fixture::new(
+            "fn run(input) { db_set(\"x\",1); 1 }",
+            false,
+            json!({"type":"integer"}),
+            json!(1),
+        )
+        .await;
+        f.publish().await;
+        let db = f.runtime.store.open().unwrap();
+        db.execute_batch("CREATE TRIGGER fail_complete BEFORE UPDATE OF state ON invocations WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+        let request = f.request(ExecutionMode::Commit);
+        assert!(matches!(
+            f.runtime
+                .invoke(
+                    request.clone(),
+                    MockHttp::default(),
+                    Cancellation::default()
+                )
+                .await,
+            Err(Error::Storage)
+        ));
+        assert!(f.runtime.store.snapshot(&f.app).unwrap().records.is_empty());
+        assert_eq!(
+            db.query_row(
+                "SELECT state FROM invocations WHERE id=?",
+                [request.id.0],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "failed"
+        );
+        db.execute_batch("DROP TRIGGER fail_complete").unwrap();
+        assert!(f.invoke(ExecutionMode::Commit).await.unwrap().committed);
+    }
+    #[tokio::test]
     async fn native_callback_deadline_cancellation_and_saturation() {
         let mut f = Fixture::new(
             "fn run(input) { db_set(\"pending\",1); test_pause(100); [] }",
@@ -832,8 +940,8 @@ mod tests {
             Err(Error::Deadline)
         ));
         assert!(
-            start.elapsed() >= Duration::from_millis(90),
-            "Rhai cannot preempt a Rust callback"
+            start.elapsed() < Duration::from_secs(2),
+            "pure evaluator deadline must prevent a late commit; worker preemption has process-level coverage"
         );
         assert!(f.runtime.store.snapshot(&f.app).unwrap().records.is_empty());
         f.runtime.deadline = Duration::from_secs(1);

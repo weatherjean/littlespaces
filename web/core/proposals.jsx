@@ -1,5 +1,5 @@
 import { h, Fragment } from 'preact';
-import { Icon } from './ui.jsx';
+import { Icon, appEmoji } from './ui.jsx';
 export function Proposals({ items, busy, onDecide, apps }) {
   return (
     <>
@@ -7,7 +7,13 @@ export function Proposals({ items, busy, onDecide, apps }) {
         <article key={p.id} class="proposal-card">
           <header>
             <span>
-              <Icon name={p.details.kind === 'app' ? 'spark' : 'check'} size={18} />
+              {p.details.kind === 'app' ? (
+                <span class="proposal-emoji" aria-hidden="true">
+                  {p.details.emoji || appEmoji(p.details.title)}
+                </span>
+              ) : (
+                <Icon name="check" size={18} />
+              )}
               {p.details.kind === 'app'
                 ? p.details.title
                 : apps.find((a) => a.id === p.details.app)?.title || 'App action'}
@@ -36,7 +42,15 @@ export function Proposals({ items, busy, onDecide, apps }) {
             <div class="proposal-actions">
               <button class="primary-button" disabled={busy} onClick={() => onDecide(p.id, true)}>
                 <Icon name="check" size={16} />
-                {p.details.kind === 'app' ? 'Build this app' : 'Confirm change'}
+                {p.details.kind === 'app'
+                  ? 'Build this app'
+                  : p.details.kind === 'update'
+                    ? 'Update this app'
+                    : p.details.kind === 'archive'
+                      ? p.details.archived
+                        ? 'Archive app'
+                        : 'Restore app'
+                      : 'Confirm change'}
               </button>
               <button
                 class="secondary-button"

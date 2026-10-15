@@ -46,6 +46,8 @@ pub struct TestCase {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppCode {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sqlite: bool,
     pub backend: String,
     pub frontend: String,
     pub actions: Vec<ActionContract>,
@@ -59,6 +61,11 @@ pub enum BrowserStep {
     Fill { selector: String, value: String },
     Click { selector: String },
     Text { selector: String, contains: String },
+    Value { selector: String, value: String },
+    Enabled { selector: String },
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 impl AppCode {
     pub fn digest(&self) -> Result<String> {
@@ -131,9 +138,16 @@ pub struct Revision {
     pub digest: String,
     pub code: AppCode,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Error {
+macro_rules! errors {
+    ($($variant:ident),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Error { $($variant),* }
+        #[cfg(test)]
+        pub const ALL_ERRORS: &[Error] = &[$(Error::$variant),*];
+    };
+}
+errors! {
     Storage,
     NotFound,
     Validation,
@@ -158,7 +172,20 @@ pub enum Error {
     UsageLimit,
     UsageUnavailable,
     ModelIncomplete,
+    ModelEventLimit,
+    ModelOutputLimit,
+    ModelTimeout,
     StreamInterrupted,
+    RateLimited,
+    ProviderUnavailable,
+    ProviderAccess,
+    ProviderRequest,
+    ModelUnavailable,
+    ContextLimit,
+    ContentBlocked,
+    RecoveryRequired,
+    JobBudget,
+    Interrupted
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl fmt::Display for Error {
@@ -170,5 +197,23 @@ impl std::error::Error for Error {}
 impl From<rusqlite::Error> for Error {
     fn from(_: rusqlite::Error) -> Self {
         Self::Storage
+    }
+}
+
+#[cfg(test)]
+mod error_contract_tests {
+    use super::*;
+    #[test]
+    fn every_public_error_has_a_friendly_message() {
+        let messages: serde_json::Map<String, Value> =
+            serde_json::from_str(include_str!("../../../web/core/errors.json")).unwrap();
+        assert_eq!(messages.len(), ALL_ERRORS.len());
+        for error in ALL_ERRORS {
+            let code = serde_json::to_value(error).unwrap();
+            assert!(
+                messages[code.as_str().unwrap()].as_str().unwrap().len() > 30,
+                "{error:?}"
+            );
+        }
     }
 }

@@ -20,3 +20,4 @@ build-rust/
 **/secrets.key
 .data-*/
 .DS_Store
+**/testing.key

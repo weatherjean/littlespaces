@@ -1,0 +1,11 @@
+# Source-only Linux regression image. Build with scripts/linux-check.py.
+FROM rust:1.84.1-bookworm
+WORKDIR /app
+COPY rust rust
+COPY docs/rhai docs/rhai
+COPY examples examples
+COPY static static
+COPY web/core web/core
+COPY build-rust/core build-rust/core
+RUN --mount=type=cache,target=/usr/local/cargo/registry cargo test --manifest-path rust/Cargo.toml --locked --all-features --no-run
+CMD ["sh", "-c", "for suite in rust/target/debug/deps/little_spaces-* rust/target/debug/deps/worker_process-* rust/target/debug/deps/workspace_lock-*; do if [ -f \"$suite\" ] && [ -x \"$suite\" ]; then if \"$suite\" --list >/dev/null 2>&1; then \"$suite\" || exit $?; fi; fi; done"]

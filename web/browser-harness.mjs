@@ -1,6 +1,6 @@
 // Development-only browser service. Never bundled into the Rust executable.
 import http from 'node:http';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 export async function startHarness({
@@ -30,6 +30,9 @@ export async function startHarness({
     active = true;
     let context, page;
     const errors = [];
+    let assertions = 0,
+      completedSteps = 0,
+      failedStep = null;
     try {
       const chunks = [];
       let size = 0;
@@ -58,8 +61,8 @@ export async function startHarness({
       });
       await page.goto(url);
       const frame = page.frameLocator('#frame');
-      let assertions = 0;
-      for (const step of steps) {
+      for (const [index, step] of steps.entries()) {
+        failedStep = { index: index + 1, action: step.action, selector: step.selector };
         if (typeof step.selector !== 'string' || step.selector.length > 256)
           throw Error('Invalid selector');
         const locator = frame.locator(step.selector);
@@ -71,8 +74,16 @@ export async function startHarness({
             .first()
             .waitFor();
           assertions++;
+        } else if (step.action === 'value') {
+          await expect(locator).toHaveValue(String(step.value));
+          assertions++;
+        } else if (step.action === 'enabled') {
+          await expect(locator).toBeEnabled();
+          assertions++;
         } else throw Error('Unknown browser step');
+        completedSteps++;
       }
+      failedStep = null;
       errors.push(...(await page.evaluate(() => window.errors || [])));
       const screenshot = `browser-${randomUUID()}.png`;
       await page.screenshot({ path: `${artifacts}/${screenshot}`, fullPage: true });
@@ -82,6 +93,7 @@ export async function startHarness({
         JSON.stringify({
           passed: errors.length === 0 && assertions > 0,
           assertions,
+          completedSteps,
           errors,
           snapshot,
           screenshot,
@@ -92,7 +104,9 @@ export async function startHarness({
       res.end(
         JSON.stringify({
           passed: false,
-          assertions: 0,
+          assertions,
+          completedSteps,
+          failedStep,
           errors: [
             ...errors,
             String(error).slice(0, 4096),
@@ -102,6 +116,7 @@ export async function startHarness({
             ?.frameLocator('#frame')
             .locator('body')
             .innerText()
+            .then((text) => text.slice(0, 8192))
             .catch(() => '<unavailable>'),
         }),
       );

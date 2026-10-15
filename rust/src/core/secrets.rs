@@ -40,7 +40,7 @@ impl Secrets {
             Zeroizing::new(std::fs::read(key_path).map_err(|_| Error::Storage)?)
         } else {
             let count: i64 = store.open()?.query_row(
-                "SELECT (SELECT COUNT(*) FROM secrets)+(SELECT COUNT(*) FROM chatgpt_auth)",
+                "SELECT (SELECT COUNT(*) FROM secrets)+(SELECT COUNT(*) FROM chatgpt_auth)+(SELECT COUNT(*) FROM push_identity)+(SELECT COUNT(*) FROM push_subscriptions)",
                 [],
                 |r| r.get(0),
             )?;
