@@ -123,7 +123,7 @@ body {
   max-width: 42ch;
   line-height: 1.6;
 }
-.shell .primary-button:disabled {
+.primary-button:disabled {
   opacity: 1;
   background: #dbeaff12;
   color: #a5b4ca;
@@ -155,7 +155,7 @@ body {
     inset 0 1px 0 #ffffff18,
     0 3px 8px #02081718;
   color: var(--ink);
-  border-radius: 14px;
+  border-radius: var(--control-radius);
 }
 .shell .app-dock :is(.dock-home, .dock-more) {
   width: 44px;
@@ -167,7 +167,7 @@ body {
   color: var(--ink);
   background: linear-gradient(160deg, #ffffff12, #ffffff04);
   border: 1px solid #dbeaff30;
-  border-radius: 14px;
+  border-radius: var(--control-radius);
   box-shadow:
     inset 0 1px 0 #ffffff18,
     0 3px 8px #02081718;
@@ -182,7 +182,7 @@ body {
 .shell .app-dock :is(.dock-home, .dock-more):active {
   background: #dbeaff24;
 }
-.shell .primary-button,
+.primary-button,
 .shell .send-button {
   background: linear-gradient(160deg, #e1efff, #accdfa);
   box-shadow:
@@ -194,7 +194,7 @@ body {
   background: linear-gradient(160deg, #ffffff20, #ffffff0a);
   border-color: #dbeaff50;
 }
-.shell :is(input:not([type='checkbox']), textarea, select) {
+:is(.shell, .login-page, .setup-page) :is(input:not([type='checkbox']), textarea, select) {
   background-color: #101b2a99;
   border-color: #dbeaff26;
 }
@@ -211,7 +211,7 @@ body {
   display: block;
   padding: 12px 14px;
   min-height: 56px;
-  border-radius: 14px;
+  border-radius: var(--control-radius);
   background: #101b2a66;
   margin-bottom: 12px;
 }
@@ -379,11 +379,6 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.proposal-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
 .voice-controls {
   display: flex;
   align-items: center;
@@ -443,7 +438,7 @@ body {
   width: 42px;
   height: 42px;
   padding: 0;
-  border-radius: 14px;
+  border-radius: var(--control-radius);
 }
 .shell .setting-icon svg {
   display: block;

@@ -397,6 +397,13 @@ checks: try {
   assert.equal((await context.request.get(`${origin}/api/apps`)).status(), 401);
   await api('/api/setup', { token: setup, password: 'synthetic owner password' });
   csrf = (await api('/api/login', { password: 'synthetic owner password' })).csrf;
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'appearance') {
+    await testReleases({ api, context, origin, workspace, snapshots });
+    const app = (await api('/api/apps')).find((value) => value.title === 'Release fixture').id;
+    await testMobileReview({ context, origin, app, api, snapshots });
+    await testHistoryAndStorage({ context, origin, api, workspace, snapshots });
+    break checks;
+  }
   if (process.env.LITTLESPACES_BROWSER_SUITE === 'releases') {
     await testReleases({ api, context, origin, workspace, snapshots });
     break checks;
@@ -840,7 +847,7 @@ checks: try {
   await testImages({ context, origin, api, snapshots, app: app.app });
   await testPwa({ context, origin, api });
   await testMobileReview({ context, origin, app: app.app, api, snapshots });
-  await testHistoryAndStorage({ context, origin, api, workspace });
+  await testHistoryAndStorage({ context, origin, api, workspace, snapshots });
   assert.deepEqual(errors, []);
   console.log(
     'Rust agent fixture, failure/fix, browser-tested and owner-reviewed publication, real UI/chat invocation and record-preserving updates passed. No real-model milestone claimed.',

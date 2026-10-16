@@ -32,14 +32,14 @@ export function Proposals({ items, busy, onDecide, apps }) {
           </header>
           <p>{p.details.kind === 'app' ? p.details.purpose : p.details.summary}</p>
           {p.details.kind === 'action' && (
-            <details>
+            <details class="change-details">
               <summary>Review exact change</summary>
               <p>{p.details.action}</p>
               <pre>{JSON.stringify(p.details.input, null, 2)}</pre>
             </details>
           )}
           {p.state === 'pending' ? (
-            <div class="proposal-actions">
+            <div class="proposal-actions action-row">
               <button class="primary-button" disabled={busy} onClick={() => onDecide(p.id, true)}>
                 <Icon name="check" size={16} />
                 {p.details.kind === 'app'

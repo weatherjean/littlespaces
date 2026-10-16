@@ -18,6 +18,10 @@
   --on-danger: #ffffff;
   --success: #a9dbc2;
   --radius: 12px;
+  --control-radius: 14px;
+  --feedback-error-bg: #482d3bed;
+  --feedback-error-border: #f7b5ad55;
+  --feedback-error-ink: #ffdad4;
   --app-radius: 22px;
   --border-width: 1px;
   --shadow: 0 8px 24px #00000018;

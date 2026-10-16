@@ -1,5 +1,6 @@
 import { h, Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { Icon, Notice } from './ui.jsx';
 const size = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 export function StorageSettings({ api }) {
   const [status, setStatus] = useState(null),
@@ -7,12 +8,18 @@ export function StorageSettings({ api }) {
     [days, setDays] = useState(30);
   const [review, setReview] = useState(null),
     [busy, setBusy] = useState(false),
-    [message, setMessage] = useState('');
+    [message, setMessage] = useState(''),
+    [failed, setFailed] = useState(false);
   useEffect(() => {
     let active = true;
     api('/api/storage')
       .then((v) => active && setStatus(v))
-      .catch((e) => active && setMessage(e.message));
+      .catch((e) => {
+        if (active) {
+          setFailed(true);
+          setMessage(e.message);
+        }
+      });
     return () => {
       active = false;
     };
@@ -21,6 +28,7 @@ export function StorageSettings({ api }) {
     if (busy) return;
     setBusy(true);
     setMessage('');
+    setFailed(false);
     try {
       if (apply) {
         const result = await api('/api/storage/cleanup', {
@@ -35,6 +43,7 @@ export function StorageSettings({ api }) {
         setStatus(await api('/api/storage'));
       } else setReview(await api(`/api/storage?keep_releases=${keep}&orphan_days=${days}`));
     } catch (error) {
+      setFailed(true);
       setMessage(error.message);
     } finally {
       setBusy(false);
@@ -42,8 +51,16 @@ export function StorageSettings({ api }) {
   }
   return (
     <section class="setting-card setting-section storage-settings" aria-label="Storage & recovery">
-      <div class="storage-settings-content">
-        <h3>Storage & recovery</h3>
+      <div class="setting-section-heading">
+        <span class="setting-icon">
+          <Icon name="history" />
+        </span>
+        <div>
+          <h3>Storage & recovery</h3>
+          <p>Manage workspace space and recovery points.</p>
+        </div>
+      </div>
+      <div class="setting-section-body stack form-fields">
         {status && (
           <>
             <p>
@@ -85,7 +102,7 @@ export function StorageSettings({ api }) {
             }}
           />
         </label>
-        {message && <p role="status">{message}</p>}
+        {message && <Notice error={failed}>{message}</Notice>}
         {review ? (
           <>
             <p>
@@ -93,17 +110,21 @@ export function StorageSettings({ api }) {
               protect only the recovery points they reference. This also removes completed-job
               checkpoints and older diagnostics. Removed recovery points cannot be restored here.
             </p>
-            <button class="secondary-button" disabled={busy} onClick={() => run(true)}>
-              Confirm cleanup
-            </button>
-            <button class="secondary-button" disabled={busy} onClick={() => setReview(null)}>
-              Cancel
-            </button>
+            <div class="action-row">
+              <button class="secondary-button" disabled={busy} onClick={() => run(true)}>
+                Confirm cleanup
+              </button>
+              <button class="secondary-button" disabled={busy} onClick={() => setReview(null)}>
+                Cancel
+              </button>
+            </div>
           </>
         ) : (
-          <button class="secondary-button" disabled={busy} onClick={() => run(false)}>
-            Review cleanup
-          </button>
+          <div class="action-row">
+            <button class="secondary-button" disabled={busy} onClick={() => run(false)}>
+              Review cleanup
+            </button>
+          </div>
         )}
       </div>
     </section>

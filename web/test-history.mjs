@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-export async function testHistoryAndStorage({ context, origin, api, workspace }) {
+import path from 'node:path';
+export async function testHistoryAndStorage({ context, origin, api, workspace, snapshots }) {
   const chat = await api('/api/conversations', {});
   const seed = spawnSync(
     'python3',
@@ -46,12 +47,15 @@ with sqlite3.connect(v['workspace']+'/workspace.sqlite') as db:
     await page.setViewportSize({ width, height: 900 });
     const card = await storage.boundingBox();
     const heading = await storage.getByRole('heading').boundingBox();
-    assert.ok(heading.width > card.width * 0.7, `Storage text uses the card width at ${width}px`);
+    assert.ok(heading.width > 120, `Storage heading has usable width at ${width}px`);
     assert.ok(card.x >= 0 && card.x + card.width <= width, `Storage card fits at ${width}px`);
     for (const field of await storage.getByRole('spinbutton').all()) {
       const box = await field.boundingBox();
       assert.ok(box.x >= card.x && box.x + box.width <= card.x + card.width);
+      assert.ok(box.width > card.width * 0.6 && box.height >= 48, 'Usable shared form fields');
     }
+    await storage.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(snapshots, `review-storage-${width}.png`) });
   }
   await page.getByRole('button', { name: 'Review cleanup', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm cleanup', exact: true }).waitFor();

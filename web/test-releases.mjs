@@ -86,8 +86,16 @@ export async function testReleases({ api, context, origin, workspace, snapshots 
   await review
     .getByRole('button', { name: 'Confirm data changes and release', exact: true })
     .waitFor();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: path.join(snapshots, 'release-data-review-390.png') });
+  for (const width of [320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    const layout = await review.evaluate((node) => ({
+      fits: node.scrollWidth <= node.clientWidth,
+      gap: parseFloat(getComputedStyle(node.querySelector('.dialog-body')).rowGap),
+      heading: node.querySelector('h2').getBoundingClientRect().width,
+    }));
+    assert.ok(layout.fits && layout.gap >= 16 && layout.heading > 120);
+    await page.screenshot({ path: path.join(snapshots, `release-data-review-${width}.png`) });
+  }
   await review
     .getByRole('button', { name: 'Confirm data changes and release', exact: true })
     .click();

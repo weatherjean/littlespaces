@@ -307,10 +307,6 @@ summary {
   cursor: pointer;
 }
 @media (max-width: 700px) {
-  .proposal-actions > button {
-    min-height: 48px;
-    flex: 1 1 130px;
-  }
   .proposal-card header small {
     font-size: 12px;
   }
@@ -437,10 +433,15 @@ summary {
 .chat-notice > div {
   min-width: 0;
 }
-.chat-notice.is-error {
-  border-color: #f7b5ad55;
-  background: var(--glass), #482d3bed;
-  color: #ffdad4;
+.chat-notice.is-error,
+.error {
+  border-color: var(--feedback-error-border);
+  background: var(--glass), var(--feedback-error-bg);
+  color: var(--feedback-error-ink);
+  border-radius: 16px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .chat-notice .text-button {
   color: inherit;

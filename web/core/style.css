@@ -198,7 +198,7 @@ button:hover:not(:disabled) {
   justify-content: center;
   gap: 8px;
   padding: 11px 16px;
-  border-radius: calc(var(--radius) * 0.833);
+  border-radius: var(--control-radius);
   font-size: 12px;
   font-weight: 550;
 }
@@ -1500,8 +1500,7 @@ summary {
   .picker-search input {
     font-size: 16px;
   }
-  .shell input:not([type='checkbox']):not([type='radio']),
-  .shell select {
+  .shell :where(input:not([type='checkbox']):not([type='radio']), select) {
     min-height: 44px;
   }
   .conversation-switcher,
@@ -1762,22 +1761,6 @@ summary {
   display: grid;
   gap: 20px;
   padding: 0 22px 24px;
-}
-.chat-options-body label {
-  display: grid;
-  gap: 8px;
-  font-size: 14px;
-  color: var(--muted);
-}
-.chat-options-body select {
-  width: 100%;
-  min-height: 48px;
-  padding: 12px;
-  background: var(--bg);
-  color: var(--ink);
-  border: var(--border-width) solid var(--line);
-  border-radius: var(--radius);
-  font-size: 16px;
 }
 .chat-options-body option {
   background: var(--panel);
@@ -2161,25 +2144,6 @@ summary {
   flex-direction: column;
   margin-top: 0;
 }
-.login-page label {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 0 0 9px;
-}
-.login-page input {
-  width: 100%;
-  background: var(--bg);
-  border: var(--border-width) solid var(--line);
-  color: var(--ink);
-  border-radius: calc(var(--radius) * 0.833);
-  padding: 13px;
-  margin-bottom: 20px;
-}
-.login-page button {
-  width: 100%;
-  margin-top: 6px;
-  min-height: 45px;
-}
 @media (max-width: 450px) {
   .login-card {
     padding: 28px 24px;
@@ -2224,18 +2188,12 @@ summary {
   flex-direction: column;
   margin-top: 28px;
 }
+.login-page label,
 .setup-page label {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 0 0 9px;
+  margin: 0 0 8px;
 }
+.login-page input,
 .setup-page input {
-  width: 100%;
-  background: var(--bg);
-  border: var(--border-width) solid var(--line);
-  color: var(--ink);
-  border-radius: calc(var(--radius) * 0.833);
-  padding: 13px;
   margin-bottom: 20px;
 }
 .field-note {
@@ -2243,10 +2201,11 @@ summary {
   color: var(--muted);
   margin: -12px 0 20px;
 }
+.login-page button,
 .setup-page button {
   width: 100%;
   margin-top: 6px;
-  min-height: 45px;
+  min-height: 48px;
 }
 .setup-note {
   font-size: 11px;
@@ -2458,7 +2417,11 @@ a:hover {
 .version-entry {
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 .version-heading {
   display: flex;
@@ -2470,11 +2433,15 @@ time {
   font-size: 12px;
   color: var(--muted);
 }
+.version-entry > :not(button) {
+  flex-basis: 100%;
+  min-width: 0;
+}
 .version-entry p {
-  margin: 8px 0;
+  margin: 0;
 }
 .version-entry button {
-  margin-top: 10px;
+  flex: 1 1 160px;
 }
 .primary-nav {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2536,15 +2503,25 @@ time {
   display: grid;
   gap: 16px;
 }
-.dialog-body label {
+.login-page label,
+.setup-page label,
+.dialog-body label,
+.chat-options-body label,
+.form-fields label {
   display: grid;
   gap: 8px;
   color: var(--muted);
   font-size: 14px;
 }
+.login-page input,
+.setup-page input,
+.form-fields input,
+.form-fields select,
+.form-fields textarea,
 .dialog-body input,
 .dialog-body textarea,
 .dialog-body select,
+.chat-options-body select,
 .effect-review select {
   width: 100%;
   min-height: 48px;

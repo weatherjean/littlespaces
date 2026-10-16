@@ -1,6 +1,6 @@
 import { h } from 'preact';
 import { Modal } from './chat.jsx';
-import { Icon } from './ui.jsx';
+import { Icon, Notice } from './ui.jsx';
 export function ReleaseReview({ plan, busy, error, onClose, onApply }) {
   const report = plan?.report || {};
   return (
@@ -10,14 +10,16 @@ export function ReleaseReview({ plan, busy, error, onClose, onApply }) {
       className="versions-dialog phone-chat-sheet"
       titleId="release-review-title"
     >
-      <header class="modal-header">
-        <h2 id="release-review-title">Review data changes</h2>
+      <header class="picker-header">
+        <div>
+          <h2 id="release-review-title">Review data changes</h2>
+        </div>
         <button className="icon-button" aria-label="Close data review" onClick={onClose}>
           <Icon name="close" />
         </button>
       </header>
-      <div className="dialog-body">
-        {error && <p role="alert">{error}</p>}
+      <div className="dialog-body stack">
+        {error && <Notice error>{error}</Notice>}
         <p>
           {report.source
             ? 'This restores saved data, with the changes listed below. Newer data is kept only where the plan explicitly preserves it.'
@@ -34,11 +36,9 @@ export function ReleaseReview({ plan, busy, error, onClose, onApply }) {
         {!!report.sql?.changedObjects?.length && (
           <p>Changed schema objects: {report.sql.changedObjects.join(', ')}</p>
         )}
-        <details>
+        <details class="change-details">
           <summary>Review exact changes</summary>
-          <pre style="white-space:pre-wrap;overflow-wrap:anywhere">
-            {JSON.stringify(report, null, 2)}
-          </pre>
+          <pre>{JSON.stringify(report, null, 2)}</pre>
         </details>
         <p>
           External actions, notifications already delivered, and newer image uploads are not undone.
