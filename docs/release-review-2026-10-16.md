@@ -45,6 +45,8 @@ A local Linux browser reproduction also exposed an app action race: the initial 
 
 The next hosted run exposed two browser timing failures. Lost-send recovery could read history before observing a completed job, then stop polling with stale messages. Recovery now reads job state before history; a deterministic regression fails against the previous code. Image uploads used the history-refresh epoch, so reconnecting the same conversation could discard an accepted upload. Uploads now use a separate conversation-change epoch, with a regression that reconnects during upload. These corrections retain existing behavior and do not add product scope. Hosted storage-error diagnostics also occurred during the synthetic chat tests; they remain recorded rather than being treated as proof of a specific storage defect.
 
+A later full browser run reproduced a storage failure during interrupted-stream recovery. Request diagnostics used a deferred transaction that read before writing; a concurrent writer could make the lock upgrade fail immediately. The diagnostics transaction now reserves the writer before reading. A contention regression fails on the previous implementation and passes with the fix, preserving the original provider error and writing one diagnostic event. Local validation after this correction passed 75 unit tests, seven executable integration tests, Clippy, and the complete synthetic browser suite, including the frontend consistency changes. These local results do not replace remote candidate checks.
+
 ## Remaining actions
 
 1. Observe the exact candidate's GitHub AMD64/ARM64, quality, and deployment-check jobs. Remote results must be recorded separately from the local evidence above.

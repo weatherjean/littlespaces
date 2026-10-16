@@ -1086,7 +1086,10 @@ impl Agent {
             .store
             .blocking(move |store| {
                 let mut db = store.open()?;
-                let tx = db.transaction()?;
+                // Reserve the writer before reading. A deferred transaction can
+                // fail its read-to-write upgrade immediately under contention,
+                // turning a recoverable provider failure into a storage failure.
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let mut diagnostic = diagnostic;
                 let (attempt, round): (Option<i64>, Option<i64>) = tx.query_row("SELECT json_extract(j.payload,'$.requestAttempt'),json_extract(c.payload,'$.round') FROM jobs j LEFT JOIN agent_checkpoints c ON c.job=j.id WHERE j.id=?", [&job], |r| Ok((r.get(0)?,r.get(1)?)))?;
                 diagnostic["attempt"] = json!(attempt);
@@ -1566,6 +1569,59 @@ mod tests {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[tokio::test]
+    async fn request_diagnostics_wait_for_a_concurrent_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = secrets::Secrets::open(store.clone(), &dir.path().join("key")).unwrap();
+        let agent = Agent::new(
+            Runtime::new(store.clone(), secrets.clone(), 1).unwrap(),
+            ChatGpt::new(store.clone(), secrets).unwrap(),
+            String::new(),
+        );
+        let mut db = store.open().unwrap();
+        db.execute(
+            "INSERT INTO jobs VALUES('diagnostic',NULL,NULL,'running','{\"requestAttempt\":2}')",
+            [],
+        )
+        .unwrap();
+        let writer = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        writer.execute("UPDATE jobs SET payload=json_set(payload,'$.requestAttempt',3) WHERE id='diagnostic'", []).unwrap();
+        let worker = tokio::spawn(async move {
+            agent
+                .request_diagnostic(
+                    "diagnostic",
+                    "stream",
+                    std::time::Instant::now(),
+                    Some(200),
+                    Some(Error::ModelIncomplete),
+                )
+                .await
+        });
+        // Stay below the busy timeout. A deferred read followed by a write
+        // fails immediately here instead of waiting for this writer to commit.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        writer.commit().unwrap();
+        worker.await.unwrap().unwrap();
+        let (attempt, error): (i64, String) = db.query_row(
+            "SELECT json_extract(payload,'$.modelRequest.attempt'),json_extract(payload,'$.modelRequest.error') FROM jobs WHERE id='diagnostic'",
+            [], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(attempt, 3);
+        assert_eq!(error, "model_incomplete");
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM model_request_events WHERE job='diagnostic'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn terminal_status_survives_temporary_database_contention() {
         let dir = tempfile::tempdir().unwrap();
