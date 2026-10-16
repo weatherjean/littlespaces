@@ -4,7 +4,7 @@ The deployment definition is one Linux host, one workspace process, a separately
 
 ## Build and install
 
-Build on the target Linux architecture using the locked dependencies and the checks in CONTRIBUTING.md. Run `python3 scripts/package-release.py build-rust/release` after a successful release build. The package includes the executable, verifier source/lockfile, deployment templates, licenses, checksums, and source/platform metadata. CI produces separate AMD64 and ARM64 packages. Reject packages with unexpected platform/architecture or `dirty: true` for a formal release. The packager copies an explicit allowlist, never workspaces or keys.
+Build on the target Linux architecture using the locked dependencies and the checks in CONTRIBUTING.md. Generate target-specific notices and run `python3 scripts/package-release.py build-rust/release` as described in [the release checklist](../docs/releasing.md). Packaging rebuilds locked frontend and Rust inputs for the explicit local target; it requires the build toolchain. Run `python3 scripts/production-smoke.py --binary build-rust/release/little-spaces` against the resulting executable. The package includes the executable, verifier source/lockfile, deployment templates, licenses, checksums, and source/platform metadata. CI produces separate AMD64 and ARM64 packages. Reject packages with unexpected platform/architecture or `dirty: true` for a formal release. The packager copies an explicit allowlist, never workspaces or keys.
 
 On the target host:
 
@@ -28,7 +28,7 @@ Do not enable `forwardedHeaders.insecure` or broadly trust internet CIDRs. Placi
 
 ## Browser verifier and OAuth
 
-The verifier runs as a separate OS user with a separate writable state directory and a 1 GiB service memory limit. Its authenticated loopback endpoint is configured in the application. It permits local test previews or HTTPS previews at exactly `LITTLESPACES_PUBLIC_URL`; redirects and page resources outside that origin are blocked. A missing verifier prevents automatic frontend publication. A configured but unhealthy verifier makes readiness fail. Screenshot artifacts may contain app data; keep their directory private and include it in the host's retention policy.
+The verifier runs as a separate OS user with a separate writable state directory and a 1 GiB service memory limit. Its authenticated loopback endpoint is configured in the application. It permits local test previews or HTTPS previews at exactly `LITTLESPACES_PUBLIC_URL`; HTTP redirects are rejected before following them, page HTTP resources are restricted to that origin, and WebSockets are disabled. A missing verifier prevents automatic frontend publication. A configured but unhealthy verifier makes readiness fail. Screenshot artifacts may contain app data; keep their directory private and include it in the host's retention policy.
 
 For VPS sign-in, open `ssh -N -L 1455:127.0.0.1:5175 user@your-vps` on the computer running your browser. Keep it open while choosing Continue with ChatGPT in the public app. The HTTP loopback callback travels through the tunnel to the server; it is not replaced by an HTTPS callback. The app validates the originating owner session and one-time OAuth state. See `docs/rhai/sign-in.md` in the source repository. Real-account sign-in/refresh and physical push/audio still require an owner-authorized target-host check.
 

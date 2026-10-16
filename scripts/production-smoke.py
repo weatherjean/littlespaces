@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the release executable against synthetic data only."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -17,13 +18,17 @@ BINARY = ROOT / "rust/target/release/little-spaces"
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", type=Path, default=BINARY)
+    args = parser.parse_args()
+    binary = args.binary.resolve()
     with tempfile.TemporaryDirectory(prefix="littlespaces-release-") as temporary:
         workspace = Path(temporary) / "workspace"
-        subprocess.run([BINARY, "init", workspace], check=True, capture_output=True)
+        subprocess.run([binary, "init", workspace], check=True, capture_output=True)
         password = "synthetic-release-smoke-password"
-        subprocess.run([BINARY, "owner-reset", workspace], input=password.encode(),
+        subprocess.run([binary, "owner-reset", workspace], input=password.encode(),
                        check=True, capture_output=True)
-        subprocess.run([BINARY, "secret-put", workspace, "SMOKE_TOKEN"],
+        subprocess.run([binary, "secret-put", workspace, "SMOKE_TOKEN"],
                        input=b"synthetic-backup-secret", check=True, capture_output=True)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -32,7 +37,7 @@ def main():
         env = {k: v for k, v in os.environ.items() if not k.startswith("LITTLESPACES_")}
         env.update(LITTLESPACES_ENABLE_LIVE_TESTS="1", LITTLESPACES_TEST_PROVIDER=origin)
         # The private setup link is deliberately captured, never printed.
-        server = subprocess.Popen([BINARY, "serve", workspace, str(port)], env=env,
+        server = subprocess.Popen([binary, "serve", workspace, str(port)], env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             for _ in range(100):
@@ -114,12 +119,12 @@ def main():
                 db.execute("INSERT INTO jobs VALUES('cancelled-before-crash',NULL,NULL,'queued',?)",
                            (json.dumps({"cancelRequested": True}),))
             restored = Path(temporary) / "restored"
-            subprocess.run([BINARY, "backup", workspace, restored], check=True, capture_output=True)
+            subprocess.run([binary, "backup", workspace, restored], check=True, capture_output=True)
             assert (restored / "secrets.key").read_bytes() == (workspace / "secrets.key").read_bytes()
             with sqlite3.connect(restored / "workspace.sqlite") as db:
                 assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
                 assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-            server = subprocess.Popen([BINARY, "serve", restored, str(port)], env=env,
+            server = subprocess.Popen([binary, "serve", restored, str(port)], env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             for _ in range(100):
                 try:
@@ -138,7 +143,7 @@ def main():
             server.send_signal(signal.SIGTERM)
             server.communicate(timeout=10)
             assert server.returncode == 0, "SIGTERM bypassed graceful shutdown"
-            subprocess.run([BINARY, "storage", restored], check=True, capture_output=True)
+            subprocess.run([binary, "storage", restored], check=True, capture_output=True)
             print("Readiness, private operations, login throttling and SIGTERM passed. Release assets and test-route exclusion passed; synthetic crash, offline restore, owner session, secret metadata and cancellation recovery passed.")
         finally:
             server.send_signal(signal.SIGINT)

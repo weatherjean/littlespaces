@@ -28,8 +28,12 @@ def notice_files(directory):
 
 
 def generate(destination, native_notice):
-    target = next(line.split(": ", 1)[1] for line in subprocess.check_output(
-        ["rustc", "-vV"], text=True).splitlines() if line.startswith("host: "))
+    rustc = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, text=True)
+    target = next(line.split(": ", 1)[1] for line in rustc.splitlines() if line.startswith("host: "))
+    sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], cwd=ROOT, text=True).strip())
+    runtime_notice = sysroot / "share/doc/rust/COPYRIGHT-library.html"
+    if not runtime_notice.is_file() or not runtime_notice.stat().st_size:
+        raise RuntimeError("Rust toolchain is missing COPYRIGHT-library.html; install the pinned rustup toolchain")
     metadata = json.loads(subprocess.check_output([
         "cargo", "metadata", "--manifest-path", str(ROOT / "rust/Cargo.toml"),
         "--locked", "--format-version", "1", "--filter-platform", target,
@@ -98,8 +102,11 @@ def generate(destination, native_notice):
                           "notices": copied})
     native = destination / "OpenSSL-NOTICE.txt"
     shutil.copy2(native_notice, native)
+    runtime = destination / "Rust-Standard-Library.html"
+    shutil.copy2(runtime_notice, runtime)
     (destination / "manifest.json").write_text(json.dumps({
         "target": target,
+        "toolchain": {"rustc": rustc, "path": runtime.name, "sha256": digest(runtime)},
         "lockfiles": {p: digest(ROOT / p) for p in ("rust/Cargo.lock", "web/package-lock.json")},
         "native": {"name": "OpenSSL", "path": native.name, "sha256": digest(native)},
         "packages": sorted(inventory, key=lambda p: (p["ecosystem"], p["name"], p["version"])),
@@ -112,6 +119,7 @@ def generate(destination, native_notice):
         "including the MPL-licensed ece and smartstring crates.\n"
         "SQLite's bundled source is public domain; its source header records that status.\n"
         "Node and downloaded browsers are installed separately and are not bundled here.\n"
+        "Rust standard-library notices come from the recorded compiler distribution.\n"
         "OpenSSL notice is supplied from the build host's installed distribution.\n"
         "Supplement provenance is recorded in licenses/upstream/SOURCES.md in the source/package.\n"
     )

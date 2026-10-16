@@ -94,20 +94,19 @@ jobs:
         run: cargo +1.88.0 build --manifest-path rust/Cargo.toml --locked
       - name: Persisted backend smoke
         run: python3 scripts/monolith-smoke.py
-      - name: Build production executable and verify development routes are absent
-        run: |
-          cargo +1.88.0 build --manifest-path rust/Cargo.toml --release --locked
-          python3 scripts/production-smoke.py
       - name: Package production files
         run: |
           python3 scripts/generate-notices.py build-rust/notices --openssl-notice /usr/share/doc/libssl-dev/copyright
           python3 scripts/package-release.py build-rust/release
+          python3 scripts/production-smoke.py --binary build-rust/release/little-spaces
           tar -C build-rust/release -czf build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz .
       - name: Build development fixture provider
         run: cargo +1.88.0 build --manifest-path rust/Cargo.toml --locked --features development-fixtures
       - name: Install development test browser
         working-directory: web
         run: npx playwright install --with-deps chromium
+      - name: Browser verifier network boundary (synthetic loopback only)
+        run: node web/test-harness.mjs
       - name: Rust agent and real iframe regression (synthetic provider only)
         run: npm test --prefix web
       - name: Save production package after regressions pass

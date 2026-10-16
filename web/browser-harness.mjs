@@ -37,7 +37,7 @@ export async function startHarness({
       return;
     }
     active = true;
-    let context, page;
+    let context, page, responseBody;
     const errors = [];
     let assertions = 0,
       completedSteps = 0,
@@ -64,13 +64,27 @@ export async function startHarness({
         throw Error('Invalid preview URL');
       if (!Array.isArray(steps) || steps.length > 32) throw Error('Invalid browser suite');
       context = await browser.newContext();
+      // Verification needs HTTP only; WebSockets bypass HTTP request routing.
+      await context.routeWebSocket('**/*', (socket) => socket.close());
       page = await context.newPage();
       page.setDefaultTimeout(5000);
       page.on('pageerror', (e) => errors.push(String(e).slice(0, 2000)));
-      await context.route('**/*', (route) => {
+      await context.route('**/*', async (route) => {
         const url = new URL(route.request().url());
-        if (url.origin === target.origin || url.protocol === 'data:') return route.continue();
-        return route.abort();
+        if (url.origin !== target.origin || !['http:', 'https:'].includes(url.protocol))
+          return route.abort();
+        // route.continue() follows redirects without calling this handler again.
+        // Preview endpoints need no redirects: reject them before any next hop.
+        let response;
+        try {
+          response = await route.fetch({ maxRedirects: 0, timeout: 10000 });
+          if (response.status() >= 300 && response.status() < 400) await route.abort();
+          else await route.fulfill({ response });
+        } catch {
+          await route.abort().catch(() => {});
+        } finally {
+          await response?.dispose();
+        }
       });
       await page.goto(url);
       const frame = page.frameLocator('#frame');
@@ -102,41 +116,39 @@ export async function startHarness({
       await page.screenshot({ path: `${artifacts}/${screenshot}`, fullPage: true });
       const snapshot = (await frame.locator('body').innerText()).slice(0, 8192);
       res.setHeader('content-type', 'application/json');
-      res.end(
-        JSON.stringify({
-          passed: errors.length === 0 && assertions > 0,
-          assertions,
-          completedSteps,
-          errors,
-          snapshot,
-          screenshot,
-        }),
-      );
+      responseBody = JSON.stringify({
+        passed: errors.length === 0 && assertions > 0,
+        assertions,
+        completedSteps,
+        errors,
+        snapshot,
+        screenshot,
+      });
     } catch (error) {
       res.setHeader('content-type', 'application/json');
-      res.end(
-        JSON.stringify({
-          passed: false,
-          assertions,
-          completedSteps,
-          failedStep,
-          errors: [
-            ...errors,
-            String(error).slice(0, 4096),
-            ...((await page?.evaluate(() => window.errors || []).catch(() => [])) || []),
-          ],
-          snapshot: await page
-            ?.frameLocator('#frame')
-            .locator('body')
-            .innerText()
-            .then((text) => text.slice(0, 8192))
-            .catch(() => '<unavailable>'),
-        }),
-      );
+      responseBody = JSON.stringify({
+        passed: false,
+        assertions,
+        completedSteps,
+        failedStep,
+        errors: [
+          ...errors,
+          String(error).slice(0, 4096),
+          ...((await page?.evaluate(() => window.errors || []).catch(() => [])) || []),
+        ],
+        snapshot: await page
+          ?.frameLocator('#frame')
+          .locator('body')
+          .innerText()
+          .then((text) => text.slice(0, 8192))
+          .catch(() => '<unavailable>'),
+      });
     } finally {
       await context?.close().catch(() => {});
       active = false;
     }
+    // Admit the next request before exposing completion to the caller.
+    res.end(responseBody);
   });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   return {

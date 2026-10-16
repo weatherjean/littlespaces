@@ -45,6 +45,7 @@ python3 scripts/production-smoke.py
 cargo build --manifest-path rust/Cargo.toml --locked --features development-fixtures
 cd web
 npx playwright install chromium
+node test-harness.mjs
 npm test
 ```
 

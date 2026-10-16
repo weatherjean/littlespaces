@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package an already-built release using an explicit public-file allowlist."""
+"""Build and package a release using locked dependencies and a public-file allowlist."""
 import argparse
 import hashlib
 import json
@@ -40,21 +40,22 @@ def main():
                         help="Generated notice inventory (default: build-rust/notices)")
     args = parser.parse_args()
     target = args.destination.resolve()
-    binary = ROOT / "rust/target/release/little-spaces"
-    if not binary.is_file():
-        raise SystemExit("Build the release executable first")
+    if target.exists():
+        raise FileExistsError(target)
     notices = args.notices.absolute()
     if not (notices / "manifest.json").is_file():
         raise SystemExit("Generate build-rust/notices with scripts/generate-notices.py first")
     inventory = json.loads((notices / "manifest.json").read_text())
-    host = next(line.split(": ", 1)[1] for line in subprocess.check_output(
-        ["rustc", "-vV"], text=True).splitlines() if line.startswith("host: "))
+    rustc = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, text=True)
+    host = next(line.split(": ", 1)[1] for line in rustc.splitlines() if line.startswith("host: "))
+    if inventory.get("toolchain", {}).get("rustc") != rustc:
+        raise SystemExit("Notice bundle lacks matching Rust standard-library notices; regenerate it")
     if inventory["target"] != host:
         raise SystemExit("Notice bundle target differs from the local release target")
     for name in ("rust/Cargo.lock", "web/package-lock.json"):
         if inventory["lockfiles"].get(name) != hashlib.sha256((ROOT / name).read_bytes()).hexdigest():
             raise SystemExit("Notice bundle is stale; regenerate it for the current lockfiles")
-    notice_files = [inventory["native"]] + [file for package in inventory["packages"] for file in package["notices"]]
+    notice_files = [inventory["native"], inventory["toolchain"]] + [file for package in inventory["packages"] for file in package["notices"]]
     paths = [item["path"] for item in notice_files]
     if len(paths) != len(set(paths)) or set(paths) & {"manifest.json", "README.txt"}:
         raise SystemExit("Notice bundle contains duplicate or reserved paths")
@@ -62,10 +63,22 @@ def main():
         source = regular_file(notices, item["path"])
         if hashlib.sha256(source.read_bytes()).hexdigest() != item["sha256"]:
             raise SystemExit("Notice bundle failed its path/checksum validation")
-    for name in PUBLIC_FILES + ["rust/target/release/little-spaces"]:
+    for name in PUBLIC_FILES:
         regular_file(ROOT, name)
     for name in ["manifest.json", "README.txt"]:
         regular_file(notices, name)
+    # Do not label an arbitrary old executable with the current checkout's SHA.
+    # An explicit target/output directory also prevents Cargo environment defaults
+    # from rebuilding somewhere else while we silently copy the old host binary.
+    subprocess.run(["npm", "ci", "--prefix", "web"], cwd=ROOT, check=True)
+    subprocess.run(["npm", "run", "build", "--prefix", "web"], cwd=ROOT, check=True)
+    subprocess.run(["cargo", "build", "--manifest-path", "rust/Cargo.toml",
+                    "--release", "--locked", "--target", host,
+                    "--target-dir", str(ROOT / "rust/target")], cwd=ROOT, check=True)
+    binary_name = f"rust/target/{host}/release/little-spaces"
+    binary = regular_file(ROOT, binary_name)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True))
     target.mkdir(parents=True, exist_ok=False)
     shutil.copy2(binary, target / "little-spaces")
     for name in PUBLIC_FILES:
@@ -76,10 +89,8 @@ def main():
         output = target / "third-party" / name
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(notices / name, output)
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True))
     (target / "release.json").write_text(json.dumps({"commit": commit, "dirty": dirty,
-        "platform": platform.system(), "architecture": platform.machine()}, indent=2) + "\n")
+        "platform": platform.system(), "architecture": platform.machine(), "target": host}, indent=2) + "\n")
     checksums = []
     for path in sorted(target.rglob("*")):
         if path.is_file():
