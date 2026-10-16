@@ -124,14 +124,23 @@ export async function testChatLifecycle({ context, origin, api, snapshots }) {
 
   // A lost send response must rediscover the accepted job without resubmitting it.
   let acceptedSends = 0;
+  let acceptedJob;
   await page.route('**/send', async (route) => {
     acceptedSends++;
-    await route.fetch();
+    const response = await route.fetch();
+    assert.ok(response.ok(), `Synthetic lost-response send was rejected: ${response.status()}`);
+    acceptedJob = (await response.json()).job;
     await route.abort('failed');
   });
   await message.fill('recover lost send response');
   await send.click();
-  await page.getByText('Reply: recover lost send response', { exact: true }).waitFor();
+  try {
+    await page.getByText('Reply: recover lost send response', { exact: true }).waitFor();
+  } catch (error) {
+    console.error('Lost-response accepted sends:', acceptedSends);
+    if (acceptedJob) console.error('Lost-response job:', await api(`/api/jobs/${acceptedJob}`));
+    throw error;
+  }
   assert.equal(acceptedSends, 1);
   await page.unroute('**/send');
 

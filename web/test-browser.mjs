@@ -321,6 +321,7 @@ checks: try {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  server.stderr.on('data', (chunk) => console.error('Fixture host:', chunk.toString().trim()));
   const address = await new Promise((resolve, reject) => {
     let output = '';
     const timeout = setTimeout(() => reject(Error('Server startup timed out')), 15000);
@@ -343,6 +344,14 @@ checks: try {
   await mkdir(snapshots, { recursive: true });
   const signedOut = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const authPage = await signedOut.newPage();
+  authPage.on('pageerror', (error) => console.error('Setup page error:', error.message));
+  authPage.on('requestfailed', (request) =>
+    console.error('Setup request failed:', new URL(request.url()).pathname, request.failure()),
+  );
+  authPage.on('response', (response) => {
+    if (response.status() >= 400)
+      console.error('Setup HTTP error:', new URL(response.url()).pathname, response.status());
+  });
   await authPage.goto(origin);
   await authPage.getByRole('heading', { name: 'Set up LittleSpaces' }).waitFor();
   assert.equal(
@@ -540,11 +549,31 @@ checks: try {
     path: path.join(snapshots, 'monolith-orbit-launcher.png'),
     fullPage: true,
   });
+  let inFlightActions = 0;
+  let maxInFlightActions = 0;
+  await page.route('**/api/action', async (route) => {
+    inFlightActions++;
+    maxInFlightActions = Math.max(maxInFlightActions, inFlightActions);
+    const response = await route.fetch();
+    // Keep the initial read pending while the owner starts the first write.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    inFlightActions--;
+    await route.fulfill({ response });
+  });
   await page.getByRole('button', { name: 'Task app', exact: true }).click();
   const frame = page.frameLocator('iframe[title="Applet"]');
   await frame.getByLabel('Task title').fill('Owner task');
   await frame.getByRole('button', { name: 'Add task' }).click();
   await frame.locator('li').filter({ hasText: 'Owner task' }).waitFor();
+  await frame
+    .locator('body')
+    .evaluate(() => Promise.all([window.applet.call('list', {}), window.applet.call('list', {})]));
+  assert.equal(
+    maxInFlightActions,
+    1,
+    'One iframe must serialize app actions, including initial reads',
+  );
+  await page.unroute('**/api/action');
   await frame.getByRole('button', { name: 'Complete', exact: true }).click();
   await frame.locator('li').filter({ hasText: 'done' }).waitFor();
   await page.screenshot({ path: path.join(snapshots, 'monolith-orbit-app.png') });
@@ -816,6 +845,21 @@ checks: try {
   console.log(
     'Rust agent fixture, failure/fix, browser-tested and owner-reviewed publication, real UI/chat invocation and record-preserving updates passed. No real-model milestone claimed.',
   );
+} catch (error) {
+  // This driver owns only synthetic accounts. Preserve useful failure evidence
+  // before disposing of its browser and temporary workspace.
+  const snapshots = path.join(root, 'build-rust/screenshots');
+  await mkdir(snapshots, { recursive: true });
+  for (const [index, page] of (browser?.contexts().flatMap((c) => c.pages()) || []).entries()) {
+    try {
+      console.error('Failed fixture page:', index, new URL(page.url()).pathname);
+      console.error((await page.locator('body').innerText()).slice(0, 4000));
+      await page.screenshot({ path: path.join(snapshots, `failure-${index}.png`) });
+    } catch (diagnosticError) {
+      console.error('Could not capture fixture page:', String(diagnosticError));
+    }
+  }
+  throw error;
 } finally {
   await browser?.close();
   if (server) {

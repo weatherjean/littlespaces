@@ -39,6 +39,10 @@ Gitleaks 8.30.1, with redacted reporting, scanned all local Git refs (including 
 
 At inspection, GitHub reported a private repository with `main` as its default branch. No remote CI runs were listed for `rework/rust-monolith-rhai`. Private vulnerability reporting returned 404; branch-protection access returned a plan/visibility restriction. Those controls must be verified again when configuring public release. No repository settings were changed during the local review.
 
+The first candidate PR run subsequently passed quality/deployment checks and both architectures' Rust, optimized-production, and notice/package steps. Its browser jobs failed: AMD64 timed out at the initial setup screen; ARM64 reached the lost-send-response recovery assertion and timed out there. The CI-built ARM64 binary rendered setup correctly in a local Linux/Chromium container. Added synthetic failure-page, host, and accepted-send diagnostics retain the original assertions/timeouts so a rerun can establish whether these are reproducible. These initial failures must not be represented as an all-green remote run.
+
+A local Linux browser reproduction also exposed an app action race: the initial read and first owner write overlapped, and the runtime's live-action fence rejected the write. The platform iframe bridge now serializes calls without replaying failed actions. A browser regression delays responses and checks that simultaneous calls have at most one request in flight. This is a correction to existing single-user behavior, not a restoration of public-app features. Consult the PR's latest checks for the follow-up revision; the earlier hosted failures remain recorded above.
+
 ## Remaining actions
 
 1. Observe the exact candidate's GitHub AMD64/ARM64, quality, and deployment-check jobs. Remote results must be recorded separately from the local evidence above.
