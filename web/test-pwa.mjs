@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 export async function testPwa({ context, origin, api }) {
   const page = await context.newPage();
@@ -75,7 +76,9 @@ export async function testPwa({ context, origin, api }) {
     );
     assert.ok(aligned, `Settings icons centered at ${width}px`);
     await page.screenshot({
-      path: new URL(`../build-rust/screenshots/settings-${width}.png`, import.meta.url).pathname,
+      path: fileURLToPath(
+        new URL(`../build-rust/screenshots/settings-${width}.png`, import.meta.url),
+      ),
       fullPage: true,
     });
   }

@@ -51,6 +51,9 @@ fn main() {
         source.push_str(&format!("\"/{file}\" => Some((include_bytes!(concat!(env!(\"OUT_DIR\"),\"/{file}\")),\"{kind}\")),\n"));
     }
     source.push_str("_ => None }}\n");
+    if env::var("PROFILE").as_deref() == Ok("release") && !ready {
+        panic!("Release builds require frontend assets: run npm ci --prefix web && npm run build --prefix web first");
+    }
     source.push_str(&format!("pub const READY:bool={ready};\n"));
     fs::write(out.join("assets.rs"), source).unwrap();
 }

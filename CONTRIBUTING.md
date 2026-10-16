@@ -33,6 +33,7 @@ The owner-setup link is private. Never commit passwords, OAuth tokens, owner dat
 
 ```sh
 npm run format:check --prefix web
+python3 scripts/test-release.py
 npm run build --prefix web
 cargo fmt --manifest-path rust/Cargo.toml --check
 cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets --all-features -- -D warnings

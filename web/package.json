@@ -17,5 +17,9 @@
     "@playwright/test": "1.63.0",
     "esbuild": "0.25.12",
     "prettier": "3.9.9"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
   }
 }

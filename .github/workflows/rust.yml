@@ -44,6 +44,8 @@ jobs:
       - name: Install Web Push crypto build dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - run: npm ci --prefix web
+      - name: Release packaging regressions
+        run: python3 scripts/test-release.py
       - name: Audit JavaScript dependencies
         run: npm audit --prefix web --audit-level=moderate
       - run: npm run format:check --prefix web
@@ -101,13 +103,6 @@ jobs:
           python3 scripts/generate-notices.py build-rust/notices --openssl-notice /usr/share/doc/libssl-dev/copyright
           python3 scripts/package-release.py build-rust/release
           tar -C build-rust/release -czf build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz .
-      - name: Save production package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: littlespaces-linux-${{ matrix.arch }}
-          path: build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz
-          retention-days: 14
-          if-no-files-found: error
       - name: Build development fixture provider
         run: cargo +1.88.0 build --manifest-path rust/Cargo.toml --locked --features development-fixtures
       - name: Install development test browser
@@ -115,6 +110,13 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Rust agent and real iframe regression (synthetic provider only)
         run: npm test --prefix web
+      - name: Save production package after regressions pass
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: littlespaces-linux-${{ matrix.arch }}
+          path: build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
       - name: Save synthetic browser screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

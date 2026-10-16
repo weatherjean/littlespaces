@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { mkdir } from 'node:fs/promises';
 const out = new URL('../build-rust/core/', import.meta.url);
@@ -7,8 +8,8 @@ for (const [entry, name] of [
   ['applet-runtime.js', 'applet.js'],
 ]) {
   await build({
-    entryPoints: [new URL(entry, import.meta.url).pathname],
-    outfile: new URL(name, out).pathname,
+    entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
+    outfile: fileURLToPath(new URL(name, out)),
     bundle: true,
     minify: true,
     format: 'iife',
@@ -18,8 +19,8 @@ for (const [entry, name] of [
   });
 }
 await build({
-  entryPoints: [new URL('core/host.css', import.meta.url).pathname],
-  outfile: new URL('style.css', out).pathname,
+  entryPoints: [fileURLToPath(new URL('core/host.css', import.meta.url))],
+  outfile: fileURLToPath(new URL('style.css', out)),
   bundle: true,
   minify: true,
 });

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 export async function testImages({ context, origin, api, snapshots, app }) {
@@ -22,12 +23,12 @@ export async function testImages({ context, origin, api, snapshots, app }) {
     await refreshed;
     await route.fulfill({ response });
   });
-  await input.setInputFiles(new URL('../static/icon-192.png', import.meta.url).pathname);
+  await input.setInputFiles(fileURLToPath(new URL('../static/icon-192.png', import.meta.url)));
   await page.getByRole('button', { name: 'Remove icon-192.png', exact: true }).waitFor();
   await page.unroute('**/api/images');
   await page.getByRole('button', { name: 'Remove icon-192.png', exact: true }).click();
   assert.equal(await page.locator('.attachment').count(), 0);
-  await input.setInputFiles(new URL('../static/icon-192.png', import.meta.url).pathname);
+  await input.setInputFiles(fileURLToPath(new URL('../static/icon-192.png', import.meta.url)));
   await page.getByRole('button', { name: 'Remove icon-192.png', exact: true }).waitFor();
   await page.route('**/send', (r) => r.fulfill({ status: 503, json: { error: 'model' } }));
   await page.getByRole('button', { name: 'Send message', exact: true }).click();

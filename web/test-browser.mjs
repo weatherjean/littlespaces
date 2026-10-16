@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { testHistoryAndStorage } from './test-history.mjs';
 // Focused development fixture: actual streamed Rust agent/tools/backend/Preact/browser path.
 // This does not establish real-model generation or real ChatGPT sign-in.
@@ -15,7 +16,7 @@ import { mkdtemp, readFile, rm, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 const token = randomBytes(32).toString('hex');
 const harness = await startHarness({ token });
 let code = JSON.parse(await readFile(path.join(root, 'examples/tasks-rhai.json'), 'utf8'));

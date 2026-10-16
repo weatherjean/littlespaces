@@ -31,6 +31,8 @@ The OpenSSL path above is for Debian/Ubuntu. On Homebrew macOS, use `"$(brew --p
 
 Use `scripts/package-release.py` with a new destination after building. Inspect its public-file allowlist, resulting files, recorded commit/dirty flag, and `SHA256SUMS`. A public release should identify a clean, immutable source revision and contain no workspace, authentication files, keys, or private test output.
 
+The allowlist names individual license files as well as application files; extra local files are excluded. Packaging rejects symlinked inputs, unsafe notice paths, missing files, and checksum mismatches before creating output. Run `python3 scripts/test-release.py` to verify these boundaries. To keep an earlier notice inventory, generate into a new directory and pass that directory with `--notices`. Optimized Rust builds require the frontend assets to exist. CI uploads each architecture's package only after its synthetic browser suite passes; still require all candidate jobs to be green before publishing.
+
 Release notes should state the experimental single-user scope, platform/toolchain requirements, workspace format, setup instructions, known limitations, and tested upgrade/rollback path. Do not promise compatibility with the discarded public-app workspace format or older Svelte/QuickJS data.
 
 ## Deployment qualification

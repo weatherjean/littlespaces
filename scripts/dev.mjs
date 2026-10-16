@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // Local dev server with real browser validation; no tokens printed or passed in argv.
 import { startHarness } from '../web/browser-harness.mjs';
 import { randomBytes } from 'node:crypto';
@@ -8,7 +9,7 @@ const positional = args.filter((a) => !a.startsWith('--'));
 const token = randomBytes(32).toString('hex');
 const harness = await startHarness({ token });
 const child = spawn(
-  new URL('../rust/target/debug/little-spaces', import.meta.url).pathname,
+  fileURLToPath(new URL('../rust/target/debug/little-spaces', import.meta.url)),
   ['serve', positional[0] || '.data-monolith-rework', positional[1] || '5175'],
   {
     stdio: 'inherit',
@@ -32,4 +33,9 @@ process.on('SIGTERM', close);
 child.on('exit', async (code) => {
   await close();
   process.exitCode = code || 0;
+});
+child.on('error', async (error) => {
+  console.error(`Cannot start LittleSpaces (${error.code}); build the Rust executable first.`);
+  await close();
+  process.exitCode = 1;
 });

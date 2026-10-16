@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // Optional browser verifier service. Never bundled into the Rust executable.
 import http from 'node:http';
 import { chromium, expect } from '@playwright/test';
@@ -7,7 +8,7 @@ export async function startHarness({
   token,
   port = 0,
   publicOrigin = process.env.LITTLESPACES_PUBLIC_URL,
-  artifacts = new URL('../build-rust/screenshots/', import.meta.url).pathname,
+  artifacts = fileURLToPath(new URL('../build-rust/screenshots/', import.meta.url)),
 }) {
   if (!token || token.length < 32) throw Error('A private harness token is required');
   await mkdir(artifacts, { recursive: true });
@@ -147,7 +148,7 @@ export async function startHarness({
     },
   };
 }
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(new URL(import.meta.url))) {
   const service = await startHarness({
     token: process.env.LITTLESPACES_BROWSER_TOKEN,
     port: Number(process.env.LITTLESPACES_BROWSER_PORT || 5176),

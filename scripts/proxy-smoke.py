@@ -24,6 +24,19 @@ def main():
             router["tls"] = {}
         (stage / "traefik.yml").write_text(yaml.safe_dump(config))
         (stage / "traefik-dynamic.yml").write_text(yaml.safe_dump(dynamic))
+        # Read a complete request before replying. A response piped into nc can
+        # close the socket at stdin EOF before nc captures the request headers.
+        backend = stage / "backend.sh"
+        backend.write_text(
+            "#!/bin/sh\n"
+            "while IFS= read -r line; do\n"
+            "  printf '%s\\n' \"$line\" >> /tmp/requests\n"
+            "  [ \"$line\" = \"$(printf '\\r')\" ] && break\n"
+            "done\n"
+            "printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n"
+            "Connection: close\\r\\n\\r\\nok'\n"
+        )
+        backend.chmod(0o755)
         container = subprocess.check_output([
             "docker", "run", "-d", "--network", "none", "-v",
             f"{stage}:/etc/littlespaces:ro", IMAGE,
@@ -31,9 +44,8 @@ def main():
         ], text=True).strip()
         try:
             subprocess.run([
-                "docker", "exec", "-d", container, "sh", "-c",
-                "while true; do printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n"
-                "Connection: close\\r\\n\\r\\nok' | nc -l -p 5175 >> /tmp/requests; done",
+                "docker", "exec", "-d", container, "nc", "-lk", "-p", "5175",
+                "-e", "/etc/littlespaces/backend.sh",
             ], check=True)
             time.sleep(3)
 
