@@ -1,6 +1,16 @@
 # Contributing to LittleSpaces
 
-Read [the agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md) and [implementation status](docs/rhai/status.md). This is a clean rewrite on `rework/rust-monolith-rhai`; no importers, grants, runtime fallbacks or maintained legacy implementation exist. The supported Rust workspace upgrade is version 4 → 5. Never delete local databases, vault keys or authentication files during source cleanup.
+LittleSpaces is an experimental single-user workspace. The current priority is making the existing implementation easy to install, understand, verify, and maintain. Focus contributions on reproducible bugs, documentation, accessibility, tests, and reliability. Discuss new features, multi-user designs, dependency additions, or architectural changes in an issue before starting substantial work.
+
+The supported source currently lives on `rework/rust-monolith-rhai`. Base pull requests on that branch while `main` still contains the older implementation. Read [terminology](CONTEXT.md), the [frontend guide](docs/rhai/frontend.md), and the [SDK](docs/rhai/sdk.md). The [rewrite sequence](docs/monolith-rework.md) and [implementation history](docs/rhai/status.md) are historical context, not a list of requested features. The supported Rust workspace upgrade is version 4 → 5. Never delete local databases, vault keys or authentication files during source cleanup.
+
+## Reporting issues and opening pull requests
+
+For a bug, include the commit, OS/browser, reproduction steps, expected behavior, and the actual result. Prefer a fresh synthetic workspace. Remove private data from logs and screenshots; never attach a database, encryption key, OAuth token, owner-setup link, or real-account conversation. Report security issues using [SECURITY.md](SECURITY.md).
+
+Keep pull requests focused. Explain the problem, resulting behavior, and checks actually run. A relevant regression test is useful for a behavioral bug; documentation-only changes need link and command review rather than the full runtime suite. Record checks you could not run. Do not use real ChatGPT requests as routine automated verification or silently consume a contributor's account usage.
+
+Be respectful and specific in reviews. Discuss the change and its tradeoffs; avoid personal attacks or publishing another person's private information. There is no promised response time or long-term support window.
 
 The TypeScript frontend on `experiment/liquid-glass` at `331326b` (updated main with gradient/glass styling) is the preferred visual reference; `main@ee2a9ed` supplies the underlying interaction structure. Read [the frontend guide](docs/rhai/frontend.md) before changing the shell. Port its Orbit tokens, page structure and phone/dialog behavior into Preact; the backend rewrite does not authorize an unrelated redesign.
 
@@ -10,8 +20,9 @@ The TypeScript frontend on `experiment/liquid-glass` at `331326b` (updated main 
 npm ci --prefix web
 npm run build --prefix web
 cargo build --manifest-path rust/Cargo.toml --locked
+(cd web && npx playwright install chromium)
 rust/target/debug/little-spaces init .data-monolith-rework
-rust/target/debug/little-spaces serve .data-monolith-rework
+node scripts/dev.mjs .data-monolith-rework 5175
 ```
 
 Rust 1.88+; Node 24+ for builds/browser tests only. Web Push encryption links OpenSSL; install `pkg-config libssl-dev` on Linux or `openssl@3` with Homebrew on macOS. Frontend assets are embedded by `rust/build.rs`. Cargo can compile core tests without assets, but `serve` requires a frontend build. The CLI upgrades compatible version-4 workspaces transactionally to version 5. Before the first upgrade it writes `workspace.pre-v5.sqlite`; the encryption key is unchanged. Unknown versions and incompatible table columns are rejected. Never edit user_version to force compatibility.

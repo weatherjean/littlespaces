@@ -1,6 +1,6 @@
 # LittleSpaces monolith rework plan
 
-Status: proposed implementation sequence, October 2026. This document changes no running behavior.
+Status: historical implementation plan, October 2026. This document changes no running behavior and is not the current feature roadmap. The project now focuses on the existing experimental single-user implementation; see the [README](../README.md) and [release checklist](releasing.md).
 
 ## Release premise
 

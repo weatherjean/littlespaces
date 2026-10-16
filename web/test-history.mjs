@@ -40,6 +40,19 @@ with sqlite3.connect(v['workspace']+'/workspace.sqlite') as db:
   await page.getByRole('button', { name: 'Paged conversation 0', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await page.goto(`${origin}/settings`);
+  const storage = page.getByRole('region', { name: 'Storage & recovery' });
+  await storage.getByText(/database ·/).waitFor();
+  for (const width of [320, 390, 952, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const card = await storage.boundingBox();
+    const heading = await storage.getByRole('heading').boundingBox();
+    assert.ok(heading.width > card.width * 0.7, `Storage text uses the card width at ${width}px`);
+    assert.ok(card.x >= 0 && card.x + card.width <= width, `Storage card fits at ${width}px`);
+    for (const field of await storage.getByRole('spinbutton').all()) {
+      const box = await field.boundingBox();
+      assert.ok(box.x >= card.x && box.x + box.width <= card.x + card.width);
+    }
+  }
   await page.getByRole('button', { name: 'Review cleanup', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm cleanup', exact: true }).waitFor();
   // Review is read-only. Cancel leaves historical messages intact.

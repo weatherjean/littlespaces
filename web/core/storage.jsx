@@ -41,8 +41,8 @@ export function StorageSettings({ api }) {
     }
   }
   return (
-    <section class="setting-card">
-      <div>
+    <section class="setting-card setting-section storage-settings" aria-label="Storage & recovery">
+      <div class="storage-settings-content">
         <h3>Storage & recovery</h3>
         {status && (
           <>

@@ -1,5 +1,7 @@
 # Monolith rewrite status
 
+This page is an implementation history, including limitations that later entries supersede. For the current single-user project, start with the [README](../../README.md), [contribution guide](../../CONTRIBUTING.md), and [release checklist](../releasing.md). The project remains experimental; historical checks are not a production qualification.
+
 The application is implemented on `rework/rust-monolith-rhai`; the agreed sequence remains [monolith-rework.md](../monolith-rework.md).
 
 The single Rust executable owns the fresh SQLite workspace, owner setup/login/session reset, encrypted secrets and ChatGPT state, direct OAuth/inference, streamed agent jobs, typed scoped authoring tools, Rhai actions, public-network HTTP, validation, publication, conflict-checked commits and schedules. It embeds the Preact shell and Preact/HTM runtime. Applets run in sandboxed iframes using an app/revision-bound bridge. No runtime Node, Codex, QuickJS or Bubblewrap is involved.

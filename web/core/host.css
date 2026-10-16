@@ -2,3 +2,23 @@
 @import './liquid-glass.css';
 
 @import './mobile.css';
+
+.storage-settings-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.storage-settings-content label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.storage-settings-content input {
+  width: 100%;
+  min-width: 0;
+}
+.storage-settings-content > button {
+  justify-self: start;
+  min-height: 44px;
+  max-width: 100%;
+}

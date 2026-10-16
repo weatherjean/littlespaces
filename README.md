@@ -1,41 +1,91 @@
 # LittleSpaces
 
-A private workspace where an owner creates and uses personal apps through conversation.
+A self-hosted workspace for building and using personal apps through conversation.
 
-One Rust executable owns owner authentication, direct ChatGPT integration, agent jobs/tools, SQLite, restricted Rhai backend actions, HTTP, schedules and commits. It runs backend evaluation in disposable resource-limited child processes and embeds a Preact shell and Preact/HTM applet runtime. Applets run in sandboxed iframes. Ordinary app usage is local and needs no model request.
+Describe what you need, approve the proposed app, and let LittleSpaces build and verify it. Your apps run in your own workspace, with persistent data, chat, schedules, and recovery points. Ordinary app use does not require a model request.
 
-This clean rewrite has no users and is not released. It has no runtime Node, Codex, QuickJS or Bubblewrap, and no legacy importer. Compatible version-4 Rust workspaces upgrade to version 5 with a preserved pre-upgrade database snapshot. Existing development databases and authentication files are never deleted by setup/source cleanup; unsupported formats are rejected.
+LittleSpaces is a **single-user project**: one owner, one workspace, and one active ChatGPT connection. The current focus is documentation, reliability, and making the existing implementation easier to run and contribute to.
 
-## Build and run
+## What it does
 
-Node is needed only to build the frontend. Rust 1.88+, Node 24+, and OpenSSL development libraries for Web Push encryption (Linux: `pkg-config libssl-dev`; macOS: `brew install openssl@3`):
+- Builds personal apps with a Preact interface and restricted Rhai backend actions.
+- Tests generated backends and browser behavior before automatic publication.
+- Saves app records and SQLite data locally, with versioned releases and recovery points.
+- Supports app conversations, owner-confirmed voice writes, images, schedules, and notifications.
+- Runs the host as one Rust executable with embedded frontend assets. A separate Node/Playwright service verifies newly generated interfaces.
+
+## Try it locally
+
+Use Linux or macOS. Install Rust through rustup (the repository pins Rust 1.88.0), Node.js 24 or newer, Python 3 for verification scripts, and OpenSSL development libraries:
+
+- Debian/Ubuntu: `sudo apt-get install pkg-config libssl-dev`
+- macOS: `brew install openssl@3`
+
+The single-user Rust implementation currently lives on `rework/rust-monolith-rhai`; `main` still contains the older implementation.
 
 ```sh
+git clone --branch rework/rust-monolith-rhai https://github.com/weatherjean/appsappsapps.git
+cd appsappsapps
 npm ci --prefix web
 npm run build --prefix web
-cargo build --manifest-path rust/Cargo.toml --release --locked
-rust/target/release/little-spaces init .data-monolith-rework
-rust/target/release/little-spaces serve .data-monolith-rework
+(cd web && npx playwright install chromium)
+cargo build --manifest-path rust/Cargo.toml --locked
+rust/target/debug/little-spaces init .data-local
+node scripts/dev.mjs .data-local 5175
 ```
 
-Open the private owner-setup link printed by the server. Choose a password, sign in, then Continue with ChatGPT in Settings. The server binds `127.0.0.1:5175`; supply another port after the workspace argument if needed. ChatGPT OAuth uses the same local server at `/auth/callback`. After building, the executable runs without Node or a static asset directory.
+On Linux, Playwright may also need system dependencies: run `npx playwright install --with-deps chromium` from `web/`.
 
-Choose Create an app or Start a chat, describe the app you want, select an available model and send. The agent proposes a name and purpose; approve the build card to open its persisted build conversation. The agent builds internally, validates backend and browser behavior, and releases the working app automatically. Releases save before/after data snapshots; migrations run on copies before an atomic commit. Changes to existing data require owner review. Versions & tests offers code reverts and snapshot restoration, and the model can prepare a restore that preserves selected newer data. Every published backend can use every workspace secret; values remain host-only. Automatic publication of new frontend code requires the browser verifier. For development, build the debug binary with `cargo build --manifest-path rust/Cargo.toml --locked`, then run `node scripts/dev.mjs .data-monolith-rework 5175` to start both services. The legacy owner-reviewed preview route remains available without the verifier.
+Open the private owner-setup link printed in the terminal, choose a password, and connect ChatGPT in Settings. Then select **Create an app**, describe it, and approve the proposed build. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
 
-Real-account requests consume ChatGPT usage. With owner authorization, the existing local ChatGPT connection has now generated two small apps, passed backend tests, completed isolated browser preview and publication, persisted UI records, read records through chat, confirmed a Voice-mode write, and updated an app without losing its records. Microphone recognition and speech lifecycle use deterministic browser fixtures; physical microphone/audio and VPS OAuth still need user testing. No private Codex authentication cache is used. [Connection details](docs/rhai/sign-in.md).
+The launcher starts both the loopback host at `http://127.0.0.1:5175` and the browser verifier. Stop it with Ctrl+C. To resume, run the same launcher command; `init` is only for a new workspace and refuses an existing directory. Use a different port as the final argument if 5175 is occupied.
 
-## Development
+## Your data and recovery
 
-The [production readiness review](docs/production-readiness.md) records the current go/no-go assessment, validation evidence and remaining release blockers.
+The workspace directory contains your database and encryption key. Keep both private and together. Never commit it, paste its contents into an issue, or delete it to resolve a startup error.
 
-[Contributing](CONTRIBUTING.md), [Rhai/Preact SDK](docs/rhai/sdk.md), [implementation status and release limits](docs/rhai/status.md), [agreed sequence](docs/monolith-rework.md), [terminology](CONTEXT.md).
+App releases retain recovery points. **Versions & tests** provides code reverts and reviewed snapshot restoration. **Settings → Storage & recovery** offers explicit cleanup; it never runs automatically. App recovery points do not replace an independent backup or undo external service actions.
 
-Routine checks run in GitHub Actions on Linux AMD64 and ARM64. Local focused checks and the development browser workflow are documented in Contributing. A [Traefik/systemd deployment definition](deploy/README.md) covers HTTPS, the browser verifier, health checks and backup/rollback procedures. Target-host qualification remains required. Actions run in disposable workers with a 128 MiB Rust heap budget, a separate 64 MiB SQLite heap budget, deadline termination, and a 512 MiB address-space ceiling on Linux. Target deployment, device behavior, and external-service recovery still require qualification before release.
+With the server stopped, back up to a new directory:
 
-Voice mode is restored: tap Let’s talk, dictate your request, optionally hear replies, and confirm app write suggestions before they execute. Let’s talk is voice-only; use Chat for text input. The preferred shell appearance follows `experiment/liquid-glass@331326b`, including its gradient background and translucent surfaces.
+```sh
+rust/target/debug/little-spaces backup .data-local .data-backup
+```
 
-Install LittleSpaces using your browser’s install menu, or Add to Home Screen on iOS. Icons, manifest, and an offline fallback are embedded. Enable device push in Settings → Notifications; the home bell keeps an inbox even without push. Set `VAPID_SUBJECT` to your contact `mailto:` address when hosting. Production use needs HTTPS.
+Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; the supported workspace upgrade is version 4 → 5. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
 
-For isolated real-model API checks, start the dev launcher with `--live-tests` and run `node scripts/model-e2e.mjs --real`. The included scenario verifies automatic release, migrations, preservation during restore, and destructive dry-run isolation. See [Contributing](CONTRIBUTING.md#opt-in-real-model-api-verification) for authentication and scenario details.
+## Status and boundaries
 
-Owner history supports loading older conversations and messages. Settings → Storage & recovery shows usage and lets you review cleanup of completed-job diagnostics, unused images, and old recovery points. Cleanup never runs automatically. Stop the host, then run `little-spaces backup <workspace> <new-directory>` for a consistent database/key backup; keep backups encrypted off-host. See Contributing for upgrade and rollback steps.
+This is an experimental source project, not a production-qualified release. The core has synthetic Rust and browser regression coverage and documented local real-model checks. Target-host HTTPS/OAuth, physical-device behavior, and off-host recovery still need qualification. See the [release checklist](docs/releasing.md) and [dated readiness evidence](docs/production-readiness.md).
+
+App interfaces run in sandboxed iframes. Backend actions run in disposable workers with resource limits. Published backends can use **all integration secrets in the workspace**; those values remain host-managed. Treat generated app behavior and its external effects as something the owner must review. See the [security policy and trust model](SECURITY.md).
+
+Native Windows hosting is not supported. Voice and push behavior depend on the browser/device; remote hosting requires HTTPS. An offline fallback is included, but apps require the running host to access their data.
+
+## Hosting
+
+For an optimized host build:
+
+```sh
+npm run build --prefix web
+cargo build --manifest-path rust/Cargo.toml --release --locked
+rust/target/release/little-spaces serve .data-local 5175
+```
+
+The host can serve existing apps without Node or a separate static asset directory. Automatic publication of new interfaces requires the browser verifier; starting the binary alone does not start it. An explicit owner-preview publication path is also available.
+
+The [deployment guide](deploy/README.md) covers the separately supervised verifier, Traefik/systemd, health checks, HTTPS, backup and rollback. Remote deployment still requires qualification on the actual host.
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for development, checks, and contribution scope. Bug reports, reproducible setup problems, documentation improvements, and focused reliability fixes are welcome. Discuss major product or architecture changes before implementing them.
+
+- [Rhai/Preact SDK](docs/rhai/sdk.md)
+- [Frontend guide](docs/rhai/frontend.md)
+- [Terminology](CONTEXT.md)
+- [Implementation history](docs/rhai/status.md)
+- [Security reporting](SECURITY.md)
+
+## License
+
+LittleSpaces is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and the required generated notice inventory for binary packages.

@@ -98,6 +98,7 @@ jobs:
           python3 scripts/production-smoke.py
       - name: Package production files
         run: |
+          python3 scripts/generate-notices.py build-rust/notices --openssl-notice /usr/share/doc/libssl-dev/copyright
           python3 scripts/package-release.py build-rust/release
           tar -C build-rust/release -czf build-rust/littlespaces-linux-${{ matrix.arch }}.tar.gz .
       - name: Save production package
