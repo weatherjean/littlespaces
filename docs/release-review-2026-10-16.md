@@ -43,6 +43,8 @@ The first candidate PR run subsequently passed quality/deployment checks and bot
 
 A local Linux browser reproduction also exposed an app action race: the initial read and first owner write overlapped, and the runtime's live-action fence rejected the write. The platform iframe bridge now serializes calls without replaying failed actions. A browser regression delays responses and checks that simultaneous calls have at most one request in flight. This is a correction to existing single-user behavior, not a restoration of public-app features. Consult the PR's latest checks for the follow-up revision; the earlier hosted failures remain recorded above.
 
+The next hosted run exposed two browser timing failures. Lost-send recovery could read history before observing a completed job, then stop polling with stale messages. Recovery now reads job state before history; a deterministic regression fails against the previous code. Image uploads used the history-refresh epoch, so reconnecting the same conversation could discard an accepted upload. Uploads now use a separate conversation-change epoch, with a regression that reconnects during upload. These corrections retain existing behavior and do not add product scope. Hosted storage-error diagnostics also occurred during the synthetic chat tests; they remain recorded rather than being treated as proof of a specific storage defect.
+
 ## Remaining actions
 
 1. Observe the exact candidate's GitHub AMD64/ARM64, quality, and deployment-check jobs. Remote results must be recorded separately from the local evidence above.

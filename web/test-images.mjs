@@ -12,8 +12,19 @@ export async function testImages({ context, origin, api, snapshots, app }) {
   await page.goto(`${origin}/chat/${conversation}`);
   await page.getByLabel('Message', { exact: true }).waitFor();
   const input = page.getByLabel('Attach images', { exact: true });
+  // Reconnecting the same conversation must not discard an in-flight upload.
+  await page.route('**/api/images', async (route) => {
+    const response = await route.fetch();
+    const refreshed = page.waitForResponse(
+      (value) => new URL(value.url()).pathname === `/api/conversations/${conversation}/info`,
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await refreshed;
+    await route.fulfill({ response });
+  });
   await input.setInputFiles(new URL('../static/icon-192.png', import.meta.url).pathname);
   await page.getByRole('button', { name: 'Remove icon-192.png', exact: true }).waitFor();
+  await page.unroute('**/api/images');
   await page.getByRole('button', { name: 'Remove icon-192.png', exact: true }).click();
   assert.equal(await page.locator('.attachment').count(), 0);
   await input.setInputFiles(new URL('../static/icon-192.png', import.meta.url).pathname);

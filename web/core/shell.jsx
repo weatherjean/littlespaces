@@ -121,6 +121,7 @@ function App() {
     selection = useRef(selected),
     jobRef = useRef(job),
     chatEpoch = useRef(0),
+    conversationEpoch = useRef(0),
     conversationRef = useRef(conversation),
     sending = useRef(false),
     uploadLatch = useRef(false),
@@ -132,6 +133,7 @@ function App() {
   function setConversation(id) {
     if (conversationRef.current !== id) {
       chatEpoch.current++;
+      conversationEpoch.current++;
       conversationRef.current = id;
       setMessages([]);
       setHistoryLoading(!!id);
@@ -367,7 +369,7 @@ function App() {
     }
     uploadLatch.current = true;
     setUploading(true);
-    const epoch = chatEpoch.current;
+    const epoch = conversationEpoch.current;
     try {
       for (const file of selectedFiles) {
         const dataUrl = await prepareImage(file);
@@ -376,11 +378,11 @@ function App() {
           dataUrl,
           app: active?.app || (view === 'app' ? selected : null),
         });
-        if (epoch !== chatEpoch.current) return;
+        if (epoch !== conversationEpoch.current) return;
         setAttachments((items) => [...items, image]);
       }
     } catch (e) {
-      if (epoch === chatEpoch.current) setError(e.message);
+      if (epoch === conversationEpoch.current) setError(e.message);
     } finally {
       uploadLatch.current = false;
       setUploading(false);

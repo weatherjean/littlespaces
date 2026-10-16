@@ -125,6 +125,31 @@ export async function testChatLifecycle({ context, origin, api, snapshots }) {
   // A lost send response must rediscover the accepted job without resubmitting it.
   let acceptedSends = 0;
   let acceptedJob;
+  let recoveredJob = false;
+  const recoveryConversation = new URL(page.url()).pathname.split('/').at(-1);
+  const priorHistory = await api(`/api/conversations/${recoveryConversation}?page=true`);
+  const recoveryHistory = (url) => url.pathname === `/api/conversations/${recoveryConversation}`;
+  // Force the ordering that exposed the CI race: history read before the job
+  // snapshot is stale, while history read after completion includes the reply.
+  await page.route(recoveryHistory, async (route) => {
+    if (!recoveredJob) await route.fulfill({ json: priorHistory });
+    else await route.continue();
+  });
+  await page.route('**/api/jobs/*', async (route) => {
+    if (!acceptedJob || !route.request().url().endsWith(`/${acceptedJob}`)) {
+      await route.continue();
+      return;
+    }
+    let value;
+    for (let i = 0; i < 100; i++) {
+      value = await api(`/api/jobs/${acceptedJob}`);
+      if (!['running', 'queued'].includes(value.state)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(value.state, 'completed');
+    recoveredJob = true;
+    await route.fulfill({ json: value });
+  });
   await page.route('**/send', async (route) => {
     acceptedSends++;
     const response = await route.fetch();
@@ -142,7 +167,10 @@ export async function testChatLifecycle({ context, origin, api, snapshots }) {
     throw error;
   }
   assert.equal(acceptedSends, 1);
+  assert.equal(recoveredJob, true);
   await page.unroute('**/send');
+  await page.unroute('**/api/jobs/*');
+  await page.unroute(recoveryHistory);
 
   // A delayed history response must not overwrite the newly selected conversation.
   let releaseHistory;

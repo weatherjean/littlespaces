@@ -37,14 +37,16 @@ export function useChatSync({
     const observedJob = jobRef.current?.id;
     (async () => {
       try {
-        const [values, suggestions, chats, current] = await Promise.all([
+        const current = await api(`/api/conversations/${conversation}/info`);
+        const tracked = current?.job || current?.latestReplyJob;
+        const running = tracked ? await api(`/api/jobs/${tracked}`) : null;
+        // Read history after job state: a terminal job will not be polled again,
+        // so its final messages must be included in this snapshot.
+        const [values, suggestions, chats] = await Promise.all([
           historyPages.read(conversation),
           api(`/api/conversations/${conversation}/proposals`),
           historyPages.list(),
-          api(`/api/conversations/${conversation}/info`),
         ]);
-        const tracked = current?.job || current?.latestReplyJob;
-        const running = tracked ? await api(`/api/jobs/${tracked}`) : null;
         if (!active || chatEpoch.current !== epoch) return;
         setReconnecting(false);
         if (!sending.current && (!jobRef.current || jobRef.current.id === observedJob)) {
