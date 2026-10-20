@@ -17,9 +17,9 @@ IMAGE = "traefik:3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c1724296
 def main():
     with tempfile.TemporaryDirectory(prefix="littlespaces-traefik-") as directory:
         stage = Path(directory)
-        config = yaml.safe_load((ROOT / "deploy/traefik.yml").read_text())
+        config = yaml.safe_load((ROOT / "scripts/fixtures/traefik.yml").read_text())
         config.pop("certificatesResolvers")
-        dynamic = yaml.safe_load((ROOT / "deploy/traefik-dynamic.yml").read_text())
+        dynamic = yaml.safe_load((ROOT / "scripts/fixtures/traefik-dynamic.yml").read_text())
         for router in dynamic["http"]["routers"].values():
             router["tls"] = {}
         (stage / "traefik.yml").write_text(yaml.safe_dump(config))

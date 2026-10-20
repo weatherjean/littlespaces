@@ -29,6 +29,10 @@ Rust 1.88+; Node 24+ for builds/browser tests only. Web Push encryption links Op
 
 The owner-setup link is private. Never commit passwords, OAuth tokens, owner databases, encryption keys, account screenshots or generated output. The PEM under `rust/tests/fixtures/` is an intentionally generated synthetic signing key, trusted only by its matching fixture JWKS; production identity validation fetches OpenAI's JWKS.
 
+## Container deployment checks
+
+Production uses Docker Compose. Run `python3 scripts/test-compose-config.py` to validate all access modes and `python3 scripts/test-compose.py --build` to build and exercise the actual production images locally. The second command uses only a random disposable project and synthetic data, and removes that project's volumes afterward. It works on Docker Desktop and native Linux; CI runs it on AMD64 and ARM64. The [deployment guide](deploy/README.md) explains the shared network namespace, Chromium sandbox, and private verifier transport.
+
 ## Focused checks
 
 ```sh
@@ -69,7 +73,7 @@ All CLI commands and the server now acquire the same OS workspace lock before da
 
 `evidence <workspace> <app> <invocation>` reports durable external effects. `effect-resolve <workspace> <app> <operation> <applied|not_applied|accept_unknown>` records an explicit owner decision after inspecting the remote service, preserving original evidence. Scripts and agent tools cannot acknowledge effects. Model jobs use durable checkpoints and resume after restart. Completed tool results are reused. A tool whose dispatch outcome is unknown stops recovery for owner review; potentially dispatched writes are never blindly replayed. The server takes an OS workspace lock before recovery.
 
-The [production deployment guide](deploy/README.md) supplies Traefik/systemd configuration and package/backup procedures. Target-host recovery drills, comprehensive system testing, adversarial memory measurements and notices review remain release qualification work. Preserve upstream notices and keep authentication values out of diagnostics.
+The [production deployment guide](deploy/README.md) supplies the supported Docker Compose configurations, local container tests, and backup procedures. Target-host recovery drills, comprehensive system testing, adversarial memory measurements and notices review remain release qualification work. Preserve upstream notices and keep authentication values out of diagnostics.
 
 ## Opt-in real-model API verification
 

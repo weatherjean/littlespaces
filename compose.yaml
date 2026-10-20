@@ -1,0 +1,115 @@
+name: littlespaces
+
+services:
+  gateway:
+    image: traefik:3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    restart: unless-stopped
+    command:
+      - --entrypoints.app.address=:${LITTLESPACES_PORT:-8080}
+      - --entrypoints.app.transport.respondingtimeouts.writeTimeout=360s
+      - --entrypoints.callback.address=:1455
+      - --entrypoints.ping.address=:8082
+      - --ping.entrypoint=ping
+      - --providers.file.filename=/etc/traefik/routes.yml
+      - --log.level=WARN
+    environment:
+      LITTLESPACES_HOST: ${LITTLESPACES_HOST:-127.0.0.1}
+      LITTLESPACES_AUTHORITY: ${LITTLESPACES_AUTHORITY:-127.0.0.1:8080}
+      LITTLESPACES_TLS: "false"
+    volumes:
+      - ./deploy/container/routes.yml:/etc/traefik/routes.yml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    pids_limit: 128
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --ping, --ping.entrypoint=ping, --entrypoints.ping.address=:8082]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  verifier:
+    image: ${LITTLESPACES_VERIFIER_IMAGE:-ghcr.io/weatherjean/appsappsapps-verifier:local}
+    build:
+      context: .
+      target: verifier
+    restart: unless-stopped
+    init: true
+    network_mode: service:gateway
+    depends_on:
+      gateway:
+        condition: service_started
+        restart: true
+    environment:
+      LITTLESPACES_PUBLIC_URL: ${LITTLESPACES_PUBLIC_URL:-http://127.0.0.1:8080}
+      LITTLESPACES_BROWSER_CONNECT_ORIGIN: http://127.0.0.1:5175
+      LITTLESPACES_BROWSER_SANDBOX: "1"
+      LITTLESPACES_BROWSER_PORT: "5176"
+      LITTLESPACES_BROWSER_ARTIFACTS: /artifacts
+    secrets: [browser_token]
+    volumes:
+      - screenshots:/artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./deploy/container/chromium-seccomp.json
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 20s
+    healthcheck:
+      test: [CMD, node, /usr/local/bin/verifier-health.mjs]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  app:
+    image: ${LITTLESPACES_APP_IMAGE:-ghcr.io/weatherjean/appsappsapps:local}
+    build:
+      context: .
+      target: app
+    restart: unless-stopped
+    init: true
+    network_mode: service:gateway
+    depends_on:
+      gateway:
+        condition: service_started
+        restart: true
+      verifier:
+        condition: service_healthy
+    environment:
+      LITTLESPACES_PUBLIC_URL: ${LITTLESPACES_PUBLIC_URL:-http://127.0.0.1:8080}
+      LITTLESPACES_AUTHORITY: ${LITTLESPACES_AUTHORITY:-127.0.0.1:8080}
+      LITTLESPACES_OAUTH_CALLBACK: http://127.0.0.1:1455/auth/callback
+      LITTLESPACES_TRUST_PROXY: "1"
+      LITTLESPACES_BROWSER_HARNESS: http://127.0.0.1:5176
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:operator@example.com}
+    secrets: [browser_token]
+    volumes:
+      - workspace:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    pids_limit: 128
+    stop_grace_period: 40s
+    healthcheck:
+      test: [CMD, /usr/local/bin/app-health.sh]
+      interval: 10s
+      timeout: 6s
+      start_period: 20s
+      retries: 6
+
+secrets:
+  browser_token:
+    file: ${LITTLESPACES_BROWSER_TOKEN_FILE:-./deploy/secrets/browser_token}
+volumes:
+  workspace:
+  screenshots:

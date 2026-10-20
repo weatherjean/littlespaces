@@ -1,0 +1,50 @@
+http:
+  routers:
+    app-login:
+      rule: 'Host(`{{ env "LITTLESPACES_HOST" }}`) && Path(`/api/login`)'
+      priority: 100
+      entryPoints: [app]
+      middlewares: [login-limit, security]
+      service: workspace
+      {{ if eq (env "LITTLESPACES_TLS") "true" }}
+      tls: {certResolver: letsencrypt}
+      {{ end }}
+    app:
+      rule: 'Host(`{{ env "LITTLESPACES_HOST" }}`)'
+      entryPoints: [app]
+      middlewares: [request-limit, inflight-limit, security]
+      service: workspace
+      {{ if eq (env "LITTLESPACES_TLS") "true" }}
+      tls: {certResolver: letsencrypt}
+      {{ end }}
+    callback:
+      rule: 'Host(`127.0.0.1`) && Path(`/auth/callback`)'
+      entryPoints: [callback]
+      middlewares: [request-limit]
+      service: workspace
+  middlewares:
+    login-limit:
+      rateLimit:
+        average: 3
+        period: 1m
+        burst: 3
+        sourceCriterion:
+          ipStrategy: {depth: 0}
+    request-limit:
+      rateLimit: {average: 20, period: 1s, burst: 40}
+    inflight-limit:
+      inFlightReq: {amount: 100}
+    security:
+      headers:
+        stsSeconds: 31536000
+  services:
+    workspace:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://127.0.0.1:5175
+        healthCheck:
+          path: /health/ready
+          hostname: '{{ env "LITTLESPACES_AUTHORITY" }}'
+          interval: 10s
+          timeout: 5s

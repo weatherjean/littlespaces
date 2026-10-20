@@ -1,0 +1,80 @@
+name: Production containers
+
+on:
+  push:
+    branches: [main, rework/rust-monolith-rhai]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: containers-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Compose (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build production images
+        env:
+          LITTLESPACES_APP_IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}-${{ matrix.arch }}
+          LITTLESPACES_VERIFIER_IMAGE: ghcr.io/${{ github.repository }}-verifier:sha-${{ github.sha }}-${{ matrix.arch }}
+        run: docker compose -f compose.yaml build --build-arg IMAGE_REVISION="$GITHUB_SHA"
+      - name: Qualify actual containers
+        run: |
+          python3 scripts/test-compose-config.py
+          python3 scripts/test-compose.py \
+            --app-image "ghcr.io/${GITHUB_REPOSITORY}:sha-${GITHUB_SHA}-${{ matrix.arch }}" \
+            --verifier-image "ghcr.io/${GITHUB_REPOSITORY}-verifier:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+      - name: Publish tested architecture
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "ghcr.io/${GITHUB_REPOSITORY}:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+          docker push "ghcr.io/${GITHUB_REPOSITORY}-verifier:sha-${GITHUB_SHA}-${{ matrix.arch }}"
+          docker logout ghcr.io
+
+  publish:
+    name: Publish multi-architecture images
+    needs: build-test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - name: Publish manifests only after both architectures pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          for suffix in "" "-verifier"; do
+            image="ghcr.io/${GITHUB_REPOSITORY}${suffix}"
+            docker buildx imagetools create \
+              --tag "${image}:sha-${GITHUB_SHA}" \
+              "${image}:sha-${GITHUB_SHA}-amd64" "${image}:sha-${GITHUB_SHA}-arm64"
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              docker buildx imagetools create --tag "${image}:${GITHUB_REF_NAME}" "${image}:sha-${GITHUB_SHA}"
+            fi
+          done
+          docker logout ghcr.io

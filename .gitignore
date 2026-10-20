@@ -24,6 +24,7 @@ build-rust/
 
 # Local deployment credentials (only the example is public).
 deploy/production.env
+deploy/secrets/
 
 # Python verification caches
 __pycache__/

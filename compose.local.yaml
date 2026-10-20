@@ -1,0 +1,5 @@
+services:
+  gateway:
+    ports:
+      - "127.0.0.1:${LITTLESPACES_PORT:-8080}:${LITTLESPACES_PORT:-8080}"
+      - "127.0.0.1:1455:1455"

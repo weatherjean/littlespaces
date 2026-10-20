@@ -18,7 +18,15 @@ Run the [contributor checks](../CONTRIBUTING.md#focused-checks) against the exac
 
 Inspect both dependency audits and any unmaintained-package warnings. Real ChatGPT tests are optional, explicit account-usage operations; ordinary CI must remain synthetic. Record physical-device and deployment gaps instead of implying they were tested.
 
-## Binary packages
+## Production containers
+
+Docker Compose is the supported production delivery. Require green `Production containers` AMD64 and ARM64 jobs for the exact commit, as well as the existing core/browser/advisory checks. CI pushes architecture images only after the real-container smoke passes and creates a multi-architecture `sha-<full-commit>` manifest only after both architectures pass. `v*` source tags also create matching version tags; tagging remains a maintainer release action. Verify package visibility separately from repository visibility. Record both app and verifier image digests, and use them together.
+
+Run `python3 scripts/test-compose-config.py` and `python3 scripts/test-compose.py --build` locally before pushing. This uses the same production Dockerfile and Compose stack on Docker Desktop or native Linux; no real credentials are needed. Tailnet registration, certificates, OAuth renewal and off-host backups still need qualification in their actual environment.
+
+## Development binary packages
+
+Native archives remain diagnostic/developer artifacts, not a second supported production installation path.
 
 Build an ordinary optimized executable without `development-fixtures`. Install locked web dependencies and generate the local target's notice inventory into a new directory before packaging:
 

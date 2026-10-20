@@ -1,4 +1,4 @@
-# Static configuration for a dedicated Traefik v3 instance.
+# Synthetic proxy regression fixture. Production uses compose.traefik.yaml.
 entryPoints:
   web:
     address: ':80'

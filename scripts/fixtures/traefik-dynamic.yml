@@ -1,3 +1,4 @@
+# Synthetic proxy regression fixture. Production uses deploy/container/routes.yml.
 http:
   routers:
     littlespaces-login:

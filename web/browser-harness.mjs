@@ -8,9 +8,24 @@ export async function startHarness({
   token,
   port = 0,
   publicOrigin = process.env.LITTLESPACES_PUBLIC_URL,
+  connectOrigin = process.env.LITTLESPACES_BROWSER_CONNECT_ORIGIN,
   artifacts = fileURLToPath(new URL('../build-rust/screenshots/', import.meta.url)),
 }) {
   if (!token || token.length < 32) throw Error('A private harness token is required');
+  if (connectOrigin) {
+    const internal = new URL(connectOrigin);
+    if (
+      internal.protocol !== 'http:' ||
+      internal.hostname !== '127.0.0.1' ||
+      internal.username ||
+      internal.password ||
+      internal.pathname !== '/' ||
+      internal.search ||
+      internal.hash
+    )
+      throw Error('Verifier connection origin must be HTTP loopback');
+    connectOrigin = internal.origin;
+  }
   await mkdir(artifacts, { recursive: true, mode: 0o700 });
   const browser = await chromium.launch({
     headless: true,
@@ -77,7 +92,20 @@ export async function startHarness({
         // Preview endpoints need no redirects: reject them before any next hop.
         let response;
         try {
-          response = await route.fetch({ maxRedirects: 0, timeout: 10000 });
+          // In Compose the browser retains the public origin/CSP while transport
+          // goes directly to the app's private loopback listener. This also works
+          // when Tailscale Serve uses userspace networking and has no kernel route.
+          const internal =
+            connectOrigin && url.origin === publicOrigin
+              ? new URL(url.pathname + url.search, connectOrigin)
+              : null;
+          response = await route.fetch({
+            maxRedirects: 0,
+            timeout: 10000,
+            ...(internal
+              ? { url: internal.href, headers: { ...route.request().headers(), host: url.host } }
+              : {}),
+          });
           if (response.status() >= 300 && response.status() < 400) await route.abort();
           else await route.fulfill({ response });
         } catch {

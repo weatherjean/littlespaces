@@ -12,6 +12,7 @@ const previousUmask = process.umask(0o022);
 const token = 'synthetic-verifier-token-for-network-tests';
 let externalRequests = 0;
 let backgroundRequests = 0;
+let privateTransportRequests = 0;
 const external = http.createServer((_req, res) => {
   externalRequests++;
   res.setHeader('access-control-allow-origin', '*');
@@ -30,6 +31,7 @@ const listen = async (server) => {
 };
 const outside = await listen(external);
 const source = http.createServer((req, res) => {
+  if (req.headers.host === 'private.synthetic.invalid') privateTransportRequests++;
   if (req.url.startsWith('/background')) {
     backgroundRequests++;
     res.writeHead(200, { 'content-type': 'text/plain' });
@@ -97,6 +99,30 @@ try {
     assert.equal(externalRequests, 0, `${mode} escaped the verifier origin`);
   }
   assert.ok(backgroundRequests > 0, 'teardown exercised in-flight HTTP requests');
+  await harness.close();
+  harness = await startHarness({
+    token,
+    artifacts,
+    publicOrigin: 'https://private.synthetic.invalid',
+    connectOrigin: origin,
+  });
+  for (const mode of ['ordinary', 'direct', 'redirect', 'websocket']) {
+    const result = await fetch(harness.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        url: `https://private.synthetic.invalid/preview-test/synthetic?mode=${mode}`,
+        steps: [{ action: 'text', selector: 'body', contains: 'complete' }],
+      }),
+    }).then((r) => r.json());
+    assert.equal(result.passed, true, JSON.stringify(result));
+    assert.equal(externalRequests, 0, 'private transport must not bypass origin restrictions');
+  }
+  assert.ok(privateTransportRequests > 0, 'private transport preserves the public Host');
+  await assert.rejects(
+    startHarness({ token, artifacts, connectOrigin: 'https://outside.invalid' }),
+    /HTTP loopback/,
+  );
   console.log(
     'Verifier checks passed: private screenshots, normal request, direct, redirect, WebSocket, in-flight teardown',
   );
