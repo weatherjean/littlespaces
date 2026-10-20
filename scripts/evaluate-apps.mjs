@@ -3,8 +3,14 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 if (!process.argv.includes('--real')) throw Error('Pass --real to authorize model usage.');
-const root = 'http://127.0.0.1:5175';
-const key = (await readFile('.data-monolith-rework/testing.key', 'utf8')).trim();
+const root = process.env.LITTLESPACES_TEST_ORIGIN || 'http://127.0.0.1:5175';
+const key = (
+  await readFile(
+    process.env.LITTLESPACES_TEST_KEY_FILE || '.data-monolith-rework/testing.key',
+    'utf8',
+  )
+).trim();
+const keepRun = process.argv.includes('--keep-run');
 async function management(route, body) {
   const res = await fetch(root + route, {
     method: body === undefined ? 'GET' : 'POST',
@@ -16,10 +22,12 @@ async function management(route, body) {
   return value;
 }
 const run = await management('/api/test-runs', { allowRealModel: true });
+console.log(`Test workspace: ${run.origin} (run ${run.id})`);
 const directory = path.join('build-rust', 'evaluations', run.id);
 await mkdir(directory, { recursive: true, mode: 0o700 });
 const report = {
   run: run.id,
+  origin: run.origin,
   isolated: true,
   startedAt: new Date().toISOString(),
   apps: [],
@@ -85,10 +93,11 @@ async function turn(entry, conversation, phase, prompt) {
   return evidence;
 }
 function verifyAnswer(answer, scenario) {
-  const start = answer.indexOf('{'),
-    end = answer.lastIndexOf('}');
-  assert.ok(start >= 0 && end > start, 'Expected structured factual answer');
-  assert.deepEqual(JSON.parse(answer.slice(start, end + 1)), scenario.expectedAnswer);
+  assert.ok(!/```json|^\s*\{/.test(answer), 'Ordinary questions should receive readable answers');
+  for (const text of scenario.answer)
+    assert.ok(answer.includes(text), `Answer must contain ${text}`);
+  // Exact persisted values are checked independently below. These checks cover
+  // answer content/format; prose correctness still needs review in the report.
 }
 const scenarios = [
   {
@@ -96,43 +105,33 @@ const scenarios = [
     purpose:
       'Build a tiny task checklist named Pocket Tasks with a fitting emoji. Add tasks, mark them complete, and list open or all tasks. Store records with title and done fields. Provide read-only list/summary actions so app chat can answer what is pending. Keep the UI simple and accessible, include backend and browser tests, and publish automatically. No sample data in the live app, no integrations, schedules, or SQL. Please propose this app now; use these requirements without further questions.',
     use: 'Add tasks named Buy oats and Call plumber. Mark Buy oats complete. Leave Call plumber open. Do this now using the app actions.',
-    query:
-      'Read the stored tasks and return JSON with open_count, done_count, open_titles and done_titles. Do not change anything.',
+    query: 'Which tasks are still open, and which have I completed?',
     verify: (data) => {
       const values = Object.values(data.records);
       assert.ok(values.some((v) => v.title === 'Buy oats' && v.done === true));
       assert.ok(values.some((v) => v.title === 'Call plumber' && v.done === false));
     },
     answer: ['Buy oats', 'Call plumber'],
-    expectedAnswer: {
-      open_count: 1,
-      done_count: 1,
-      open_titles: ['Call plumber'],
-      done_titles: ['Buy oats'],
-    },
   },
   {
     name: 'Reading Shelf',
     purpose:
-      'Build a tiny reading list named Reading Shelf with a fitting emoji. Each book has title, pages (positive integer), and read (boolean). Let me add books, mark a book read, and see my unread books and their total pages. Use normal records and read-only query actions for app chat. Build an accessible small UI, backend and browser tests, and publish automatically. Start with no live books. No integrations, schedules, or SQL. Please propose this app now without further questions.',
+      'Build a tiny reading list named Reading Shelf with a fitting emoji. Each book has title, pages (positive integer), and read (boolean). Let me add books and mark a book read from either the UI or chat. Let me ask about unread books and their total pages without changing anything. Use normal records, write actions for requested changes, and read-only query actions for questions. Build an accessible small UI, backend and browser tests, and publish automatically. Start with no live books. No integrations, schedules, or SQL. Please propose this app now without further questions.',
     use: 'Add The Hobbit with 310 pages and Dune with 412 pages. Mark The Hobbit as read and leave Dune unread. Use the app actions to save these changes.',
-    query:
-      'Read the actual saved books and return JSON with unread_titles and unread_pages. Do not change anything.',
+    query: 'What books do I still have to read, and how many pages is that in total?',
     verify: (data) => {
       const values = Object.values(data.records);
       assert.ok(values.some((v) => v.title === 'The Hobbit' && v.pages === 310 && v.read === true));
       assert.ok(values.some((v) => v.title === 'Dune' && v.pages === 412 && v.read === false));
     },
     answer: ['Dune', '412'],
-    expectedAnswer: { unread_titles: ['Dune'], unread_pages: 412 },
   },
   {
     name: 'Link Finder',
     purpose:
       'Build a tiny searchable bookmark app named Link Finder with a fitting emoji. Save bookmarks with title, url, and notes, and search the notes with SQLite FTS5. Use a bookmarks table with columns id TEXT PRIMARY KEY, title TEXT, url TEXT, notes TEXT; an FTS table can index it. Include an idempotent initialize action, add/list/search actions, and a read-only search action for app chat. Initialize the live schema on release, but do not seed live bookmarks. Simple accessible UI, backend tests and browser tests. Publish automatically. No external requests or schedules. Please propose the app now without further questions.',
     use: 'Save two bookmarks: title SQLite Search, URL https://www.sqlite.org/fts5.html, notes Full text indexes for notes; and title Rhai Guide, URL https://www.rhai.rs/book/, notes Embedded scripting reference. Use the app actions.',
-    query:
-      'Search saved bookmarks for indexes and return JSON with title and url for the match. Do not change anything.',
+    query: 'Find my saved bookmark about indexes and give me the link.',
     sql: 'SELECT title,url,notes FROM bookmarks ORDER BY title',
     expected: [
       {
@@ -147,7 +146,6 @@ const scenarios = [
       },
     ],
     answer: ['SQLite Search', 'https://www.sqlite.org/fts5.html'],
-    expectedAnswer: { title: 'SQLite Search', url: 'https://www.sqlite.org/fts5.html' },
   },
 ];
 try {
@@ -169,6 +167,7 @@ try {
         confirm: true,
       });
       entry.app = approved.app;
+      console.log(`${scenario.name}: ${run.origin}/apps/${entry.app}`);
       conversation = approved.conversation;
       await turn(
         entry,
@@ -264,7 +263,9 @@ try {
   report.finishedAt = new Date().toISOString();
   await save();
   try {
-    await management(`/api/test-runs/${run.id}/stop`, {});
+    if (keepRun)
+      console.log(`Test workspace remains available at ${run.origin} until its six-hour expiry.`);
+    else await management(`/api/test-runs/${run.id}/stop`, {});
   } catch (error) {
     report.cleanupError = String(error);
     await save();

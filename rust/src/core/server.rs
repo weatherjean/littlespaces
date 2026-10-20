@@ -29,6 +29,7 @@ pub struct Server {
     pub secrets: Secrets,
     pub owner: OwnerAuth,
     pub chatgpt: ChatGpt,
+    pub chatgpt_management_origin: Option<String>,
     pub agent: Agent,
     pub origin: String,
     pub directory: PathBuf,
@@ -48,6 +49,7 @@ impl IntoResponse for ApiError {
         }
         let code = match self.0 {
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
+            Error::SharedChatgptConnection => StatusCode::FORBIDDEN,
             Error::RateLimited | Error::LoginThrottled => StatusCode::TOO_MANY_REQUESTS,
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::Saturated => StatusCode::SERVICE_UNAVAILABLE,
@@ -525,6 +527,7 @@ async fn secret_delete(State(s): State<Arc<Server>>, Path(name): Path<String>) -
 }
 async fn chatgpt_status(State(s): State<Arc<Server>>) -> Api<Value> {
     let mut status = s.chatgpt.status().await?;
+    status["managementOrigin"] = json!(s.chatgpt_management_origin);
     status["requiresLocalCallback"] = json!(s.origin.starts_with("https:"));
     status["callbackPort"] = json!(url::Url::parse(&s.host.callback)
         .map_err(|_| Error::Validation)?
@@ -739,6 +742,7 @@ pub async fn serve(
         secrets,
         owner,
         chatgpt,
+        chatgpt_management_origin: None,
         agent,
         origin,
         directory,
@@ -759,6 +763,7 @@ pub async fn serve(
         routes = routes.merge(testing::router(testing::Service::enable(
             server.directory.clone(),
             server.chatgpt.clone(),
+            server.origin.clone(),
         )?));
     }
     let stopping = server.runtime.operations.clone();

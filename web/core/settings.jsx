@@ -104,8 +104,15 @@ export function Settings({
             {connection?.connected && connection.planUsage === false && (
               <p>Reconnect to grant plan access.</p>
             )}
+            {connection?.managementOrigin && (
+              <p>This test workspace shares the main workspace’s ChatGPT connection.</p>
+            )}
           </div>
-          {connection?.connected && connection.planUsage !== false ? (
+          {connection?.managementOrigin ? (
+            <a class="secondary-button" href={`${connection.managementOrigin}/settings`}>
+              Manage in main workspace
+            </a>
+          ) : connection?.connected && connection.planUsage !== false ? (
             <button
               class="secondary-button"
               onClick={() =>

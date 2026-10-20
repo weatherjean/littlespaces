@@ -2,6 +2,8 @@
 
 An app revision contains `backend`, `frontend`, `actions` and `tests`, plus optional `sqlite` (defaults to false). Every action is a Rhai function with one JSON-compatible argument and a JSON-compatible return value. Contracts contain `name`, `read_only`, `input` and `output` JSON schemas. No HTTP permission declarations, dependencies or grants exist.
 
+The UI and app chat use the same declared actions. `read_only` enforces whether an action can write; it is not an interface permission. UI-only or chat-only actions are not supported. Declare both read-only queries for factual questions and write actions for requested changes. Every action called by the UI must be declared. Do not promise interface-specific restrictions when proposing an app.
+
 Use explicit function arguments and local variables. Modules, imports and closures are compiled out; eval, print and debug are disabled. Do not rely on top-level state. Each call has a fresh engine and app-scoped snapshot. There is no filesystem, shell or plaintext-secret API. Opt-in SQL operates only on the current app's isolated database.
 
 | Function                | Behavior                                                  |

@@ -165,6 +165,7 @@ errors! {
     DuplicateInvocation,
     ApprovalRequired,
     Unauthorized,
+    SharedChatgptConnection,
     Model,
     Authentication,
     BrowserUnavailable,

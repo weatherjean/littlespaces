@@ -16,6 +16,7 @@
   "duplicate_invocation": "This operation was already started. Check its existing result instead of submitting it again.",
   "approval_required": "This change needs your approval before it can proceed.",
   "unauthorized": "Sign in to your workspace again. Saved work is kept.",
+  "shared_chatgpt_connection": "This test workspace shares its ChatGPT connection. Manage that connection in the main workspace’s Settings.",
   "model": "ChatGPT returned an unexpected response. Saved work is kept; you can continue from the last checkpoint.",
   "authentication": "Reconnect ChatGPT in Settings, then continue the saved job.",
   "browser_unavailable": "Automated browser verification is unavailable. Review the isolated preview before publishing.",

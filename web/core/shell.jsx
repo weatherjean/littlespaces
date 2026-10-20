@@ -806,7 +806,7 @@ function App() {
                       </span>
                     </span>
                     <span>{a.title}</span>
-                    {!a.revision && <small>In progress</small>}
+                    {!a.revision && <small>Not published yet</small>}
                   </button>
                 ))}
               {!!homeApps.length && (
@@ -919,10 +919,14 @@ function App() {
                   </span>
                 </span>
                 <h1>{appName || 'Your app'}</h1>
-                <p>{detail ? 'Your app is ready to take shape.' : 'Opening your app…'}</p>
+                <p>
+                  {detail
+                    ? 'This app has not been published yet. Open its build conversation to see progress or continue building.'
+                    : 'Opening your app…'}
+                </p>
                 {detail && (
                   <button class="primary-button" onClick={() => attempt(openBuild)}>
-                    Build it in chat
+                    Open build conversation
                     <Icon name="spark" size={17} />
                   </button>
                 )}

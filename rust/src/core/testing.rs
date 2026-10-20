@@ -25,10 +25,15 @@ pub struct Service {
     key: zeroize::Zeroizing<String>,
     directory: PathBuf,
     chatgpt: ChatGpt,
+    management_origin: String,
     runs: tokio::sync::Mutex<BTreeMap<String, Run>>,
 }
 impl Service {
-    pub fn enable(directory: PathBuf, chatgpt: ChatGpt) -> Result<Arc<Self>> {
+    pub fn enable(
+        directory: PathBuf,
+        chatgpt: ChatGpt,
+        management_origin: String,
+    ) -> Result<Arc<Self>> {
         use std::io::Write;
         let key = owner::token();
         let path = directory.join("testing.key");
@@ -51,6 +56,7 @@ impl Service {
             key: zeroize::Zeroizing::new(key),
             directory,
             chatgpt,
+            management_origin,
             runs: Default::default(),
         }))
     }
@@ -73,6 +79,7 @@ pub fn router(service: Arc<Service>) -> Router {
         .route("/api/test-runs/:id/report", get(report))
         .with_state(service)
 }
+
 async fn create(
     State(s): State<Arc<Service>>,
     headers: HeaderMap,
@@ -120,6 +127,7 @@ async fn create(
         secrets,
         owner,
         chatgpt: s.chatgpt.clone(),
+        chatgpt_management_origin: Some(s.management_origin.clone()),
         agent: agent.clone(),
         origin: origin.clone(),
         directory,
@@ -135,7 +143,9 @@ async fn create(
             ]
             .contains(&request.uri().path())
             {
-                return axum::response::IntoResponse::into_response(ApiError(Error::Unauthorized));
+                return axum::response::IntoResponse::into_response(ApiError(
+                    Error::SharedChatgptConnection,
+                ));
             }
             next.run(request).await
         },
@@ -222,4 +232,81 @@ async fn report(
         Ok(json!({"run":id,"jobs":jobs,"calls":calls,"requests":requests,"diagnostics":diagnostics,"browserChecks":browser,"apps":apps,"checkpoints":checkpoints,"limits":{"jobs":100,"calls":1000,"requestEvents":4096,"diagnostics":200},"omits":["authentication","encrypted reasoning","request headers","full draft tool arguments"]}))
     }).await?;
     Ok(Json(runtime.redact_public(value).await?))
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shared_connection_is_identified_and_cannot_be_changed_by_test_client() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::create(&directory.path().join("workspace.sqlite")).unwrap();
+        let secrets = Secrets::open(store.clone(), &directory.path().join("secrets.key")).unwrap();
+        let chatgpt = ChatGpt::new(store, secrets).unwrap();
+        let service = Service::enable(
+            directory.path().to_path_buf(),
+            chatgpt,
+            "http://127.0.0.1:5175".into(),
+        )
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            format!("Bearer {}", service.key.as_str()).parse().unwrap(),
+        );
+        let Json(run) = create(
+            State(service.clone()),
+            headers.clone(),
+            Json(json!({"allowRealModel":true})),
+        )
+        .await
+        .unwrap();
+        let origin = run["origin"].as_str().unwrap();
+        let client = reqwest::Client::new();
+        let cookie = format!("little_session={}", run["cookie"].as_str().unwrap());
+        let status: Value = client
+            .get(format!("{origin}/api/chatgpt"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["managementOrigin"], "http://127.0.0.1:5175");
+        for route in ["/api/chatgpt/start", "/api/chatgpt/disconnect"] {
+            let response = client
+                .post(format!("{origin}{route}"))
+                .header("cookie", &cookie)
+                .header("origin", origin)
+                .header("x-csrf-token", run["csrf"].as_str().unwrap())
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+            assert_eq!(
+                response.json::<Value>().await.unwrap()["error"],
+                "shared_chatgpt_connection"
+            );
+        }
+        // A rejected connection change must not invalidate the owner's session.
+        assert!(client
+            .get(format!("{origin}/api/apps"))
+            .header("cookie", cookie)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+        let Json(stopped) = stop(
+            State(service),
+            headers,
+            Path(run["id"].as_str().unwrap().to_owned()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped["stopped"], true);
+    }
 }
