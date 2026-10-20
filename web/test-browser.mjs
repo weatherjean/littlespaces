@@ -849,6 +849,23 @@ checks: try {
   await testPwa({ context, origin, api });
   await testMobileReview({ context, origin, app: app.app, api, snapshots });
   await testHistoryAndStorage({ context, origin, api, workspace, snapshots });
+  const sharedSettings = await context.newPage();
+  for (const connected of [true, false]) {
+    await sharedSettings.unroute('**/api/chatgpt');
+    await sharedSettings.route('**/api/chatgpt', (route) =>
+      route.fulfill({ json: { connected, planUsage: true, managementOrigin: origin } }),
+    );
+    await sharedSettings.goto(`${origin}/settings`);
+    const manage = sharedSettings.getByRole('link', { name: 'Manage in main workspace' });
+    await manage.waitFor();
+    assert.equal(await manage.getAttribute('href'), `${origin}/settings`);
+    assert.equal(await sharedSettings.getByRole('button', { name: 'Disconnect' }).count(), 0);
+    assert.equal(
+      await sharedSettings.getByRole('button', { name: 'Continue with ChatGPT' }).count(),
+      0,
+    );
+  }
+  await sharedSettings.close();
   assert.deepEqual(errors, []);
   console.log(
     'Rust agent fixture, failure/fix, browser-tested and owner-reviewed publication, real UI/chat invocation and record-preserving updates passed. No real-model milestone claimed.',
