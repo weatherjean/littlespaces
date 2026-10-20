@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 // Optional browser verifier service. Never bundled into the Rust executable.
 import http from 'node:http';
 import { chromium, expect } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 export async function startHarness({
   token,
@@ -11,7 +11,7 @@ export async function startHarness({
   artifacts = fileURLToPath(new URL('../build-rust/screenshots/', import.meta.url)),
 }) {
   if (!token || token.length < 32) throw Error('A private harness token is required');
-  await mkdir(artifacts, { recursive: true });
+  await mkdir(artifacts, { recursive: true, mode: 0o700 });
   const browser = await chromium.launch({
     headless: true,
     chromiumSandbox: process.env.LITTLESPACES_BROWSER_SANDBOX === '1',
@@ -113,7 +113,11 @@ export async function startHarness({
       failedStep = null;
       errors.push(...(await page.evaluate(() => window.errors || [])));
       const screenshot = `browser-${randomUUID()}.png`;
-      await page.screenshot({ path: `${artifacts}/${screenshot}`, fullPage: true });
+      // App content can be private even when the developer's umask is permissive.
+      await writeFile(`${artifacts}/${screenshot}`, await page.screenshot({ fullPage: true }), {
+        mode: 0o600,
+        flag: 'wx',
+      });
       const snapshot = (await frame.locator('body').innerText()).slice(0, 8192);
       res.setHeader('content-type', 'application/json');
       responseBody = JSON.stringify({

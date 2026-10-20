@@ -1,12 +1,14 @@
-// Standalone synthetic network-boundary regression; only ephemeral loopback servers.
+// Standalone synthetic verifier regressions; only ephemeral loopback servers and artifacts.
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat, chmod } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { startHarness } from './browser-harness.mjs';
 
-const artifacts = await mkdtemp(path.join(os.tmpdir(), 'littlespaces-verifier-'));
+const temporary = await mkdtemp(path.join(os.tmpdir(), 'littlespaces-verifier-'));
+const artifacts = path.join(temporary, 'screenshots');
+const previousUmask = process.umask(0o022);
 const token = 'synthetic-verifier-token-for-network-tests';
 let externalRequests = 0;
 const external = http.createServer((_req, res) => {
@@ -49,6 +51,9 @@ let harness;
 try {
   const origin = await listen(source);
   harness = await startHarness({ token, artifacts });
+  const directoryMode = (await stat(artifacts)).mode & 0o777;
+  // Existing directories may predate private creation; each new file must still be private.
+  await chmod(artifacts, 0o755);
   for (const mode of ['ordinary', 'direct', 'redirect', 'websocket']) {
     const result = await fetch(harness.url, {
       method: 'POST',
@@ -63,14 +68,23 @@ try {
       return JSON.parse(body);
     });
     assert.equal(result.passed, true, `${mode}: ${JSON.stringify(result)}`);
+    assert.equal(
+      (await stat(path.join(artifacts, result.screenshot))).mode & 0o777,
+      0o600,
+      'screenshot must be owner-only even in an existing readable directory',
+    );
+    assert.equal(directoryMode, 0o700, 'new artifact directory must be owner-only');
     assert.equal(externalRequests, 0, `${mode} escaped the verifier origin`);
   }
-  console.log('Verifier network boundary passed: normal request, direct, redirect, WebSocket');
+  console.log(
+    'Verifier checks passed: private screenshots, normal request, direct, redirect, WebSocket',
+  );
 } finally {
   await harness?.close();
   for (const server of [source, external]) {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
-  await rm(artifacts, { recursive: true, force: true });
+  process.umask(previousUmask);
+  await rm(temporary, { recursive: true, force: true });
 }
