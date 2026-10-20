@@ -36,9 +36,9 @@ Each action has a 60-second deadline (configurable with `LITTLESPACES_ACTION_TIM
 
 Workspace secrets are capped at 128 names with values up to 16,000 bytes. Authoring tools have a separate bounded admission pool and run database work off the async executor.
 
-Rhai cannot interrupt a blocking Rust callback. Database busy waits can outlast the script deadline (250 ms each), and compilation/native JSON conversion/allocation are not preemptible. Cancellation/deadline checks still discard local changes afterward. The regression suite measures this with a test-only native pause and separately tests a real stalled HTTP response body. The pause binding is absent from production.
+Rhai itself cannot interrupt a blocking Rust callback. Production evaluators run in disposable workers with parent-enforced cancellation and deadlines. Host database operations wait up to five seconds for lock admission; cancellation/deadline checks still prevent late local commits. The regression suite exercises native callbacks, stalled HTTP responses, database contention and worker termination. Synthetic native probes are absent from release builds.
 
-These limits and bounded admission are **not a hard per-action memory ceiling**. Rhai/native allocations, JSON conversion and snapshots share process memory. Adversarial peak-memory measurements and an explicit release containment decision remain required; this core is not release-ready. There is no QuickJS fallback.
+Workers have a 128 MiB Rust heap budget, a separate 64 MiB SQLite heap ceiling and a 305-second CPU ceiling. Linux additionally enforces 512 MiB of address space; macOS does not claim that address-space limit. Parent-side copies and IPC still consume host memory, so deployments also need a service memory limit. See [execution isolation](../../CONTRIBUTING.md#durability-execution-isolation-and-maintenance) for the supported boundary and executable tests. There is no QuickJS fallback.
 
 ## External-effect evidence
 

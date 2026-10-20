@@ -1643,8 +1643,8 @@ mod recovery_tests {
             .unwrap();
         let worker =
             tokio::spawn(async move { agent.finish_job("finished", "completed", None).await });
-        // Exceed the connection's 250 ms busy timeout: the old code lost this write.
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        // Exceed lock admission's deadline to exercise durable finalization retry.
+        tokio::time::sleep(super::store::BUSY_TIMEOUT + Duration::from_millis(350)).await;
         assert!(!worker.is_finished());
         tx.commit().unwrap();
         tokio::time::timeout(Duration::from_secs(2), worker)
@@ -1771,6 +1771,38 @@ mod recovery_tests {
 #[cfg(test)]
 mod checkpoint_tests {
     use super::*;
+    #[tokio::test]
+    async fn job_poll_waits_for_a_temporary_exclusive_database_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = secrets::Secrets::open(store.clone(), &dir.path().join("key")).unwrap();
+        let agent = Agent::new(
+            Runtime::new(store.clone(), secrets.clone(), 1).unwrap(),
+            ChatGpt::new(store.clone(), secrets).unwrap(),
+            String::new(),
+        );
+        let mut db = store.open().unwrap();
+        db.execute(
+            "INSERT INTO jobs VALUES('poll',NULL,NULL,'running','{}')",
+            [],
+        )
+        .unwrap();
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)
+            .unwrap();
+        tx.execute("UPDATE jobs SET state='completed' WHERE id='poll'", [])
+            .unwrap();
+        let poll = tokio::spawn(async move { agent.job("poll".into()).await });
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        tx.commit().unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), poll)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["state"], "completed");
+    }
+
     #[tokio::test]
     async fn disconnect_during_admission_does_not_strand_a_queued_job() {
         let dir = tempfile::tempdir().unwrap();

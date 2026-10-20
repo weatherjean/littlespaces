@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 pub type Records = BTreeMap<String, Value>;
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct Store {
     path: PathBuf,
@@ -65,7 +66,10 @@ impl Store {
     }
     pub(crate) fn open(&self) -> Result<Connection> {
         let db = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        db.busy_timeout(Duration::from_millis(250))?;
+        // Rollback-journal commits briefly exclude readers as well as writers.
+        // Slow disks must not turn ordinary job polling into a storage error.
+        // SQLite waits for lock admission; this does not replay a transaction.
+        db.busy_timeout(BUSY_TIMEOUT)?;
         db.pragma_update(None, "foreign_keys", true)?;
         Ok(db)
     }

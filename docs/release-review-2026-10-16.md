@@ -113,7 +113,9 @@ The full clean-checkout browser suite on `5058b7a` exposed a verifier shutdown r
 
 Fresh local checks on the preceding candidate passed 75 Rust unit tests, seven executable integration tests, Clippy, formatting, 15 packaging regressions, the isolated Traefik smoke, and an optimized package's production/recovery smoke. Current npm and Cargo audits found no known vulnerabilities; the two previously documented unmaintained-crate warnings remain. Redacted history and clean-source scans found only the documented synthetic OIDC fixture key. Local Markdown file links and branding archive path inventories passed their bounded checks.
 
-Final browser and hosted architecture evidence must refer to the revision containing this shutdown fix. The preceding candidate's package and CI results do not qualify its successor. Repository visibility and enabling GitHub private vulnerability reporting remain coordinated public-launch actions.
+Hosted ARM64 browser runs on `10929ad` then exposed job-poll storage errors during app updates. A focused regression reproduces the same failure by holding an exclusive database lock for 600 ms: the former 250 ms connection timeout returns `Storage`. Connections now wait up to five seconds for SQLite lock admission, without replaying transactions or application writes. The terminal-finalization regression still holds a writer beyond the configured deadline to exercise its durable retry path. The SDK's outdated in-process containment paragraph was also aligned with the already-implemented disposable worker limits.
+
+Final browser and hosted architecture evidence must refer to the revision containing these fixes. A preceding candidate's package and CI results do not qualify its successor. Repository visibility and enabling GitHub private vulnerability reporting remain coordinated public-launch actions.
 
 ## Remaining actions
 
