@@ -172,12 +172,14 @@ export async function testReleases({ api, context, origin, workspace, snapshots 
       (await api('/api/apps')).some((a) => a.id === childApp.app),
       false,
     );
-    assert.equal(
-      (
-        await context.request.post(`${run.origin}/api/chatgpt/disconnect`, { headers, data: {} })
-      ).status(),
-      401,
-    );
+    assert.equal((await child('/api/chatgpt')).managementOrigin, origin);
+    const disconnect = await context.request.post(`${run.origin}/api/chatgpt/disconnect`, {
+      headers,
+      data: {},
+    });
+    assert.equal(disconnect.status(), 403);
+    assert.equal((await disconnect.json()).error, 'shared_chatgpt_connection');
+    assert.ok((await child('/api/apps')).some((a) => a.id === childApp.app));
   } finally {
     await context.request.post(`${origin}/api/test-runs/${run.id}/stop`, {
       headers: { authorization: `Bearer ${key}` },
