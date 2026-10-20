@@ -83,8 +83,6 @@ export function Settings({
         </button>
       </header>
       <div class="settings-content">
-        <PushSettings api={api} />
-        <StorageSettings api={api} />
         <section class="setting-card chatgpt-card">
           <span class="setting-icon">
             <Icon name="spark" size={24} />
@@ -129,6 +127,8 @@ export function Settings({
             </button>
           )}
         </section>
+        <PushSettings api={api} />
+        <StorageSettings api={api} />
         <section class="setting-card">
           <span class="setting-icon">
             <Icon name="code" size={24} />
