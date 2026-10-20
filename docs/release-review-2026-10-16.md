@@ -107,6 +107,14 @@ The focused verifier regression passes with umask 022: it checks new-directory p
 
 A fresh read-only GitHub query still lists failed run [38878312333](https://github.com/weatherjean/appsappsapps/actions/runs/38878312333) for `09a6a4e` as the latest branch run. No exact-candidate hosted evidence was returned. Repository settings were not queried again. Rust unit/integration tests, Clippy, audits, Gitleaks, proxy smoke, target-specific notice generation, a complete optimized package rebuild and packaged-executable production smoke were not rerun in this pass; prior results remain historical. Existing packages, screenshots, workspaces and credentials were preserved. No real model requests, push, merge, tag, publication or repository-setting changes were performed. Formal packages still need regeneration from the eventual clean tagged candidate with the current verifier and target-specific inventory review.
 
+## Release qualification on 2026-10-20
+
+The full clean-checkout browser suite on `5058b7a` exposed a verifier shutdown race: `APIResponse.dispose()` could reject after its browser context closed, escaping the route callback and terminating Node. Response disposal now tolerates an already-closed context, and context teardown first unregisters routes with Playwright's `ignoreErrors` behavior. The focused regression adds twelve verification cycles with concurrent background HTTP requests, followed by an ordinary verification to check continued availability. It passes alongside the existing privacy, origin, redirect and WebSocket checks. This is a verifier lifecycle fix; it does not change app data or the workspace format.
+
+Fresh local checks on the preceding candidate passed 75 Rust unit tests, seven executable integration tests, Clippy, formatting, 15 packaging regressions, the isolated Traefik smoke, and an optimized package's production/recovery smoke. Current npm and Cargo audits found no known vulnerabilities; the two previously documented unmaintained-crate warnings remain. Redacted history and clean-source scans found only the documented synthetic OIDC fixture key. Local Markdown file links and branding archive path inventories passed their bounded checks.
+
+Final browser and hosted architecture evidence must refer to the revision containing this shutdown fix. The preceding candidate's package and CI results do not qualify its successor. Repository visibility and enabling GitHub private vulnerability reporting remain coordinated public-launch actions.
+
 ## Remaining actions
 
 1. Observe the exact candidate's GitHub AMD64/ARM64, quality, and deployment-check jobs. Remote results must be recorded separately from the local evidence above.

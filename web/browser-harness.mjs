@@ -83,7 +83,8 @@ export async function startHarness({
         } catch {
           await route.abort().catch(() => {});
         } finally {
-          await response?.dispose();
+          // Context shutdown can dispose the response before this callback does.
+          await response?.dispose().catch(() => {});
         }
       });
       await page.goto(url);
@@ -148,6 +149,7 @@ export async function startHarness({
           .catch(() => '<unavailable>'),
       });
     } finally {
+      await context?.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
       await context?.close().catch(() => {});
       active = false;
     }

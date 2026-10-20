@@ -11,6 +11,7 @@ const artifacts = path.join(temporary, 'screenshots');
 const previousUmask = process.umask(0o022);
 const token = 'synthetic-verifier-token-for-network-tests';
 let externalRequests = 0;
+let backgroundRequests = 0;
 const external = http.createServer((_req, res) => {
   externalRequests++;
   res.setHeader('access-control-allow-origin', '*');
@@ -29,6 +30,14 @@ const listen = async (server) => {
 };
 const outside = await listen(external);
 const source = http.createServer((req, res) => {
+  if (req.url.startsWith('/background')) {
+    backgroundRequests++;
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.write('started');
+    const timer = setTimeout(() => res.end('finished'), 100);
+    res.on('close', () => clearTimeout(timer));
+    return;
+  }
   if (req.url === '/redirect') {
     res.writeHead(302, { location: outside }).end();
     return;
@@ -39,6 +48,10 @@ const source = http.createServer((req, res) => {
     redirect: `fetch('/redirect').catch(() => {})`,
     websocket: `new Promise(resolve => { const ws = new WebSocket('${outside.replace('http:', 'ws:')}'); ws.onerror = ws.onclose = resolve; })`,
     ordinary: `fetch('/allowed').then(r => r.text()).then(text => { if (text !== 'allowed') throw Error(text); })`,
+    teardown: `Promise.all(Array.from({length: 24}, (_, i) => {
+      fetch('/background?request=' + i).catch(() => {});
+      return new Promise(resolve => setTimeout(resolve, 30));
+    }))`,
   }[mode];
   if (req.url === '/allowed') return res.end('allowed');
   res.setHeader('content-type', 'text/html');
@@ -54,7 +67,14 @@ try {
   const directoryMode = (await stat(artifacts)).mode & 0o777;
   // Existing directories may predate private creation; each new file must still be private.
   await chmod(artifacts, 0o755);
-  for (const mode of ['ordinary', 'direct', 'redirect', 'websocket']) {
+  for (const mode of [
+    'ordinary',
+    'direct',
+    'redirect',
+    'websocket',
+    ...Array(12).fill('teardown'),
+    'ordinary',
+  ]) {
     const result = await fetch(harness.url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -76,8 +96,9 @@ try {
     assert.equal(directoryMode, 0o700, 'new artifact directory must be owner-only');
     assert.equal(externalRequests, 0, `${mode} escaped the verifier origin`);
   }
+  assert.ok(backgroundRequests > 0, 'teardown exercised in-flight HTTP requests');
   console.log(
-    'Verifier checks passed: private screenshots, normal request, direct, redirect, WebSocket',
+    'Verifier checks passed: private screenshots, normal request, direct, redirect, WebSocket, in-flight teardown',
   );
 } finally {
   await harness?.close();
