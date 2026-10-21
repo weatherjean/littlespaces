@@ -84,13 +84,7 @@ pub(super) async fn update_guest(
         .blocking(move |store| {
             let mut db = store.open()?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute("DELETE FROM guest_apps WHERE guest=?", [&id])?;
-            for app in apps {
-                tx.execute(
-                    "INSERT OR IGNORE INTO guest_apps VALUES(?,?)",
-                    params![id, app],
-                )?;
-            }
+            super::super::owner::replace_guest_apps(&tx, &id, &apps)?;
             tx.commit()?;
             Ok(())
         })

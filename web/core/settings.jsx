@@ -84,7 +84,7 @@ export function Settings({
         </button>
       </header>
       <div class="settings-content">
-        <SharingSettings api={api} apps={apps} onLogout={onLogout} />
+        <SharingSettings api={api} apps={apps} />
         <section class="setting-card chatgpt-card">
           <span class="setting-icon">
             <Icon name="spark" size={24} />

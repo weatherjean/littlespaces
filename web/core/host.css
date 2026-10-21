@@ -136,3 +136,29 @@
     flex: 1;
   }
 }
+
+.guest-notice {
+  margin: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.guest-notice p {
+  margin: 0 0 10px;
+}
+.guest-apps {
+  margin-top: 18px;
+}
+.sharing-settings h4,
+.guest-confirmation p {
+  overflow-wrap: anywhere;
+}
+.guest-confirmation {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.guest-shell > .settings-page {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}

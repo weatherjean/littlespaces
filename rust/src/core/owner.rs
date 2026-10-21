@@ -179,6 +179,38 @@ db.execute("INSERT INTO owner_sessions VALUES(?,?,?)",params![hash_token(&sessio
     }
 }
 
+pub(crate) fn replace_guest_apps(
+    tx: &rusqlite::Transaction<'_>,
+    guest: &str,
+    apps: &[String],
+) -> Result<()> {
+    if !tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM guests WHERE id=?)",
+        [guest],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Err(Error::NotFound);
+    }
+    if apps.len() > 1000 {
+        return Err(Error::Validation);
+    }
+    for app in apps {
+        if !tx.query_row("SELECT EXISTS(SELECT 1 FROM apps WHERE id=?)", [app], |r| {
+            r.get::<_, bool>(0)
+        })? {
+            return Err(Error::Validation);
+        }
+    }
+    tx.execute("DELETE FROM guest_apps WHERE guest=?", [guest])?;
+    for app in apps {
+        tx.execute(
+            "INSERT OR IGNORE INTO guest_apps VALUES(?,?)",
+            params![guest, app],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn normalize_email(email: &str) -> Result<String> {
     let email = email.trim().to_lowercase();
     if email.len() > 254
@@ -227,7 +259,7 @@ impl OwnerAuth {
             let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             if tx.query_row("SELECT EXISTS(SELECT 1 FROM owner_profile WHERE email=?1 UNION ALL SELECT 1 FROM guests WHERE email=?1)",[&email],|r|r.get::<_,bool>(0))? { return Err(Error::Conflict); }
             tx.execute("INSERT INTO guests VALUES(?,?,?)",params![id,email,encoded])?;
-            for app in apps { tx.execute("INSERT OR IGNORE INTO guest_apps VALUES(?,?)",params![id,app])?; }
+            replace_guest_apps(&tx, &id, &apps)?;
             tx.commit()?;
             Ok(serde_json::json!({"id":id,"email":email,"password":password}))
         }).await.map_err(|_|Error::Authentication)?
@@ -300,6 +332,51 @@ impl OwnerAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn invalid_grants_preserve_access_and_do_not_leave_partial_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let owner = OwnerAuth::new(store.clone());
+        let app = store.create_app("Shared").unwrap();
+        assert!(matches!(
+            owner
+                .create_guest(
+                    "new@example.test".into(),
+                    vec![app.0.clone(), "missing".into()]
+                )
+                .await,
+            Err(Error::Validation)
+        ));
+        let mut db = store.open().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM guests", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let guest = owner
+            .create_guest("new@example.test".into(), vec![app.0.clone()])
+            .await
+            .unwrap();
+        let id = guest["id"].as_str().unwrap();
+        let tx = db.transaction().unwrap();
+        assert_eq!(
+            replace_guest_apps(&tx, id, &["missing".into()]),
+            Err(Error::Validation)
+        );
+        assert_eq!(
+            replace_guest_apps(&tx, "missing", &[]),
+            Err(Error::NotFound)
+        );
+        tx.commit().unwrap();
+        assert_eq!(
+            db.query_row("SELECT app FROM guest_apps WHERE guest=?", [id], |r| r
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+            app.0
+        );
+    }
     #[tokio::test]
     async fn email_accounts_keep_owner_and_guest_sessions_separate() {
         let dir = tempfile::tempdir().unwrap();

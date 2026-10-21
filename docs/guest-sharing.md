@@ -32,4 +32,20 @@ cargo build --manifest-path rust/Cargo.toml --locked --features development-fixt
 LITTLESPACES_BROWSER_SUITE=sharing node web/test-browser.mjs
 ```
 
-The browser suite uses synthetic data in a temporary workspace. It covers guest creation, email sign-in, shared writes, direct owner API rejection, CSRF, password change/session revocation, access removal, archiving, guest deletion and mobile layout. No real model connection is used.
+The browser suite uses synthetic data in a temporary workspace. It exercises real owner setup, existing-owner email registration, guest creation, duplicate emails, access editing, cancelled/confirmed removals, email sign-in, shared writes and images, direct owner/private-app API rejection, CSRF, separate invocation IDs, password changes and session revocation, access removal while an applet is open, archiving, and guest deletion. It also tests Back/Forward/reload, failed requests and retries, password mismatch/wrong-current-password recovery, and republishing while a guest has unsaved input. Settings and account screenshots are checked at 320, 390, 768 and 1280 pixels. No real model connection is used.
+
+To repeat those account/sharing checks in WebKit (install the Playwright WebKit browser first):
+
+```sh
+LITTLESPACES_BROWSER_SUITE=sharing LITTLESPACES_BROWSER_ENGINE=webkit node web/test-browser.mjs
+```
+
+The suite runs with the actual service worker, sandboxed applet iframe and host API. Sharing screenshots are stored separately under `build-rust/screenshots/chromium` and `build-rust/screenshots/webkit`. The regular CI workflow also runs the Chromium sharing suite.
+
+## Hardening review — 2026-10-21
+
+The review fixed missing browser history support, misleading empty states after failed reads, stale applet access, missing update notices, repeated form submissions, unclear account errors, accidental guest removal, and invalid access updates. Guest lists refresh on returning to the browser and every 30 seconds while visible. Access changes still take effect immediately at the server on subsequent requests. Applet updates require an explicit reload so unsaved input is not discarded silently.
+
+The WebKit checks exposed a Settings failure when querying the native push service before notification permission was granted. Settings now only checks an existing push subscription after permission is granted; requesting permission remains a user action. The browser regression asserts that opening Settings does not query push subscriptions without permission.
+
+Verified locally: Chromium and WebKit account/sharing flows, the existing Chromium owner/PWA/release/image/recovery suite, Rust tests (80 unit tests and 7 integration tests), lint and formatting. These are automated desktop-engine tests with responsive viewports, not physical iPhone/Android qualification. Remote HTTPS/proxy configuration, actual notification delivery, real integrations, Firefox and long-running multi-device use still need deployment/device testing. The supported claim is a thoroughly tested local sharing experiment, not a guarantee of flawlessness.

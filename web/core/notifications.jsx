@@ -100,7 +100,9 @@ export function PushSettings({ api }) {
   };
   useEffect(() => {
     let active = true;
-    if (supported)
+    // No subscription can be usable before permission is granted. Avoid
+    // probing the native push service while simply opening Settings.
+    if (supported && Notification.permission === 'granted')
       (async () => {
         const sub = await (await registration()).pushManager.getSubscription();
         if (!sub) return;

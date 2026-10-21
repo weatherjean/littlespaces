@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { testSharing } from './test-sharing.mjs';
+import { testSharing, testOwnerAccount } from './test-sharing.mjs';
 import { testHistoryAndStorage } from './test-history.mjs';
 // Focused development fixture: actual streamed Rust agent/tools/backend/Preact/browser path.
 // This does not establish real-model generation or real ChatGPT sign-in.
@@ -9,7 +9,7 @@ import { testPwa } from './test-pwa.mjs';
 import { testImages } from './test-images.mjs';
 import { testReleases } from './test-releases.mjs';
 import { testChatLifecycle } from './test-chat.mjs';
-import { chromium } from '@playwright/test';
+import { chromium, webkit } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -341,8 +341,14 @@ checks: try {
     });
   });
   const { origin, setup } = address;
-  browser = await chromium.launch({ headless: true });
-  const snapshots = path.join(root, 'build-rust/screenshots');
+  browser = await (process.env.LITTLESPACES_BROWSER_ENGINE === 'webkit' ? webkit : chromium).launch(
+    { headless: true },
+  );
+  const snapshots = path.join(
+    root,
+    'build-rust/screenshots',
+    process.env.LITTLESPACES_BROWSER_ENGINE || 'chromium',
+  );
   await mkdir(snapshots, { recursive: true });
   const signedOut = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const authPage = await signedOut.newPage();
@@ -385,7 +391,9 @@ checks: try {
   await authPage.getByRole('button', { name: 'Create account', exact: true }).click();
   await authPage.getByRole('alert').filter({ hasText: 'do not match' }).waitFor();
   await authPage.screenshot({ path: path.join(snapshots, 'review-registration-error-390.png') });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+  });
   let csrf = '';
   async function api(route, body) {
     const response = await context.request.fetch(`${origin}${route}`, {
@@ -398,11 +406,17 @@ checks: try {
     return value;
   }
   assert.equal((await context.request.get(`${origin}/api/apps`)).status(), 401);
-  await api('/api/setup', {
-    token: setup,
-    email: 'owner@example.test',
-    password: 'synthetic owner password',
-  });
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'sharing') {
+    await authPage.getByLabel('Confirm password', { exact: true }).fill('synthetic owner password');
+    await authPage.getByRole('button', { name: 'Create account', exact: true }).click();
+    await authPage.getByRole('heading', { name: 'Made for your everyday.', exact: true }).waitFor();
+  } else {
+    await api('/api/setup', {
+      token: setup,
+      email: 'owner@example.test',
+      password: 'synthetic owner password',
+    });
+  }
   csrf = (
     await api('/api/login', { email: 'owner@example.test', password: 'synthetic owner password' })
   ).csrf;
@@ -426,6 +440,22 @@ checks: try {
   }
   if (process.env.LITTLESPACES_BROWSER_SUITE === 'pwa') {
     await testPwa({ context, origin, api });
+    break checks;
+  }
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'sharing') {
+    const app = await api('/api/apps', { title: 'Task app' });
+    await api(`/api/authoring/${app.conversation}`, {
+      tool: 'edit_draft',
+      expected_version: 1,
+      code,
+    });
+    assert.ok(
+      (await api(`/api/authoring/${app.conversation}`, { tool: 'release', expected_version: 2 }))
+        .published,
+    );
+    await signedOut.close();
+    await testSharing({ browser, context, origin, api, app: app.app, snapshots });
+    await testOwnerAccount({ browser, context, origin, workspace });
     break checks;
   }
   await authPage.reload();
@@ -540,10 +570,6 @@ checks: try {
   assert.ok((await api(`/api/apps/${app.app}`)).revision);
   assert.equal((await api('/api/apps')).find((a) => a.id === app.app).emoji, '✅');
   console.log('Fixture author/test/browser/publish passed');
-  if (process.env.LITTLESPACES_BROWSER_SUITE === 'sharing') {
-    await testSharing({ browser, context, origin, api, app: app.app, snapshots });
-    break checks;
-  }
   const detail = await api(`/api/apps/${app.app}`);
   assert.ok(detail.revision);
   assert.deepEqual(detail.records, {});
@@ -885,7 +911,11 @@ checks: try {
 } catch (error) {
   // This driver owns only synthetic accounts. Preserve useful failure evidence
   // before disposing of its browser and temporary workspace.
-  const snapshots = path.join(root, 'build-rust/screenshots');
+  const snapshots = path.join(
+    root,
+    'build-rust/screenshots',
+    process.env.LITTLESPACES_BROWSER_ENGINE || 'chromium',
+  );
   await mkdir(snapshots, { recursive: true });
   for (const [index, page] of (browser?.contexts().flatMap((c) => c.pages()) || []).entries()) {
     try {

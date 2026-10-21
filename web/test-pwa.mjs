@@ -146,6 +146,8 @@ export async function testPwa({ context, origin, api }) {
       current = makeSub(Array.from(applicationServerKey), 'https://fcm.googleapis.com/new-fixture');
       return current;
     };
+    // An existing usable subscription requires previously granted permission.
+    Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'granted' });
     Notification.requestPermission = async () => 'granted';
   });
   await settings.goto(`${origin}/settings`);
