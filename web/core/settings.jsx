@@ -1,3 +1,4 @@
+import { SharingSettings } from './sharing.jsx';
 import { StorageSettings } from './storage.jsx';
 import { h, Fragment } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
@@ -83,6 +84,7 @@ export function Settings({
         </button>
       </header>
       <div class="settings-content">
+        <SharingSettings api={api} apps={apps} onLogout={onLogout} />
         <section class="setting-card chatgpt-card">
           <span class="setting-icon">
             <Icon name="spark" size={24} />

@@ -52,3 +52,87 @@
     min-height: 48px;
   }
 }
+
+.sharing-settings {
+  display: block;
+}
+.sharing-settings form,
+.sharing-settings [role='status'] {
+  margin-top: 1.5rem;
+}
+.sharing-settings fieldset {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 12px;
+}
+.share-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+}
+.share-choice input {
+  width: auto;
+}
+.guest-apps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.guest-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.guest-shell > .mounted-app {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.guest-shell > .launcher {
+  overflow: auto;
+}
+
+.form-fields .share-choice {
+  display: flex;
+}
+.form-fields .share-choice input {
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  flex: none;
+}
+.sharing-settings form,
+.password-form {
+  display: grid;
+  gap: 14px;
+}
+.sharing-settings > form + form {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+.guest-shell > .builtin-header {
+  padding: 12px 16px;
+  gap: 10px;
+}
+.guest-shell > .builtin-header .back-link {
+  margin: 0;
+  width: auto;
+}
+.guest-shell > .builtin-header h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 450px) {
+  .guest-shell > .builtin-header {
+    flex-wrap: wrap;
+  }
+  .guest-shell > .builtin-header h1 {
+    flex-basis: calc(100% - 70px);
+  }
+  .guest-shell > .builtin-header .secondary-button {
+    flex: 1;
+  }
+}

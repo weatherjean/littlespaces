@@ -9,6 +9,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { BrandMark, Icon, appEmoji, ConnectionNotice } from './ui.jsx';
 import { ChatPanel, Modal, useChatViewport } from './chat.jsx';
 import { Notifications } from './notifications.jsx';
+import { GuestDashboard, OwnerEmail } from './sharing.jsx';
 import { Settings } from './settings.jsx';
 import { explain, ApiError } from './errors.js';
 let csrf = '';
@@ -240,10 +241,10 @@ function App() {
     return () => window.removeEventListener('popstate', pop);
   }, []);
   useEffect(() => {
-    if (session?.authenticated) attempt(refresh);
+    if (session?.authenticated && !session.guest) attempt(refresh);
   }, [session]);
   useEffect(() => {
-    if (!session?.authenticated || !selected) {
+    if (!session?.authenticated || session.guest || !selected) {
       setDetail(null);
       return;
     }
@@ -264,7 +265,7 @@ function App() {
   useChatSync({
     api,
     conversation,
-    session,
+    session: session?.guest ? null : session,
     job,
     reconnectEpoch,
     chatEpoch,
@@ -285,7 +286,7 @@ function App() {
     historyPages,
   });
   useEffect(() => {
-    if (view === 'settings' && session?.authenticated)
+    if (view === 'settings' && session?.authenticated && !session.guest)
       attempt(async () => {
         setSecretNames(await api('/api/secrets'));
         setScheduleList(await api('/api/schedules'));
@@ -564,22 +565,37 @@ function App() {
               onSubmit={(e) => {
                 e.preventDefault();
                 const data = new FormData(e.currentTarget),
-                  password = data.get('password');
+                  password = data.get('password'),
+                  email = data.get('email') || undefined;
                 if (authBusy) return;
                 setAuthBusy(true);
                 attempt(async () => {
                   if (registering) {
                     if (password !== data.get('confirmation'))
                       throw Error('Your passwords do not match.');
-                    await api('/api/setup', { token: setupToken, password });
+                    await api('/api/setup', { token: setupToken, email, password });
                     setSetupToken('');
                   }
-                  const value = await api('/api/login', { password });
+                  const value = await api('/api/login', { email, password });
                   csrf = value.csrf;
-                  setSession({ configured: true, authenticated: true });
+                  setSession({ configured: true, ...value });
                 }).finally(() => setAuthBusy(false));
               }}
             >
+              <label for="email">Email</label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="username"
+                required={registering}
+              />
+              {!registering && (
+                <p class="field-note">
+                  Existing owners without an email can leave this blank once to add one after
+                  sign-in.
+                </p>
+              )}
               <label for="password">Password</label>
               <input
                 id="password"
@@ -626,6 +642,19 @@ function App() {
       </main>
     );
   }
+  if (session.guest)
+    return (
+      <GuestDashboard
+        api={api}
+        session={session}
+        onLogout={async () => {
+          await api('/api/logout', {});
+          location.assign('/');
+        }}
+      />
+    );
+  if (!session.email)
+    return <OwnerEmail api={api} onSaved={async () => setSession(await api('/api/session'))} />;
   const homeApps = apps.filter((app) => !app.archived);
   const chatProps = {
     historyPages,

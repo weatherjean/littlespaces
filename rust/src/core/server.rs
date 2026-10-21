@@ -20,6 +20,7 @@ use axum::{
 use serde_json::{json, Value};
 use std::future::IntoFuture;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+mod sharing;
 mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 }
@@ -81,6 +82,15 @@ async fn owner_session(server: &Server, headers: &HeaderMap) -> Result<super::ow
         .blocking(move |_| owner.session(&token))
         .await
 }
+async fn account_session(server: &Server, headers: &HeaderMap) -> Result<super::owner::Session> {
+    let owner = server.owner.clone();
+    let token = cookie(headers);
+    server
+        .runtime
+        .store
+        .blocking(move |_| owner.account_session(&token))
+        .await
+}
 async fn authenticate(
     State(server): State<Arc<Server>>,
     request: axum::extract::Request,
@@ -88,8 +98,16 @@ async fn authenticate(
 ) -> Response {
     let headers = request.headers().clone();
     let method = request.method().clone();
+    let path = request.uri().path().to_owned();
     let checked = async {
-        let session = owner_session(&server, &headers).await?;
+        let session = account_session(&server, &headers).await?;
+        if session.guest.is_some()
+            && !(path.starts_with("/api/guest/")
+                || path == "/api/logout"
+                || path == "/api/account/password")
+        {
+            return Err(Error::Unauthorized);
+        }
         if method != axum::http::Method::GET {
             let origin = headers
                 .get("origin")
@@ -143,6 +161,24 @@ async fn security_headers(
 }
 pub fn router(server: Arc<Server>) -> Router {
     let private = Router::new()
+        .route("/api/account/email", post(sharing::register_email))
+        .route("/api/account/password", post(sharing::password))
+        .route(
+            "/api/guests",
+            get(sharing::guests).post(sharing::create_guest),
+        )
+        .route("/api/guests/:id", post(sharing::update_guest))
+        .route("/api/guests/:id/delete", post(sharing::delete_guest))
+        .route("/api/guest/apps", get(sharing::apps))
+        .route("/api/guest/apps/:id", get(sharing::detail))
+        .route("/api/guest/preview/:app/:revision", get(sharing::preview))
+        .route("/api/guest/action", post(action))
+        .route(
+            "/api/guest/images",
+            post(upload_image).layer(DefaultBodyLimit::max(6 * 1024 * 1024)),
+        )
+        .route("/api/guest/apps/:app/images", get(app_images))
+        .route("/api/guest/apps/:app/images/:id", get(app_image))
         .route("/api/operations", get(operations_status))
         .route("/api/storage", get(storage_status))
         .route("/api/storage/cleanup", post(storage_cleanup))
@@ -275,8 +311,10 @@ async fn session(State(s): State<Arc<Server>>, headers: HeaderMap) -> Api<Value>
         .store
         .blocking(move |_| owner.configured())
         .await?;
-    Ok(Json(match owner_session(&s, &headers).await {
-        Ok(session) => json!({"configured":configured,"authenticated":true,"csrf":session.csrf}),
+    Ok(Json(match account_session(&s, &headers).await {
+        Ok(session) => {
+            json!({"configured":configured,"authenticated":true,"csrf":session.csrf,"guest":session.guest,"email":session.email})
+        }
         Err(_) => json!({"configured":configured,"authenticated":false}),
     }))
 }
@@ -288,8 +326,14 @@ fn check_origin(s: &Server, h: &HeaderMap) -> Result<()> {
 }
 async fn setup(State(s): State<Arc<Server>>, h: HeaderMap, Json(v): Json<Value>) -> Api<Value> {
     check_origin(&s, &h)?;
+    let email = super::owner::normalize_email(&text(&v, "email")?)?;
     s.owner
         .setup(text(&v, "token")?, text(&v, "password")?)
+        .await?;
+    let owner = s.owner.clone();
+    s.runtime
+        .store
+        .blocking(move |_| owner.register_email(&email))
         .await?;
     Ok(Json(json!({"configured":true})))
 }
@@ -302,12 +346,13 @@ async fn login(
     check_origin(&s, &h)?;
     let (token, session) = s
         .owner
-        .login_from(
+        .login_account(
+            v["email"].as_str().map(str::to_owned),
             text(&v, "password")?,
             login_source(peer, &h, s.host.trust_proxy)?,
         )
         .await?;
-    let mut response = Json(json!({"authenticated":true,"csrf":session.csrf})).into_response();
+    let mut response = Json(json!({"authenticated":true,"csrf":session.csrf,"guest":session.guest,"email":session.email})).into_response();
     response.headers_mut().insert(
         "set-cookie",
         HeaderValue::from_str(&format!(
@@ -347,10 +392,15 @@ fn text(v: &Value, k: &str) -> Result<String> {
         .map(str::to_owned)
         .ok_or(Error::Validation)
 }
-async fn upload_image(State(s): State<Arc<Server>>, Json(v): Json<Value>) -> Api<Value> {
+async fn upload_image(
+    State(s): State<Arc<Server>>,
+    h: HeaderMap,
+    Json(v): Json<Value>,
+) -> Api<Value> {
     let data = v["dataUrl"].as_str().ok_or(Error::Validation)?.to_owned();
     let name = v["name"].as_str().unwrap_or("Image").to_owned();
     let app = v["app"].as_str().map(str::to_owned);
+    sharing::authorize(&s, &h, app.as_deref().unwrap_or(""), None).await?;
     Ok(Json(
         s.runtime
             .store
@@ -374,7 +424,12 @@ async fn image_data(
     );
     Ok(response)
 }
-async fn app_images(State(s): State<Arc<Server>>, Path(app): Path<String>) -> Api<Value> {
+async fn app_images(
+    State(s): State<Arc<Server>>,
+    Path(app): Path<String>,
+    h: HeaderMap,
+) -> Api<Value> {
+    sharing::authorize(&s, &h, &app, None).await?;
     Ok(Json(
         s.runtime
             .store
@@ -385,7 +440,9 @@ async fn app_images(State(s): State<Arc<Server>>, Path(app): Path<String>) -> Ap
 async fn app_image(
     State(s): State<Arc<Server>>,
     Path((app, id)): Path<(String, String)>,
+    h: HeaderMap,
 ) -> Api<Value> {
+    sharing::authorize(&s, &h, &app, None).await?;
     Ok(Json(
         s.runtime
             .store
@@ -482,7 +539,23 @@ async fn build(State(s): State<Arc<Server>>, Path(id): Path<String>) -> Api<Valu
             .await?,
     ))
 }
-async fn action(State(s): State<Arc<Server>>, Json(request): Json<Invocation>) -> Api<Value> {
+async fn action(
+    State(s): State<Arc<Server>>,
+    h: HeaderMap,
+    Json(mut request): Json<Invocation>,
+) -> Api<Value> {
+    let session = sharing::authorize(&s, &h, &request.app.0, Some(&request.revision.0)).await?;
+    let guest = session.guest.is_some();
+    if let Some(id) = session.guest {
+        if request.mode != ExecutionMode::Commit {
+            return Err(Error::Unauthorized.into());
+        }
+        // Keep guest idempotency keys separate from owner/other guests' outcomes.
+        request.id = InvocationId(super::owner::hash_token(&format!(
+            "guest:{id}:{}",
+            request.id.0
+        )));
+    }
     let id = request.id.clone();
     let app = request.app.clone();
     let result = s
@@ -495,7 +568,7 @@ async fn action(State(s): State<Arc<Server>>, Json(request): Json<Invocation>) -
         .blocking(move |store| store.external_evidence(&app, &id))
         .await?;
     Ok(Json(
-        json!({"result":result.as_ref().ok(),"error":result.err(),"externalEffects":evidence}),
+        json!({"result":result.as_ref().ok(),"error":result.err(),"externalEffects":if guest { vec![] } else { evidence }}),
     ))
 }
 async fn secret_names(State(s): State<Arc<Server>>) -> Api<Value> {

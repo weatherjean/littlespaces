@@ -131,8 +131,8 @@ def main():
             setup = re.search(r"/#setup=(\S+)", logs)
             assert setup, "First start must offer owner setup"
             password = secrets.token_urlsafe(32)
-            api("/api/setup", {"token": setup.group(1), "password": password})
-            csrf = api("/api/login", {"password": password})["csrf"]
+            api("/api/setup", {"token": setup.group(1), "email": "owner@example.test", "password": password})
+            csrf = api("/api/login", {"email": "owner@example.test", "password": password})["csrf"]
             app = api("/api/apps", {"title": "Container smoke"})
             session = app["conversation"]
             code = json.loads((ROOT / "examples/tasks-rhai.json").read_text())

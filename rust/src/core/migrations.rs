@@ -1,7 +1,7 @@
-//! Versioned workspace format. Version 4 is the only supported prerelease input.
+//! Versioned workspace format. Versions 4 and 5 can upgrade to the guest-sharing format.
 use super::*;
 use rusqlite::Connection;
-pub const VERSION: i64 = 5;
+pub const VERSION: i64 = 6;
 const EXTENSIONS: &str = concat!(
     include_str!("notifications.sql"),
     include_str!("app_lifecycle.sql"),
@@ -13,7 +13,7 @@ const EXTENSIONS: &str = concat!(
 const V5: &str = include_str!("migration_005.sql");
 pub fn install(db: &mut Connection) -> Result<()> {
     let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if ![4, VERSION].contains(&version) {
+    if ![4, 5, VERSION].contains(&version) {
         return Err(Error::Storage);
     }
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -21,12 +21,16 @@ pub fn install(db: &mut Connection) -> Result<()> {
         tx.execute_batch(EXTENSIONS)?;
         tx.execute_batch(V5)?;
     }
+    if version < 6 {
+        tx.execute_batch(include_str!("migration_006.sql"))?;
+    }
     // Compare column contracts to a clean reference, including NOT NULL/default/PK.
     // Extra user-created indexes/triggers are allowed; incompatible table shapes are not.
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(include_str!("schema.sql"))?;
     expected.execute_batch(EXTENSIONS)?;
     expected.execute_batch(V5)?;
+    expected.execute_batch(include_str!("migration_006.sql"))?;
     let mut tables = expected.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )?;
@@ -55,6 +59,49 @@ fn columns(db: &Connection, name: &str) -> Result<Vec<Column>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn migrates_v5_preserves_owner_and_takes_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.sqlite");
+        let mut db = Connection::open(&path).unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute_batch(EXTENSIONS).unwrap();
+        db.execute_batch(V5).unwrap();
+        db.execute("INSERT INTO owner_auth VALUES(1,'preserved-hash',0,0)", [])
+            .unwrap();
+        db.execute(
+            "INSERT INTO owner_sessions VALUES('preserved-session',9999999999,'preserved-csrf')",
+            [],
+        )
+        .unwrap();
+        let store = Store::create(&path).unwrap();
+        let backup = Connection::open(path.with_extension("pre-v6.sqlite")).unwrap();
+        assert_eq!(
+            backup
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            store
+                .open()
+                .unwrap()
+                .query_row("SELECT password_hash FROM owner_auth", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "preserved-hash"
+        );
+        assert_eq!(
+            store
+                .open()
+                .unwrap()
+                .query_row("SELECT csrf FROM owner_sessions", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "preserved-csrf"
+        );
+        install(&mut db).unwrap();
+    }
     #[test]
     fn migrates_v4_preserves_data_and_rejects_future_or_malformed_formats() {
         let dir = tempfile::tempdir().unwrap();
@@ -87,15 +134,15 @@ mod tests {
             4
         );
         assert!(Store::create(&path).is_ok());
-        db.execute_batch("PRAGMA user_version=6").unwrap();
+        db.execute_batch("PRAGMA user_version=7").unwrap();
         assert!(Store::create(&path).is_err());
         assert_eq!(
             db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
         db.execute_batch(
-            "PRAGMA user_version=5; ALTER TABLE invocation_outcomes ADD COLUMN incompatible TEXT",
+            "PRAGMA user_version=6; ALTER TABLE invocation_outcomes ADD COLUMN incompatible TEXT",
         )
         .unwrap();
         assert!(Store::create(&path).is_err());

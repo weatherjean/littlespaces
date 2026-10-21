@@ -4,7 +4,7 @@ A self-hosted workspace for building and using personal apps through conversatio
 
 Describe what you need, approve the proposed app, and let LittleSpaces build and verify it. Your apps run in your own workspace, with persistent data, chat, schedules, and recovery points. Ordinary app use does not require a model request.
 
-LittleSpaces is a **single-user project**: one owner, one workspace, and one active ChatGPT connection. The current focus is documentation, reliability, and making the existing implementation easier to run and contribute to.
+This branch experiments with **one owner and invited guests** in a shared workspace. The owner builds applets through chat; guests sign in with email/password and can use selected published applets. There is still one active ChatGPT connection, available only to the owner. See [the guest-sharing experiment](docs/guest-sharing.md) for setup and boundaries.
 
 ## What it does
 
@@ -28,7 +28,7 @@ docker compose up -d --build --wait
 docker compose logs app
 ```
 
-Open the private owner-setup link from the logs, choose a password, and connect ChatGPT in Settings. The local app is at http://127.0.0.1:8080. Only loopback ports are exposed. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
+Open the private owner-setup link from the logs, choose an email and password, and connect ChatGPT in Settings. The local app is at http://127.0.0.1:8080. Only loopback ports are exposed. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
 
 `docker compose stop` stops the stack; `docker compose up -d --wait` resumes it. Data persists in named volumes. **Do not use `docker compose down --volumes` on your workspace.**
 
@@ -56,7 +56,7 @@ docker compose cp app:/data/backup-before-upgrade ./backups/
 docker compose start app
 ```
 
-Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; the supported workspace upgrade is version 4 → 5. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
+Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; this experimental branch upgrades workspace versions 4/5 → 6. See [guest-sharing migration notes](docs/guest-sharing.md) before trying it. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
 
 ## Status and boundaries
 

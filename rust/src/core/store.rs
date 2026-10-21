@@ -27,7 +27,7 @@ impl Store {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             let marker: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
             let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if marker != 1280528978 || ![4, super::migrations::VERSION].contains(&version) {
+            if marker != 1280528978 || ![4, 5, super::migrations::VERSION].contains(&version) {
                 return Err(Error::Storage);
             }
         } else {
@@ -48,9 +48,13 @@ impl Store {
         let store = Self { path: path.into() };
         let mut db = store.open()?;
         let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if existing && version == 4 {
+        if existing && version < super::migrations::VERSION {
             // Snapshot the database before any schema change. Encryption keys are unchanged.
-            let backup = path.with_extension("pre-v5.sqlite");
+            let backup = path.with_extension(if version == 4 {
+                "pre-v5.sqlite"
+            } else {
+                "pre-v6.sqlite"
+            });
             if !backup.exists() {
                 db.execute("VACUUM INTO ?", [backup.to_str().ok_or(Error::Storage)?])?;
                 #[cfg(unix)]

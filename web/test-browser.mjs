@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { testSharing } from './test-sharing.mjs';
 import { testHistoryAndStorage } from './test-history.mjs';
 // Focused development fixture: actual streamed Rust agent/tools/backend/Preact/browser path.
 // This does not establish real-model generation or real ChatGPT sign-in.
@@ -376,6 +377,7 @@ checks: try {
   await authPage.goto(`${origin}/#setup=${setup}`);
   await authPage.reload();
   await authPage.getByRole('heading', { name: 'Create account', exact: true }).waitFor();
+  await authPage.getByLabel('Email', { exact: true }).fill('owner@example.test');
   await authPage.getByLabel('Password', { exact: true }).fill('synthetic owner password');
   await authPage
     .getByLabel('Confirm password', { exact: true })
@@ -396,8 +398,14 @@ checks: try {
     return value;
   }
   assert.equal((await context.request.get(`${origin}/api/apps`)).status(), 401);
-  await api('/api/setup', { token: setup, password: 'synthetic owner password' });
-  csrf = (await api('/api/login', { password: 'synthetic owner password' })).csrf;
+  await api('/api/setup', {
+    token: setup,
+    email: 'owner@example.test',
+    password: 'synthetic owner password',
+  });
+  csrf = (
+    await api('/api/login', { email: 'owner@example.test', password: 'synthetic owner password' })
+  ).csrf;
   if (process.env.LITTLESPACES_BROWSER_SUITE === 'appearance') {
     await testReleases({ api, context, origin, workspace, snapshots });
     const app = (await api('/api/apps')).find((value) => value.title === 'Release fixture').id;
@@ -532,6 +540,10 @@ checks: try {
   assert.ok((await api(`/api/apps/${app.app}`)).revision);
   assert.equal((await api('/api/apps')).find((a) => a.id === app.app).emoji, '✅');
   console.log('Fixture author/test/browser/publish passed');
+  if (process.env.LITTLESPACES_BROWSER_SUITE === 'sharing') {
+    await testSharing({ browser, context, origin, api, app: app.app, snapshots });
+    break checks;
+  }
   const detail = await api(`/api/apps/${app.app}`);
   assert.ok(detail.revision);
   assert.deepEqual(detail.records, {});

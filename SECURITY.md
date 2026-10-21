@@ -1,6 +1,6 @@
 # Security policy
 
-LittleSpaces is an experimental, self-hosted, single-user application. There is no production-qualified release or guaranteed security response time. Fixes target the current single-user Rust implementation; older experimental runtimes are not maintained.
+LittleSpaces is an experimental, self-hosted application. This branch adds invited guest access to selected applets. There is no production-qualified release or guaranteed security response time. Fixes target the current Rust implementation; older experimental runtimes are not maintained.
 
 ## Reporting a vulnerability
 
@@ -13,6 +13,7 @@ In a private report, include the affected commit, OS, reproduction using synthet
 ## Trust model
 
 - One owner controls the workspace and its connected ChatGPT account. This is not a public app-hosting or multi-tenant service.
+- Invited guests can use explicitly shared, current published applets and their shared data/actions. Guest access is enforced by the server; conversations, drafts and workspace management remain owner-only. Applet participant names are labels, not authorization or private record ownership. See [the experiment](docs/guest-sharing.md).
 - Generated interfaces run in sandboxed iframes. Restricted Rhai actions run in disposable worker processes; the host owns authentication, storage, and external requests.
 - Every published backend can use every integration secret configured in that workspace. Secrets are host-managed, but this is not per-app authorization. Review generated behavior before giving it access to sensitive integrations.
 - Model requests send relevant conversation and app context to the connected service. Local storage does not mean all processing stays offline.
