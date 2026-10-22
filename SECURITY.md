@@ -1,6 +1,6 @@
 # Security policy
 
-LittleSpaces is an experimental, self-hosted application. This branch adds invited guest access to selected applets. There is no production-qualified release or guaranteed security response time. Fixes target the current Rust implementation; older experimental runtimes are not maintained.
+LittleSpaces is an experimental, self-hosted application. Version 0.1.0 includes invited guest access to selected applets. There is no production-qualified release or guaranteed security response time. Fixes target the current Rust implementation; older experimental runtimes are not maintained.
 
 ## Reporting a vulnerability
 

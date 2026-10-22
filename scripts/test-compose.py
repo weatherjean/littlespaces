@@ -26,8 +26,8 @@ def free_port():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="Build images before testing")
-    parser.add_argument("--app-image", default="ghcr.io/weatherjean/appsappsapps:local")
-    parser.add_argument("--verifier-image", default="ghcr.io/weatherjean/appsappsapps-verifier:local")
+    parser.add_argument("--app-image", default="ghcr.io/weatherjean/littlespaces:local")
+    parser.add_argument("--verifier-image", default="ghcr.io/weatherjean/littlespaces-verifier:local")
     args = parser.parse_args()
     project = "littlespaces-smoke-" + secrets.token_hex(4)
     port, callback_port = free_port(), free_port()

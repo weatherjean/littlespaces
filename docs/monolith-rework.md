@@ -111,4 +111,4 @@ Stage 2 remains a production Docker image and Docker Compose deployment with no 
 
 Prototype branch: `prototype/rust-monolith-rhai`, feasibility commit `08118a5`.
 
-[Prototype native Linux checks](https://github.com/weatherjean/appsappsapps/actions/runs/37760139913) passed on AMD64 and ARM64. Restricted Rhai actions ran inside an Axum/SQLite process. The prototype also demonstrated that a script deadline cannot preempt a blocking Rust HTTP callback and did not establish a hard per-action memory ceiling. Those are validation tasks for the new design, not reasons to retain the old runtime.
+[Prototype native Linux checks](https://github.com/weatherjean/littlespaces/actions/runs/37760139913) passed on AMD64 and ARM64. Restricted Rhai actions ran inside an Axum/SQLite process. The prototype also demonstrated that a script deadline cannot preempt a blocking Rust HTTP callback and did not establish a hard per-action memory ceiling. Those are validation tasks for the new design, not reasons to retain the old runtime.

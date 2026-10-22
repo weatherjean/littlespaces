@@ -30,7 +30,7 @@ services:
       retries: 5
 
   verifier:
-    image: ${LITTLESPACES_VERIFIER_IMAGE:-ghcr.io/weatherjean/appsappsapps-verifier:local}
+    image: ${LITTLESPACES_VERIFIER_IMAGE:-ghcr.io/weatherjean/littlespaces-verifier:local}
     build:
       context: .
       target: verifier
@@ -69,7 +69,7 @@ services:
       retries: 5
 
   app:
-    image: ${LITTLESPACES_APP_IMAGE:-ghcr.io/weatherjean/appsappsapps:local}
+    image: ${LITTLESPACES_APP_IMAGE:-ghcr.io/weatherjean/littlespaces:local}
     build:
       context: .
       target: app

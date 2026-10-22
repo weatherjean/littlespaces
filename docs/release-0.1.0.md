@@ -11,7 +11,7 @@ First experimental release of the Rust/Preact workspace, with one owner and invi
 
 Use Docker Compose 2.24+ following the [README](../README.md) or [deployment guide](../deploy/README.md). Production containers support Linux AMD64 and ARM64. Native source development requires Rust 1.88+ and Node 24+; native archives are developer artifacts.
 
-Versioned images are `ghcr.io/weatherjean/appsappsapps:v0.1.0` and `ghcr.io/weatherjean/appsappsapps-verifier:v0.1.0`. Use the matching pair. Repository and package visibility remain independently controlled; authenticated access may be required.
+Versioned images are `ghcr.io/weatherjean/littlespaces:v0.1.0` and `ghcr.io/weatherjean/littlespaces-verifier:v0.1.0`. Use the matching pair. Repository and package visibility remain independently controlled; authenticated access may be required.
 
 ## Upgrade and rollback
 

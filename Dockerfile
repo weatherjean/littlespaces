@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS app
 ARG IMAGE_REVISION=local
-LABEL org.opencontainers.image.source="https://github.com/weatherjean/appsappsapps" org.opencontainers.image.revision=$IMAGE_REVISION
+LABEL org.opencontainers.image.source="https://github.com/weatherjean/littlespaces" org.opencontainers.image.revision=$IMAGE_REVISION
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 app && useradd -u 10001 -g app -m app \
@@ -46,7 +46,7 @@ CMD ["serve", "/data/workspace", "5175"]
 
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS verifier
 ARG IMAGE_REVISION=local
-LABEL org.opencontainers.image.source="https://github.com/weatherjean/appsappsapps" org.opencontainers.image.revision=$IMAGE_REVISION
+LABEL org.opencontainers.image.source="https://github.com/weatherjean/littlespaces" org.opencontainers.image.revision=$IMAGE_REVISION
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 WORKDIR /opt/littlespaces/web
 COPY web/package*.json ./

@@ -43,8 +43,8 @@ def main():
         "LITTLESPACES_AUTHORITY": origin.netloc,
         "LITTLESPACES_PORT": str(origin.port or 8080) if args.mode == "local" else "8080",
         "LITTLESPACES_BROWSER_TOKEN_FILE": str(args.secrets_dir.resolve() / "browser_token"),
-        "LITTLESPACES_APP_IMAGE": f"ghcr.io/weatherjean/appsappsapps:{args.image_tag}",
-        "LITTLESPACES_VERIFIER_IMAGE": f"ghcr.io/weatherjean/appsappsapps-verifier:{args.image_tag}",
+        "LITTLESPACES_APP_IMAGE": f"ghcr.io/weatherjean/littlespaces:{args.image_tag}",
+        "LITTLESPACES_VERIFIER_IMAGE": f"ghcr.io/weatherjean/littlespaces-verifier:{args.image_tag}",
     }
     if args.mode == "traefik":
         values["ACME_EMAIL"] = args.acme_email

@@ -21,8 +21,8 @@ Docker Compose is the supported deployment on Linux servers and Docker Desktop. 
 Version `v0.1.0` is the first experimental release of the Rust implementation. Ongoing development lives on `main`.
 
 ```sh
-git clone --branch v0.1.0 https://github.com/weatherjean/appsappsapps.git
-cd appsappsapps
+git clone --branch v0.1.0 https://github.com/weatherjean/littlespaces.git
+cd littlespaces
 python3 scripts/configure-compose.py
 docker compose up -d --build --wait
 docker compose logs app
