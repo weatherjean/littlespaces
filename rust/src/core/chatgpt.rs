@@ -52,6 +52,7 @@ impl Rpc {
             "approval_policy=\"never\"",
             "sandbox_mode=\"read-only\"",
             "project_doc_max_bytes=0",
+            "tool_output_token_limit=196608",
             "mcp_servers={}",
         ] {
             command.args(["-c", setting]);
@@ -179,6 +180,12 @@ impl Drop for Rpc {
         let _ = self.child.start_kill();
     }
 }
+struct ModelTurn {
+    rpc: Rpc,
+    thread: String,
+    pending_id: Value,
+    call_id: String,
+}
 struct Login {
     owner: String,
     id: String,
@@ -198,10 +205,13 @@ pub struct ChatGpt {
     home: PathBuf,
     executable: PathBuf,
     connection: Arc<tokio::sync::Mutex<Connection>>,
+    turns: Arc<tokio::sync::Mutex<std::collections::BTreeMap<String, ModelTurn>>>,
 }
 impl ChatGpt {
     pub fn new(store: Store, _secrets: super::secrets::Secrets) -> Result<Self> {
-        let home = store.directory().join("codex");
+        let home = std::fs::canonicalize(store.directory())
+            .map_err(|_| Error::Storage)?
+            .join("codex");
         Ok(Self {
             store,
             home,
@@ -209,6 +219,7 @@ impl ChatGpt {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("codex")),
             connection: Arc::new(tokio::sync::Mutex::new(Connection::default())),
+            turns: Arc::new(tokio::sync::Mutex::new(std::collections::BTreeMap::new())),
         })
     }
     async fn ensure<'a>(&self, connection: &'a mut Connection) -> Result<&'a mut Rpc> {
@@ -379,8 +390,12 @@ impl ChatGpt {
         }
         Err(Error::Limit)
     }
+    pub async fn finish(&self, job: &str) {
+        self.turns.lock().await.remove(job);
+    }
     pub async fn request<F, Fut>(
         &self,
+        job: &str,
         request: Value,
         cancel: Cancellation,
         mut on_text: F,
@@ -394,22 +409,53 @@ impl ChatGpt {
         }
         let control = super::control::Control::new(cancel, Duration::from_secs(600));
         let run = async {
-            let mut rpc = Rpc::start(&self.home, &self.executable).await?;
             let tools = request["tools"].as_array().ok_or(Error::Model)?;
-            let dynamic: Vec<Value> = tools.iter().filter(|t|t["type"]=="function").map(|t|json!({"type":"function","name":t["name"],"description":t["description"],"inputSchema":t["parameters"]})).collect();
-            let thread = rpc.call("thread/start", json!({"model":request["model"],"ephemeral":true,"environments":[],"sandbox":"read-only","approvalPolicy":"never","baseInstructions":request["instructions"],"dynamicTools":dynamic})).await?;
-            let thread_id = thread["thread"]["id"]
-                .as_str()
-                .ok_or(Error::Model)?
-                .to_owned();
-            // Preserve roles, images, and completed tool outcomes in the model-visible history.
-            rpc.call(
-                "thread/inject_items",
-                json!({"threadId":thread_id,"items":codex_history(&request["input"])?}),
-            )
-            .await?;
-            let turn = rpc.call("turn/start", json!({"threadId":thread_id,"input":[{"type":"text","text":"Continue from the conversation above. Use the provided application tools when needed."}],"environments":[],"effort":request["reasoning"]["effort"]})).await?;
-            let turn_id = turn["turn"]["id"].as_str().ok_or(Error::Model)?.to_owned();
+            let saved = self.turns.lock().await.remove(job);
+            let (mut rpc, thread_id) = if let Some(mut saved) = saved {
+                let input = request["input"].as_array().ok_or(Error::Model)?;
+                let index = input
+                    .iter()
+                    .position(|item| {
+                        item["type"] == "function_call_output" && item["call_id"] == saved.call_id
+                    })
+                    .ok_or(Error::RecoveryRequired)?;
+                let result = input[index]["output"].as_str().ok_or(Error::Model)?;
+                let mut content = vec![json!({"type":"inputText","text":result})];
+                // read_image adds pixels after its durable tool result. Deliver them with it.
+                for item in &input[index + 1..] {
+                    for part in item["content"].as_array().into_iter().flatten() {
+                        match part["type"].as_str() {
+                            Some("input_image") => content
+                                .push(json!({"type":"inputImage","imageUrl":part["image_url"]})),
+                            Some("input_text") => {
+                                content.push(json!({"type":"inputText","text":part["text"]}))
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let success = serde_json::from_str::<Value>(result)
+                    .map_err(|_| Error::Model)?
+                    .get("error")
+                    .is_none();
+                saved.rpc.send(json!({"id":saved.pending_id,"result":{"contentItems":content,"success":success}})).await?;
+                (saved.rpc, saved.thread)
+            } else {
+                let mut rpc = Rpc::start(&self.home, &self.executable).await?;
+                let dynamic: Vec<Value> = tools.iter().filter(|t|t["type"]=="function").map(|t|json!({"type":"function","name":t["name"],"description":t["description"],"inputSchema":t["parameters"]})).collect();
+                let thread = rpc.call("thread/start", json!({"model":request["model"],"ephemeral":true,"environments":[],"sandbox":"read-only","approvalPolicy":"never","baseInstructions":request["instructions"],"dynamicTools":dynamic})).await?;
+                let thread_id = thread["thread"]["id"]
+                    .as_str()
+                    .ok_or(Error::Model)?
+                    .to_owned();
+                rpc.call(
+                    "thread/inject_items",
+                    json!({"threadId":thread_id,"items":codex_history(&request["input"])?}),
+                )
+                .await?;
+                rpc.call("turn/start", json!({"threadId":thread_id,"input":[{"type":"text","text":"Continue from the conversation above. Use the provided application tools when needed."}],"environments":[],"effort":request["reasoning"]["effort"]})).await?;
+                (rpc, thread_id)
+            };
             let mut text = String::new();
             let mut output = Vec::new();
             loop {
@@ -431,20 +477,26 @@ impl ChatGpt {
                     }
                     Some("item/completed") if p["item"]["type"] == "agentMessage" => {
                         if let Some(value) = p["item"]["text"].as_str() {
-                            output.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":value}]}));
+                            let mut item = json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":value}]});
+                            if p["item"]["phase"].is_string() {
+                                item["phase"] = p["item"]["phase"].clone();
+                            }
+                            output.push(item);
                         }
                     }
                     Some("item/tool/call") if message.get("id").is_some() => {
                         let call = validated_call(p, tools)?;
-                        // A complete RPC tool request is the handoff boundary, not a partial delta.
-                        // Rust checkpoints it before executing. Stop this ephemeral turn; the next
-                        // round receives the durable result through thread/inject_items.
-                        let _ = rpc
-                            .call(
-                                "turn/interrupt",
-                                json!({"threadId":thread_id,"turnId":turn_id}),
-                            )
-                            .await;
+                        // Pause at a complete request. Rust durably checkpoints and executes it
+                        // before the next request returns its saved result to this same turn.
+                        self.turns.lock().await.insert(
+                            job.to_owned(),
+                            ModelTurn {
+                                rpc,
+                                thread: thread_id,
+                                pending_id: message["id"].clone(),
+                                call_id: call["call_id"].as_str().ok_or(Error::Model)?.to_owned(),
+                            },
+                        );
                         output.push(call);
                         return Ok(output);
                     }
@@ -461,7 +513,11 @@ impl ChatGpt {
                 }
             }
         };
-        tokio::select! { biased; _ = control.cancelled() => Err(Error::Cancelled), result = run => result }
+        let result = tokio::select! { biased; _ = control.cancelled() => Err(Error::Cancelled), result = run => result };
+        if result.is_err() {
+            self.finish(job).await;
+        }
+        result
     }
 }
 // App-server raw history requires explicit message tags and structured content.
@@ -585,10 +641,15 @@ mod tests {
         let request = json!({"model":"synthetic","instructions":"test","input":[{"role":"user","content":"hello"}],"tools":[{"type":"function","name":"read_sdk","description":"read","parameters":{"type":"object"}}]});
         let mut deltas = vec![];
         let output = auth
-            .request(request.clone(), Cancellation::default(), |text, _| {
-                deltas.push(text);
-                async { Ok(()) }
-            })
+            .request(
+                "test",
+                request.clone(),
+                Cancellation::default(),
+                |text, _| {
+                    deltas.push(text);
+                    async { Ok(()) }
+                },
+            )
             .await
             .unwrap();
         assert_eq!(deltas, vec!["Hello"]);
@@ -596,20 +657,38 @@ mod tests {
         for scenario in ["crash", "failed", "unknown"] {
             std::fs::write(auth.home.join("scenario"), scenario).unwrap();
             assert!(auth
-                .request(request.clone(), Cancellation::default(), |_, _| async {
-                    Ok(())
-                })
+                .request(
+                    "test",
+                    request.clone(),
+                    Cancellation::default(),
+                    |_, _| async { Ok(()) }
+                )
                 .await
                 .is_err());
         }
         std::fs::write(auth.home.join("scenario"), "tool").unwrap();
         let output = auth
-            .request(request.clone(), Cancellation::default(), |_, _| async {
+            .request(
+                "test",
+                request.clone(),
+                Cancellation::default(),
+                |_, _| async { Ok(()) },
+            )
+            .await
+            .unwrap();
+        assert_eq!(output[0]["type"], "function_call");
+        assert!(auth.turns.lock().await.contains_key("test"));
+        let mut continued = request.clone();
+        continued["input"].as_array_mut().unwrap().extend(output);
+        continued["input"].as_array_mut().unwrap().push(json!({"type":"function_call_output","call_id":"call-1","output":"{\"ok\":\"saved result\"}"}));
+        let resumed = auth
+            .request("test", continued, Cancellation::default(), |_, _| async {
                 Ok(())
             })
             .await
             .unwrap();
-        assert_eq!(output[0]["type"], "function_call");
+        assert_eq!(resumed[0]["content"][0]["text"], "Continued in same turn");
+        assert!(auth.turns.lock().await.is_empty());
         std::fs::write(auth.home.join("scenario"), "wait").unwrap();
         let cancel = Cancellation::default();
         let other = cancel.clone();
@@ -618,7 +697,7 @@ mod tests {
             other.cancel();
         });
         assert_eq!(
-            auth.request(request, cancel, |_, _| async { Ok(()) })
+            auth.request("test", request, cancel, |_, _| async { Ok(()) })
                 .await
                 .unwrap_err(),
             Error::Cancelled

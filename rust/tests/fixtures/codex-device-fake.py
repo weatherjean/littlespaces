@@ -9,7 +9,13 @@ def result(i, value):
     send({'id':i,'result':value})
 for line in sys.stdin:
     m=json.loads(line); method=m.get('method'); i=m.get('id'); p=m.get('params',{})
-    if not method: continue
+    if not method:
+        if i=='server-tool-1':
+            assert m['result']['success']
+            assert m['result']['contentItems'][0]['text']=='{"ok":"saved result"}'
+            send({'method':'item/completed','params':{'threadId':'thread-test','item':{'type':'agentMessage','text':'Continued in same turn','phase':'final_answer'}}})
+            send({'method':'turn/completed','params':{'threadId':'thread-test','turn':{'id':'turn-test','status':'completed'}}})
+        continue
     if method=='initialize':
         assert p['capabilities']['experimentalApi']
         assert 'OPENAI_API_KEY' not in os.environ

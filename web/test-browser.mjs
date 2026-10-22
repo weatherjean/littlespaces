@@ -545,6 +545,19 @@ checks: try {
     if (j.state === 'completed') break;
     if (j.state === 'failed') throw Error(JSON.stringify(j));
   }
+  const approved = creating.locator('.proposal-resolved');
+  await approved.waitFor();
+  assert.equal(await approved.locator('details[open]').count(), 0);
+  assert.ok((await approved.boundingBox()).height < 150, 'Approved plan stays compact');
+  await creating.reload();
+  await approved.waitFor();
+  assert.equal(await approved.locator('details[open]').count(), 0);
+  assert.ok(
+    await approved.evaluate((card) => Boolean(card.nextElementSibling)),
+    'Approval remains in chat history before later build messages',
+  );
+  await creating.setViewportSize({ width: 320, height: 740 });
+  await creating.screenshot({ path: path.join(snapshots, 'review-approved-plan-320.png') });
   await creating.close();
   async function runAgent(conversation) {
     const { job } = await api(`/api/conversations/${conversation}/send`, {
@@ -772,7 +785,7 @@ checks: try {
   )
     await page.waitForTimeout(100);
   await page.getByRole('button', { name: 'Confirm change', exact: true }).click();
-  await page.getByText('Done.', { exact: true }).waitFor();
+  await page.locator('.proposal-resolved').getByText('Completed', { exact: true }).waitFor();
   assert.equal(
     (await api(`/api/apps/${app.app}`)).records['voice-confirm'].title,
     'Voice requested task',

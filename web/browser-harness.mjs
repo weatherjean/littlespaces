@@ -78,7 +78,7 @@ export async function startHarness({
       )
         throw Error('Invalid preview URL');
       if (!Array.isArray(steps) || steps.length > 32) throw Error('Invalid browser suite');
-      context = await browser.newContext();
+      context = await browser.newContext({ viewport: { width: 390, height: 844 } });
       // Verification needs HTTP only; WebSockets bypass HTTP request routing.
       await context.routeWebSocket('**/*', (socket) => socket.close());
       page = await context.newPage();
@@ -141,12 +141,25 @@ export async function startHarness({
       }
       failedStep = null;
       errors.push(...(await page.evaluate(() => window.errors || [])));
-      const screenshot = `browser-${randomUUID()}.png`;
-      // App content can be private even when the developer's umask is permissive.
-      await writeFile(`${artifacts}/${screenshot}`, await page.screenshot({ fullPage: true }), {
-        mode: 0o600,
-        flag: 'wx',
-      });
+      const layouts = [];
+      for (const width of [390, 320, 1280]) {
+        await page.setViewportSize({ width, height: 844 });
+        const layout = await frame.locator('body').evaluate(() => ({
+          viewport: innerWidth,
+          content: document.documentElement.scrollWidth,
+        }));
+        if (layout.content > layout.viewport + 1)
+          errors.push(
+            `Layout overflows at ${width}px: content ${layout.content}px, iframe ${layout.viewport}px. Make the page reflow; contain any wide table in its own scrolling region.`,
+          );
+        const screenshot = `browser-${randomUUID()}-${width}.png`;
+        // App content can be private even when the developer's umask is permissive.
+        await writeFile(`${artifacts}/${screenshot}`, await page.screenshot({ fullPage: true }), {
+          mode: 0o600,
+          flag: 'wx',
+        });
+        layouts.push({ width, ...layout, screenshot });
+      }
       const snapshot = (await frame.locator('body').innerText()).slice(0, 8192);
       res.setHeader('content-type', 'application/json');
       responseBody = JSON.stringify({
@@ -155,7 +168,8 @@ export async function startHarness({
         completedSteps,
         errors,
         snapshot,
-        screenshot,
+        screenshot: layouts[0].screenshot,
+        layouts,
       });
     } catch (error) {
       res.setHeader('content-type', 'application/json');

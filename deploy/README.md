@@ -1,100 +1,115 @@
-# Docker Compose deployment
+# VPS deployment
 
-Docker Compose is the supported production deployment. Native Rust/Node commands are for development and diagnosis. One stack runs the app, a separately sandboxed Chromium verifier, and a gateway. Choose **local**, **Traefik HTTPS**, or **Tailscale private HTTPS** access; do not combine the access overlays.
+Docker Compose is the supported deployment. The stack contains the app, a Chromium verifier, and a gateway. Use the Traefik overlay for public HTTPS or Tailscale for private access. Local mode is for development.
 
-## Test and run on your computer
+## First install
 
-Requires Docker Engine with Compose 2.24+ on Linux, or Docker Desktop on macOS/Windows (use WSL for these shell/Python commands). Allocate at least 4 GiB RAM; 8 GiB is recommended when building. Both AMD64 and ARM64 are CI targets. Python 3.9+ is needed only for configuration/testing helpers, not for the running stack.
+Requirements: Docker Compose 2.24+, Python 3.9+, at least 4 GiB RAM, a domain pointing to the VPS, and available ports 80/443. Prebuilt images support Linux AMD64 and ARM64; source builds need more memory (8 GiB recommended).
 
-```sh
-python3 scripts/configure-compose.py
-# Creates a private .env and verifier secret; refuses to overwrite an existing .env.
-docker compose up -d --build --wait
-```
-
-Open http://127.0.0.1:8080. Retrieve the private first-time setup link with `docker compose logs app`; do not share those logs. The app creates a fresh workspace only if its directory does not exist. Existing data and encryption keys survive container replacement. Set your own owner password and connect ChatGPT in Settings. Local mode publishes only loopback ports, not your LAN.
-
-For a different local port, use `--origin http://127.0.0.1:18080` when configuring. Local mode is for development diagnostics; VPS HTTPS is the supported user deployment.
-
-Run the same production images through a disposable test project:
-
-```sh
-python3 scripts/test-compose.py --build
-```
-
-The test creates only synthetic data. It checks authentication, backend/browser validation and publication, persistent records after restart, verifier outage/recovery, and offline backup/restore. It uses random ports/project names and removes only its own temporary containers and volumes. It does not connect ChatGPT, join a tailnet, or request public certificates. A passed test is container qualification, not proof of your DNS, account, or off-host backups.
-
-## Images and updates
-
-The container workflow tests native Linux AMD64 and ARM64 images before pushing them to GHCR. Candidate builds use `sha-<full-commit>` tags; `v*` release tags produce corresponding version tags. Use a tested version or digest in production, not a floating tag. The app image is `ghcr.io/weatherjean/littlespaces`; the verifier is `ghcr.io/weatherjean/littlespaces-verifier`. Use matching tags for both. While the repository/packages are private, authenticate `docker login ghcr.io` with package-read access. Repository visibility does not automatically establish package visibility; verify both when releasing.
-
-For prebuilt images, pass `--image-tag sha-<full-commit>` to the configuration helper, then run `docker compose pull && docker compose up -d --no-build --wait`. The first local build uses the `local` tag. Source builds include compiled frontend assets, locked Rust/JavaScript dependencies, and original notices. The verifier includes its matching Chromium version. The build context is an allowlist and excludes workspaces, keys, .env, and Git history.
-
-Before upgrading, back up offline as below. Update both image references, pull, and recreate the stack. If the gateway changes, stop and recreate the whole stack with `docker compose down` followed by `docker compose up -d --no-build --wait`; named volumes are retained. Do not use `down --volumes` on a real workspace. Do not roll an old image forward onto a newer database: restore the matching pre-upgrade backup to roll back.
-
-## Public HTTPS with Traefik
-
-On a dedicated server with DNS pointing to it and ports 80/443 available:
+From a checkout of the tested commit:
 
 ```sh
 python3 scripts/configure-compose.py --mode traefik \
   --origin https://apps.example.com --acme-email you@example.com \
-  --image-tag sha-<full-commit>
+  --image-tag sha-REPLACE_WITH_TESTED_COMMIT
 docker compose pull
 docker compose up -d --no-build --wait
+docker compose logs app
 ```
 
-The generated .env selects `compose.traefik.yaml`. Traefik obtains HTTPS certificates, redirects HTTP, limits login requests, strips untrusted forwarded headers, and checks app readiness. Its ACME volume is persistent. Access logs are disabled because callback URLs and preview tickets are credentials. No Docker socket is mounted.
+Replace the image tag with `sha-` plus the full tested commit hash, or a published version tag. The helper creates a private `.env` and verifier secret and refuses to overwrite an existing `.env`. Traefik obtains certificates and redirects HTTP to HTTPS. Open the private setup link from the logs and create an owner account; do not share those logs.
 
-The app and verifier share the gateway's network namespace and bind only loopback. They have separate users, filesystems and data mounts. Only the gateway publishes ports. This preserves the app's loopback-only proxy trust without trusting an entire Docker subnet. These containers form one trusted deployment boundary; do not attach unrelated containers to their network namespace.
+In **Settings → ChatGPT**, start sign-in and approve the one-time code on OpenAI's page. LittleSpaces detects completion. If prompted, enable device-code sign-in in ChatGPT's security settings. See [sign-in details](../docs/rhai/sign-in.md).
 
-If you already have a public proxy, do not start a second listener on ports 80/443. This release supports the supplied dedicated gateway or Tailscale mode; integrating another proxy needs separate forwarding-header qualification.
+Do not run another proxy on the same ports. Other proxy arrangements need their own configuration and testing.
 
-## Tailscale private access / escape hatch
+## Routine updates
 
-Use the same app and storage with `compose.tailscale.yaml`. This uses Tailscale Serve, not Funnel: no public web port is published. Enable MagicDNS and HTTPS certificates in your tailnet, and select a node name permitted by your tailnet policy.
+1. Choose a tested commit or release and update the checkout to that revision. Keep the existing `.env`, `deploy/secrets`, and Compose project name.
+2. In `.env`, set matching tags for `LITTLESPACES_APP_IMAGE` and `LITTLESPACES_VERIFIER_IMAGE`.
+3. Pull and replace the containers:
 
 ```sh
-python3 scripts/configure-compose.py --mode tailscale \
-  --origin https://littlespaces.your-tailnet.ts.net --image-tag sha-<full-commit>
-# Save a scoped Tailscale auth key in deploy/secrets/tailscale_authkey.
-# Keep deploy/secrets mode 0700; chmod 0444 the key file for its container mount.
 docker compose pull
 docker compose up -d --no-build --wait
+docker compose ps
 ```
 
-Use a narrowly scoped auth key and restrict access through tailnet grants/ACLs. The node identity persists in `tailscale_state`. Userspace networking requires neither privileged mode, NET_ADMIN, host networking, nor a TUN device. Confirm the actual assigned DNS name matches the configured origin; name collisions can change it. Tailnet registration, ACL enforcement and HTTPS issuance require a real tailnet check and are not claimed by the offline test.
+4. Check `/health/ready`, sign in, and verify an existing app's data.
 
-To switch an existing deployment, stop with `docker compose down` (retain volumes), save the current .env privately, generate the new mode's .env, and restart under the same Compose project name. This changes the canonical origin, not the workspace. Reopen the new address and sign in; the owner password and saved apps remain. It is a deliberate switch, not simultaneous alternate origins or automatic failover. In Tailscale mode, the gateway sees the local Serve proxy as its peer, so login rate limits are shared among tailnet visitors; the app remains single-owner and still requires owner authentication.
+The workspace, account, saved ChatGPT connection, and certificates remain in named volumes. Updating does not require repeating setup or creating a special rollback copy. Keep backups on your own schedule; check release notes for migration-specific requirements.
 
-## ChatGPT sign-in on a remote host
+If gateway ports or its network namespace change, run `docker compose down` before `up`. **Never add `--volumes` when updating a real workspace.** A downgrade may require restoring a matching older backup; do not open a newer database with an older binary.
 
-Open Settings → Continue with ChatGPT. Open the displayed OpenAI page, enter the one-time code, and approve the connection. LittleSpaces detects completion automatically. If required, enable device-code sign-in in ChatGPT Settings → Security or workspace permissions. This is the sole supported connection flow; no terminal, local callback, port forwarding or token-file transfer is required.
+Images are published as `ghcr.io/weatherjean/littlespaces` and `ghcr.io/weatherjean/littlespaces-verifier`. CI publishes architecture tags after their container checks and the combined `sha-<full-commit>` tag after both architectures pass. Use matching immutable tags or digests rather than floating tags.
 
-ChatGPT credentials live at `/data/workspace/codex/auth.json` in the persistent workspace volume. The app image includes pinned Codex 0.163.0 and Node 24. The provider process uses private stdin/stdout; no Codex network port is exposed. Workspace backups include its credential file. Do not share those backups or mount the workspace in other containers. See [connection details](../docs/rhai/sign-in.md).
+## Operations
 
-## Health, sandbox and recovery
+| Task | Command or endpoint |
+| --- | --- |
+| Container health | `docker compose ps` |
+| App readiness | `GET /health/ready` at your configured origin |
+| Detailed status | Owner-authenticated `GET /api/operations` |
+| Stop | `docker compose stop` |
+| Resume | `docker compose up -d --no-build --wait` |
+| App logs | `docker compose logs app` (may contain the private setup link) |
 
-`docker compose ps` reports container health. App readiness requires its database, background loops, disk space and verifier. Gateway liveness alone does not prove the app is ready. Inspect `/health/ready` at the configured origin and authenticated `/api/operations` for readiness and capacity.
+Readiness checks the database, background work, disk space, and verifier. Gateway health alone is insufficient. The app has 40 seconds to drain work on shutdown. Unknown external-write outcomes require review before retrying.
 
-App/verifier run as different non-root users with read-only root filesystems, capped memory/PIDs, dropped capabilities and private writable volumes. Chromium uses its user-namespace sandbox plus the vendored Playwright seccomp profile; do not disable the sandbox to pass a test. Hosts that deny unprivileged user namespaces are unsupported until configured to allow this sandbox. Screenshot artifacts may contain app data and need retention rules. The private verifier transport preserves the public Host/origin while contacting only the app's loopback port, so checks also work with userspace Tailscale networking.
+## Backup and restore
 
-The application has 40 seconds to drain and persist interrupted work before Docker stops it. Failed drafts do not replace a published revision. Unknown external-write outcomes still require review; restarting is not permission to repeat them.
+The workspace contains the database, `secrets.key`, and `codex/auth.json`. Back them up together. Volumes and app restore points are not independent backups.
 
-## Offline backup and restore
-
-Back up the entire workspace, including its encryption key. Choose your off-host destination/retention and test restoring before launch. Container volumes alone are not backups.
+To create an offline backup, choose a new destination name each time:
 
 ```sh
 docker compose stop app
-docker compose run --rm --no-deps app backup /data/workspace /data/backup-before-upgrade
+docker compose run --rm --no-deps app backup /data/workspace /data/backup-YYYYMMDD
 mkdir -p backups
-docker compose cp app:/data/backup-before-upgrade ./backups/
+chmod 700 backups
+docker compose cp app:/data/backup-YYYYMMDD ./backups/
 docker compose start app
 ```
 
-Use a new backup directory name every time. Encrypt backups before off-host transfer; protect their local directory permissions. Keep the matching image digests. To restore, stop the app, copy the backup into its volume, preserve the current workspace under a different name, and place the backup at `/data/workspace`. Start the matching app/verifier images and verify login and records. Never edit schema version markers or delete a workspace to make an upgrade work. OAuth refresh rotation may require reconnecting after a restore. Preserve the ACME and Tailscale state volumes separately when their identities/certificates matter.
+Protect backup permissions, encrypt off-host copies, and record the matching image digests. To restore:
 
-## Configuration provenance
+1. Stop the app. Copy the backup into its volume.
+2. Retain the existing workspace under another name; place the restored directory at `/data/workspace` with its original ownership and permissions.
+3. Start the matching app/verifier images and check owner login, app records, and the ChatGPT connection. Restored provider credentials may need reconnecting.
 
-The Chromium seccomp profile comes from Playwright v1.63.0 (`utils/docker/seccomp_profile.json`, Apache-2.0). It permits the unprivileged namespace operations needed by Chromium; the remaining syscall allowlist is retained. Our only addition is allowing `chroot` so Chromium can restrict its own user namespace even with all host capabilities dropped; kernel capability checks remain in effect. The upstream Apache license is in `licenses/PLAYWRIGHT-APACHE.txt`. See [Playwright Docker guidance](https://playwright.dev/docs/docker), [Docker Compose production guidance](https://docs.docker.com/compose/how-tos/production/), and [Tailscale container configuration](https://github.com/tailscale/tailscale/tree/main/cmd/containerboot).
+Do not run two instances against copies of the same credentials during a restore drill. Preserve ACME or Tailscale state separately if you need to retain those identities. Never edit schema markers or delete a workspace to bypass a startup error.
+
+## Private access with Tailscale
+
+Enable MagicDNS and HTTPS certificates in your tailnet, then configure:
+
+```sh
+python3 scripts/configure-compose.py --mode tailscale \
+  --origin https://littlespaces.your-tailnet.ts.net \
+  --image-tag sha-REPLACE_WITH_TESTED_COMMIT
+# Save a scoped auth key in deploy/secrets/tailscale_authkey.
+# Keep the directory at mode 0700 and the key file at mode 0444.
+docker compose pull
+docker compose up -d --no-build --wait
+```
+
+This uses Tailscale Serve, not Funnel; no public web port is published. Restrict tailnet access and verify the assigned DNS name. Node identity persists in `tailscale_state`. Login rate limits are shared among tailnet visitors because the gateway sees the Serve proxy as their peer. Owner and guest authentication still apply.
+
+To switch access modes, stop with `docker compose down`, retain `.env` privately, generate the new configuration, and restart with the same project name. Use only one access overlay. The address changes; workspace data remains.
+
+## Local container checks
+
+```sh
+python3 scripts/configure-compose.py
+docker compose up -d --build --wait
+# Local address: http://127.0.0.1:8080
+python3 scripts/test-compose.py --build
+```
+
+The test uses a disposable project with synthetic data and removes only its own volumes. It checks authentication, app publication, sandboxed browser verification, restart, verifier recovery, and backup/restore. It does not authorize ChatGPT or test public certificates, a real tailnet, or physical devices.
+
+## Container boundaries
+
+The app and verifier use separate non-root users and mounts, read-only root filesystems, memory/PID limits, and dropped capabilities. They share the gateway's network namespace and bind to loopback; only the gateway publishes ports. No Docker socket is mounted. Do not join unrelated containers to that namespace or expose the verifier.
+
+Chromium requires unprivileged user namespaces and the supplied seccomp profile. Do not disable its sandbox to make a host work. The profile comes from Playwright 1.63.0, with `chroot` allowed for its internal sandbox; the upstream license is in `licenses/PLAYWRIGHT-APACHE.txt`. Screenshot artifacts can contain app data. Gateway access logs are disabled because URLs can contain private tickets.

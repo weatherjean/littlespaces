@@ -502,6 +502,15 @@ export function ChatPanel({
                   Load older messages
                 </button>
               )}
+              <Proposals
+                items={proposals.filter(
+                  (p) =>
+                    p.state !== 'pending' && !messages.some((m) => m.result?.ok?.proposal === p.id),
+                )}
+                busy={busy || listening || proposalBusy}
+                onDecide={onDecide}
+                apps={apps}
+              />
               {messages.map((m, i) => {
                 // Authoring stores its audit entry, then the agent stores the tool envelope.
                 // Keep both in storage, but show the same result only once.
@@ -516,6 +525,17 @@ export function ChatPanel({
                     )
                 )
                   return null;
+                const proposal = proposals.find((p) => p.id === m.result?.ok?.proposal);
+                if (proposal)
+                  return (
+                    <Proposals
+                      key={m.messageId || i}
+                      items={[proposal]}
+                      busy={busy || listening || proposalBusy}
+                      onDecide={onDecide}
+                      apps={apps}
+                    />
+                  );
                 const tool = m.result?.ok;
                 const tested = tool?.revision && tool?.backendTestsPassed;
                 const failed = tool?.backendTestsPassed === false || tool?.released === false;
@@ -591,7 +611,10 @@ export function ChatPanel({
                   </details>
                 ))}
               <Proposals
-                items={proposals}
+                items={proposals.filter(
+                  (p) =>
+                    p.state === 'pending' && !messages.some((m) => m.result?.ok?.proposal === p.id),
+                )}
                 busy={busy || listening || proposalBusy}
                 onDecide={onDecide}
                 apps={apps}

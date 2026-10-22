@@ -2,6 +2,14 @@ import { h, Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { Icon } from './ui.jsx';
 
+function preview(notification) {
+  const text = notification.body || '';
+  // Older conversation titles were cut at 80 characters without an ellipsis.
+  if (notification.href?.startsWith('/chat/') && [...text].length === 80) {
+    return text.replace(/\s+\S*$/u, '') + '…';
+  }
+  return text;
+}
 export function Notifications({ api, attempt, navigate }) {
   const [items, setItems] = useState([]);
   const refresh = () => api('/api/notifications').then(setItems);
@@ -25,24 +33,26 @@ export function Notifications({ api, attempt, navigate }) {
       <div class="apps-heading">
         <h2 id="notifications-title">Notifications</h2>
         {unread > 0 && <span aria-label={`${unread} unread`}>{unread} unread</span>}
+        {unread > 0 && (
+          <button
+            class="secondary-button"
+            disabled={!unread}
+            onClick={() =>
+              attempt(async () => {
+                await api('/api/notifications', { all: true });
+                await refresh();
+              })
+            }
+          >
+            Mark all read
+          </button>
+        )}
       </div>
       <div class="notification-list">
         {unread === 0 ? (
           <p>You’re all caught up.</p>
         ) : (
           <Fragment>
-            <button
-              class="secondary-button"
-              disabled={!unread}
-              onClick={() =>
-                attempt(async () => {
-                  await api('/api/notifications', { all: true });
-                  await refresh();
-                })
-              }
-            >
-              Mark all read
-            </button>
             {unreadItems.map((n) => (
               <button
                 key={n.id}
@@ -55,9 +65,14 @@ export function Notifications({ api, attempt, navigate }) {
                   })
                 }
               >
-                {!n.read && <span aria-label="Unread">• </span>}
-                <strong>{n.title}</strong>
-                <p>{n.body}</p>
+                <span class="notification-symbol" aria-hidden="true">
+                  <Icon name="chat" size={20} />
+                </span>
+                <span class="notification-copy">
+                  <strong>{n.title}</strong>
+                  <span class="notification-preview">{preview(n)}</span>
+                </span>
+                <Icon name="chevron" size={16} />
               </button>
             ))}
           </Fragment>

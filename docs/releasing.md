@@ -1,50 +1,36 @@
-# Preparing a public release
+# Releasing LittleSpaces
 
-The project is an experimental application with one owner and invited applet guests. Repository polish and source publication do not establish production readiness. Keep the product scope fixed while improving documentation, reproducibility, and release evidence.
+Docker Compose is the supported deployment. Native archives are development and diagnostic artifacts. Releases remain experimental; report tested behavior and remaining gaps plainly.
 
-The [2026-10-16 release review](release-review-2026-10-16.md) records the bounded single-user review and its local evidence; remote candidate checks remain a separate gate.
+## Prepare
 
-## Source repository
+1. Update the version in `rust/Cargo.toml`, `rust/Cargo.lock`, and the runtime package files. Update installation examples and write release notes.
+2. Run the relevant [contributor checks](../CONTRIBUTING.md#focused-checks), `python3 scripts/test-compose-config.py`, and `python3 scripts/test-compose.py --build`. The container test uses disposable volumes and synthetic data.
+3. Commit to `main` and require green **Rust monolith** and **Production containers** workflows for that exact commit on AMD64 and ARM64. Check dependency audits as well as runtime tests.
+4. Tag the tested commit `vX.Y.Z` and push the tag. Wait for its container workflow to publish matching app and verifier version tags before publishing the GitHub release.
 
-- Confirm that the intended revision contains the Rust implementation on `main` and that installation instructions name the intended release tag.
-- Review the tracked tree and Git history for private data before changing repository visibility or publishing a new public mirror. Ignore rules do not remove previously committed secrets. Rotate exposed credentials if any are found.
-- Verify the README from a clean checkout, including browser installation, owner setup, restart, and a synthetic app workflow. Confirm local documentation links and advertised commands.
-- Configure GitHub private vulnerability reporting or publish a maintainer-approved private contact. Keep `SECURITY.md` accurate. GitHub community templates may require the maintained version to be on the default branch to appear normally.
-- Review branch protection and required CI checks on the intended default branch. Changing the default branch, merging, tagging, and publishing are separate maintainer actions.
+Real ChatGPT tests consume account usage and require explicit authorization. Keep prompts, credentials, screenshots and workspaces out of commits and release assets. Ordinary CI uses synthetic providers. When testing model behavior, record the model, scenario and observed outcome separately from fixture results.
 
-## Validation
+Release notes should cover user-visible changes, setup/update steps, compatibility and known limitations. Do not describe browser fixtures as real-account tests or a successful scenario as a guarantee for every generated app. Keep historical reviews as dated evidence, not current installation instructions.
 
-Run the [contributor checks](../CONTRIBUTING.md#focused-checks) against the exact release revision. Observe both Linux AMD64 and ARM64 CI results, including synthetic browser tests and the production smoke against the packaged executable. Record the commit, toolchain, target, and results; do not reuse dated evidence as a new pass.
+## Images and deployment
 
-Inspect both dependency audits and any unmaintained-package warnings. Real ChatGPT tests are optional, explicit account-usage operations; ordinary CI must remain synthetic. Record physical-device and deployment gaps instead of implying they were tested.
+CI publishes architecture images after each container smoke test, then combines them into `sha-<full-commit>` images. A version tag also produces `vX.Y.Z` images. App and verifier must use matching tags or digests. Confirm registry visibility and record the deployed image digests.
 
-## Production containers
+Follow the [deployment guide](../deploy/README.md) for normal updates: retain `.env`, secrets, project name and volumes; pull images and run `docker compose up -d --no-build --wait`. Check readiness, HTTPS, saved account state and existing app data. Updating does not require a special rollback backup. A downgrade requires compatible data; never open a newer workspace with an older binary.
 
-Docker Compose is the supported production delivery. Require green `Production containers` AMD64 and ARM64 jobs for the exact commit, as well as the existing core/browser/advisory checks. CI pushes architecture images only after the real-container smoke passes and creates a multi-architecture `sha-<full-commit>` manifest only after both architectures pass. `v*` source tags also create matching version tags; tagging remains a maintainer release action. Verify package visibility separately from repository visibility. Record both app and verifier image digests, and use them together.
+Physical-device voice/push behavior, provider credential renewal and off-host recovery need separate testing. State which were actually checked.
 
-Run `python3 scripts/test-compose-config.py` and `python3 scripts/test-compose.py --build` locally before pushing. This uses the same production Dockerfile and Compose stack on Docker Desktop or native Linux; no real credentials are needed. Tailnet registration, certificates, OAuth renewal and off-host backups still need qualification in their actual environment.
+## Native diagnostic packages
 
-## Development binary packages
-
-Native archives remain diagnostic/developer artifacts, not a second supported production installation path.
-
-Build an ordinary optimized executable without `development-fixtures`. Install locked web dependencies and generate the local target's notice inventory into a new directory before packaging:
+Generate notices for the actual target and toolchain, then package into a new directory:
 
 ```sh
 python3 scripts/generate-notices.py build-rust/notices --openssl-notice /usr/share/doc/libssl-dev/copyright
 python3 scripts/package-release.py build-rust/release
+python3 scripts/production-smoke.py --binary build-rust/release/little-spaces
 ```
 
-The OpenSSL path above is for Debian/Ubuntu. On Homebrew macOS, use `"$(brew --prefix openssl@3)/LICENSE.txt"`. The inventory also includes the installed Rust standard library’s original `COPYRIGHT-library.html` and compiler identity. Generation fails on missing dependency texts; the package refuses a stale target/toolchain/lockfile inventory or changed notice contents. For another build, use a fresh checkout or move the prior generated output aside. Inspect `third-party/manifest.json` and its original texts, including nested native-library notices. Node and downloaded browsers are separately installed, not redistributed by this package.
+The OpenSSL path is for Debian/Ubuntu; on Homebrew macOS use `"$(brew --prefix openssl@3)/LICENSE.txt"`. Packaging rebuilds locked dependencies and the optimized executable for the local target. Do not edit the checkout while it runs. Use a fresh notice directory or pass an existing compatible inventory with `--notices`.
 
-Use `scripts/package-release.py` with a new destination. It reinstalls locked npm dependencies, rebuilds the frontend, and runs a locked optimized Cargo build for the explicit local host target before copying that target’s executable. This prevents an older binary or frontend build from being labeled with the current checkout’s commit. Packaging requires the build toolchain and dependency access/cache; it is not an offline archive-only operation. Do not edit the checkout while packaging. Custom Cargo configuration and compiler flags remain part of the trusted build environment. Run `python3 scripts/production-smoke.py --binary build-rust/release/little-spaces` to verify the actual packaged executable. Inspect its public-file allowlist, resulting files, recorded commit/dirty flag, and `SHA256SUMS`. A public release should identify a clean, immutable source revision and contain no workspace, authentication files, keys, or private test output.
-
-The allowlist names individual license files as well as application files; extra local files are excluded. Packaging rejects symlinked inputs, unsafe notice paths, missing files, and checksum mismatches before creating output. Run `python3 scripts/test-release.py` to verify these boundaries. To keep an earlier notice inventory, generate into a new directory and pass that directory with `--notices`. Optimized Rust builds require the frontend assets to exist. CI uploads each architecture's package only after its synthetic browser suite passes; still require all candidate jobs to be green before publishing.
-
-Release notes should state the experimental one-owner/shared-applet scope, platform/toolchain requirements, workspace format, setup instructions, known limitations, and tested upgrade/rollback path. Do not promise compatibility with the discarded public-app workspace format or older Svelte/QuickJS data.
-
-## Deployment qualification
-
-Before calling a deployment production-qualified, follow the [deployment guide](../deploy/README.md) on the actual host: HTTPS/proxy behavior, fresh OAuth and refresh, verifier availability, process restart, and an off-host backup/restore drill. Device voice/push behavior requires device testing.
-
-The [readiness review](production-readiness.md) and [implementation history](rhai/status.md) preserve earlier findings. Their historical blockers and test counts must be read alongside later dated updates; do not remove unresolved limitations merely to prepare a release.
+Inspect the public-file allowlist, recorded commit/dirty flag, `SHA256SUMS`, and third-party notices. Never include workspaces, credentials or private test output. `scripts/test-release.py` checks symlink, notice and checksum boundaries. Release packages must identify a clean immutable revision.

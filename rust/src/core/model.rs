@@ -184,6 +184,7 @@ errors! {
     ProviderRequest,
     ModelUnavailable,
     ContextLimit,
+    ToolLoop,
     ContentBlocked,
     RecoveryRequired,
     JobBudget,

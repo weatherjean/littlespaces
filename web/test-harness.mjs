@@ -50,6 +50,7 @@ const source = http.createServer((req, res) => {
     redirect: `fetch('/redirect').catch(() => {})`,
     websocket: `new Promise(resolve => { const ws = new WebSocket('${outside.replace('http:', 'ws:')}'); ws.onerror = ws.onclose = resolve; })`,
     ordinary: `fetch('/allowed').then(r => r.text()).then(text => { if (text !== 'allowed') throw Error(text); })`,
+    overflow: `Promise.resolve()`,
     teardown: `Promise.all(Array.from({length: 24}, (_, i) => {
       fetch('/background?request=' + i).catch(() => {});
       return new Promise(resolve => setTimeout(resolve, 30));
@@ -59,7 +60,7 @@ const source = http.createServer((req, res) => {
   res.setHeader('content-type', 'text/html');
   res.end(`<iframe id="frame" srcdoc="<body>waiting</body>"></iframe><script>
     onload = async () => { await (${operation});
-      document.querySelector('iframe').contentDocument.body.textContent = 'complete'; };
+      document.querySelector('iframe').contentDocument.body.innerHTML = '${mode === 'overflow' ? '<div style=width:900px>complete</div>' : 'complete'}'; };
     </script>`);
 });
 let harness;
@@ -99,6 +100,20 @@ try {
     assert.equal(externalRequests, 0, `${mode} escaped the verifier origin`);
   }
   assert.ok(backgroundRequests > 0, 'teardown exercised in-flight HTTP requests');
+  const overflowing = await fetch(harness.url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      url: `${origin}/preview-test/synthetic?mode=overflow`,
+      steps: [{ action: 'text', selector: 'body', contains: 'complete' }],
+    }),
+  }).then((r) => r.json());
+  assert.equal(overflowing.passed, false, 'Wide content must fail layout verification');
+  assert.ok(overflowing.errors.some((error) => error.includes('Layout overflows at 320px')));
+  assert.deepEqual(
+    overflowing.layouts.map((layout) => layout.width),
+    [390, 320, 1280],
+  );
   await harness.close();
   harness = await startHarness({
     token,

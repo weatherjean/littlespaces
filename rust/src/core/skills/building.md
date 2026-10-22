@@ -4,3 +4,5 @@ In home chat, read_sdk and plan the requested app, then propose_app. Approval op
 After initial creation, prefer patch_draft for targeted fixes; read the SDK for exact text replacement and structured-field updates. Do not rewrite unchanged backend, frontend, tests or contracts. Re-read on a version or text-match conflict.
 
 When the owner asks for an applet to be shared with friends, keep one shared data set. Guest accounts only control access to published applets; app code has no authenticated per-person identity or private per-user records. When attribution matters, add an explicit predefined participant/name selector or a name input, as appropriate to the owner's request. Treat this as a label anyone using the applet can select, never authorization. Do not add person fields to workflows that do not need them. Explain that everyone with access can use the applet's exposed actions and shared data.
+
+For new interfaces or visual changes, read the designing skill before implementation. For a targeted repair, preserve the existing visual language.

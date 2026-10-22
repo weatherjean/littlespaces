@@ -16,7 +16,7 @@
   "duplicate_invocation": "This operation was already started. Check its existing result instead of submitting it again.",
   "approval_required": "This change needs your approval before it can proceed.",
   "unauthorized": "Sign in to your workspace again. Saved work is kept.",
-  "shared_chatgpt_connection": "This test workspace shares its ChatGPT connection. Manage that connection in the main workspace’s Settings.",
+  "shared_chatgpt_connection": "This test workspace shares its ChatGPT connection. Manage that connection in the main workspace\u2019s Settings.",
   "model": "ChatGPT returned an unexpected response. Saved work is kept; you can continue from the last checkpoint.",
   "authentication": "Reconnect ChatGPT in Settings, then continue the saved job.",
   "browser_unavailable": "Automated browser verification is unavailable. Review the isolated preview before publishing.",
@@ -38,5 +38,6 @@
   "job_budget": "This job reached its step budget. Progress is saved; choose Continue to allow another block of work.",
   "interrupted": "The server stopped before this older job had a recoverable checkpoint. Saved work is kept; send a new message to continue.",
   "model_event_limit": "ChatGPT sent a response event larger than this app can safely read (4 MiB). The partial reply and saved work are kept; no tools from that response were run.",
-  "model_output_limit": "ChatGPT produced more output than this app can safely retain. The partial reply and saved work are kept; no tools from that response were run."
+  "model_output_limit": "ChatGPT produced more output than this app can safely retain. The partial reply and saved work are kept; no tools from that response were run.",
+  "tool_loop": "The build stopped after repeatedly reading unchanged data. Your draft is saved. Continue saved work to retry."
 }

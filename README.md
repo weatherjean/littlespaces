@@ -1,87 +1,53 @@
 # LittleSpaces
 
-A self-hosted workspace for building and using personal apps through conversation.
+Build and use personal apps through conversation, on your own VPS.
 
-Describe what you need, approve the proposed app, and let LittleSpaces build and verify it. Your apps run in your own workspace, with persistent data, chat, schedules, and recovery points. Ordinary app use does not require a model request.
+Describe an app, approve the proposal, and LittleSpaces builds, tests, and publishes it. Apps keep their data between updates and can run without model requests. One owner manages the workspace and ChatGPT connection; invited guests can use selected applets and their shared data.
 
-Version 0.1.0 supports **one owner and invited guests** in a shared workspace. The owner builds applets through chat; guests sign in with email/password and can use selected published applets. There is still one active ChatGPT connection, available only to the owner. See [guest sharing](docs/guest-sharing.md) for setup and boundaries.
+## Install
 
-## What it does
-
-- Builds personal apps with a Preact interface and restricted Rhai backend actions.
-- Tests generated backends and browser behavior before automatic publication.
-- Saves app records and SQLite data locally, with versioned releases and recovery points.
-- Supports app conversations, owner-confirmed voice writes, images, schedules, and notifications.
-- Runs the host as one Rust executable with embedded frontend assets. A separate Node/Playwright service verifies newly generated interfaces.
-
-## Run with Docker Compose
-
-Docker Compose on a VPS is the supported user deployment. Install Docker with Compose 2.24+ and Python 3.9+ for the configuration helper. Point a domain at the VPS and allow ports 80/443. Use at least 4 GiB RAM. The images include the application, Codex runtime and sandboxed browser verifier.
+You need a VPS with Docker Compose 2.24+, Python 3.9+, at least 4 GiB RAM, a domain pointing to it, and ports 80/443 open.
 
 ```sh
 git clone https://github.com/weatherjean/littlespaces.git
 cd littlespaces
+git checkout v0.2.0
 python3 scripts/configure-compose.py --mode traefik \
   --origin https://apps.example.com --acme-email you@example.com \
-  --image-tag sha-REPLACE_WITH_TESTED_COMMIT
+  --image-tag v0.2.0
 docker compose pull
 docker compose up -d --no-build --wait
+docker compose logs app
 ```
 
-Use a matching tested image tag for the app and verifier from the [releases](https://github.com/weatherjean/littlespaces/releases). Version 0.1.0 predates device-code sign-in; use a later build for this flow.
+Use matching app and verifier versions. For unreleased fixes, choose a commit whose **Production containers** workflow passed and use `sha-` followed by its full commit hash.
 
-Open the private owner-setup link from the logs, choose an email and password, and connect ChatGPT in Settings. ChatGPT is always first in Settings: open the displayed OpenAI link and enter the one-time code. No tunnel or localhost callback is needed. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
+Open the private setup link printed in the app logs and create your owner account. In **Settings → ChatGPT**, choose **Continue with ChatGPT** and approve the one-time code. Model requests use your connected account's allowance.
 
-`docker compose stop` stops the stack; `docker compose up -d --wait` resumes it. Data persists in named volumes. **Do not use `docker compose down --volumes` on your workspace.**
+See the [deployment guide](deploy/README.md) for updates, health checks, private Tailscale access, and backup/restore.
 
-To test the actual production containers locally without an account:
+## Use it
 
-```sh
-python3 scripts/test-compose.py --build
-```
+- Build and update apps through chat. Generated backends and interfaces are tested before publication.
+- Use app chat, images, schedules, notifications, and voice controls.
+- [Invite friends](docs/guest-sharing.md) to selected applets. Their data is shared; participant names are labels, not private accounts inside an applet.
+- Use **Versions & tests** to review releases and restore points. **Settings → Storage & recovery** provides manual cleanup.
 
-This creates a separate disposable project and tests publication, browser verification, restart and backup/restore. See the [deployment guide](deploy/README.md) for prebuilt images, public Traefik HTTPS, private Tailscale access, updates and recovery. Native source development remains documented in [CONTRIBUTING.md](CONTRIBUTING.md#development).
+## Data and limits
 
-## Your data and recovery
+The Docker workspace volume holds your data, encryption key, and ChatGPT credentials. Container updates preserve it. **Do not run `docker compose down --volumes` on a real workspace.** App restore points are not independent backups and cannot undo actions taken by external services.
 
-The workspace volume contains your database and encryption key. Keep both private and together. Never commit it, paste its contents into an issue, or delete it to resolve a startup error.
+LittleSpaces is experimental. Container and browser tests cover the documented flows; they do not establish physical-device support, disaster recovery, or unrestricted workload capacity. Voice and push behavior depend on the browser and device. The offline page does not provide offline access to app data.
 
-App releases retain recovery points. **Versions & tests** provides code reverts and reviewed snapshot restoration. **Settings → Storage & recovery** offers explicit cleanup; it never runs automatically. App recovery points do not replace an independent backup or undo external service actions.
+App interfaces run in sandboxed iframes and backend actions run in restricted workers. Published backends can use the workspace's integration secrets, so review what you share. See [SECURITY.md](SECURITY.md).
 
-With the app stopped, create an offline backup inside its volume, then export it:
+## Development and reference
 
-```sh
-docker compose stop app
-docker compose run --rm --no-deps app backup /data/workspace /data/backup-before-upgrade
-mkdir -p backups
-docker compose cp app:/data/backup-before-upgrade ./backups/
-docker compose start app
-```
-
-Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; version 0.1.0 upgrades workspace versions 4/5 → 6. See [guest-sharing migration notes](docs/guest-sharing.md) before trying it. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
-
-## Status and boundaries
-
-This is an experimental source project, not a production-qualified release. The core has synthetic Rust and browser regression coverage and documented local real-model checks. Target-host HTTPS/OAuth, physical-device behavior, and off-host recovery still need qualification. See the [release checklist](docs/releasing.md) and [dated readiness evidence](docs/production-readiness.md).
-
-App interfaces run in sandboxed iframes. Backend actions run in disposable workers with resource limits. Published backends can use **all integration secrets in the workspace**; those values remain host-managed. Treat generated app behavior and its external effects as something the owner must review. See the [security policy and trust model](SECURITY.md).
-
-Native Windows hosting is not supported. Voice and push behavior depend on the browser/device; remote hosting requires HTTPS. An offline fallback is included, but apps require the running host to access their data.
-
-## Hosting
-
-Use the same Compose stack with either the Traefik HTTPS overlay or the private Tailscale overlay. Native systemd deployment is no longer maintained. The [deployment guide](deploy/README.md) covers the access options, OAuth callback tunnel, health checks, upgrades and backup/restore. Remote deployment still requires qualification on the actual host.
-
-## Contributing
-
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) for development, checks, and contribution scope. Bug reports, reproducible setup problems, documentation improvements, and focused reliability fixes are welcome. Discuss major product or architecture changes before implementing them.
-
-- [Rhai/Preact SDK](docs/rhai/sdk.md)
-- [Frontend guide](docs/rhai/frontend.md)
+- [Contributing and checks](CONTRIBUTING.md)
+- [Release process](docs/releasing.md)
+- [ChatGPT connection](docs/rhai/sign-in.md)
+- [Applet SDK](docs/rhai/sdk.md) and [frontend conventions](docs/rhai/frontend.md)
 - [Terminology](CONTEXT.md)
-- [Implementation history](docs/rhai/status.md)
-- [Security reporting](SECURITY.md)
+- [Historical implementation notes](docs/rhai/status.md)
 
-## License
-
-LittleSpaces is licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and the required generated notice inventory for binary packages.
+Licensed under [MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md).

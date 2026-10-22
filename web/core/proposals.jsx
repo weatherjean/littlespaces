@@ -4,7 +4,10 @@ export function Proposals({ items, busy, onDecide, apps }) {
   return (
     <>
       {items.map((p) => (
-        <article key={p.id} class="proposal-card">
+        <article
+          key={p.id}
+          class={`proposal-card ${p.state !== 'pending' ? 'proposal-resolved' : ''}`}
+        >
           <header>
             <span>
               {p.details.kind === 'app' ? (
@@ -32,7 +35,14 @@ export function Proposals({ items, busy, onDecide, apps }) {
                       : 'Needs review'}
             </small>
           </header>
-          <p>{p.details.kind === 'app' ? p.details.purpose : p.details.summary}</p>
+          {p.state === 'pending' ? (
+            <p>{p.details.kind === 'app' ? p.details.purpose : p.details.summary}</p>
+          ) : (
+            <details class="proposal-plan">
+              <summary>View plan</summary>
+              <p>{p.details.kind === 'app' ? p.details.purpose : p.details.summary}</p>
+            </details>
+          )}
           {p.details.kind === 'action' && (
             <details class="change-details">
               <summary>Review exact change</summary>
@@ -62,19 +72,7 @@ export function Proposals({ items, busy, onDecide, apps }) {
                 Dismiss
               </button>
             </div>
-          ) : (
-            <p class="muted">
-              {p.state === 'cancelled'
-                ? 'Nothing changed.'
-                : p.state === 'completed'
-                  ? p.details.kind === 'app' || p.details.kind === 'update'
-                    ? 'Build approved. The build conversation shows whether the app has been published.'
-                    : 'Done.'
-                  : p.state === 'running'
-                    ? 'Execution started. This request will not be run twice.'
-                    : 'Inspect the result before requesting another change.'}
-            </p>
-          )}
+          ) : null}
         </article>
       ))}
     </>

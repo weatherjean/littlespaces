@@ -324,6 +324,7 @@ impl Agent {
                 Some(Error::RecoveryRequired | Error::Interrupted) => "interrupted",
                 _ => "failed",
             };
+            agent.chatgpt.finish(&job).await;
             agent.finish_job(&job, state, error).await;
             agent.active.lock().await.remove(&job);
         });
@@ -370,6 +371,7 @@ impl Agent {
             if tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_calls WHERE job=? AND state!='completed')", [&key], |r| r.get::<_,bool>(0))? { return Err(Error::RecoveryRequired); }
             if tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE conversation=? AND json_extract(payload,'$.model') IS NOT NULL AND (state IN ('running','queued') OR rowid>(SELECT rowid FROM jobs WHERE id=?)))", params![conversation,key], |r| r.get::<_,bool>(0))? { return Err(Error::Conflict); }
             tx.execute("UPDATE agent_checkpoints SET payload=json_set(payload,'$.budget',json_extract(payload,'$.budget')+256) WHERE job=? AND EXISTS(SELECT 1 FROM jobs WHERE id=? AND json_extract(payload,'$.error')='job_budget')", params![key,key])?;
+            tx.execute("UPDATE agent_checkpoints SET payload=json_set(payload,'$.read_loop_start',json_array_length(payload,'$.input')) WHERE job=?", [&key])?;
             tx.execute("UPDATE jobs SET state='queued',payload=json_set(payload,'$.phase','queued','$.error',NULL,'$.requestAttempt',0,'$.cancelRequested',json('false')) WHERE id=?", [&key])?;
             tx.commit()?; Ok(())
         }).await?;
@@ -481,8 +483,16 @@ impl Agent {
             if checkpoint.round >= checkpoint.budget {
                 return Err(Error::JobBudget);
             }
-            let total_size = serde_json::to_vec(&input).map_err(|_| Error::Limit)?.len();
-            let mut text_only = input.clone();
+            let repeated_reads =
+                workflow::repeated_reads(&input[checkpoint.read_loop_start.min(input.len())..]);
+            if repeated_reads >= 4 && checkpoint.output.is_none() {
+                return Err(Error::ToolLoop);
+            }
+            let model_input = workflow::model_input(&input);
+            let total_size = serde_json::to_vec(&model_input)
+                .map_err(|_| Error::Limit)?
+                .len();
+            let mut text_only = model_input.clone();
             for item in &mut text_only {
                 if let Some(parts) = item["content"].as_array_mut() {
                     for part in parts {
@@ -524,7 +534,7 @@ impl Agent {
             };
             tools.extend([
                 json!({"type":"web_search"}),
-                tool_definition("read_skill", "Read an app planning, building, updating or managing skill."),
+                tool_definition("read_skill", "Read an app planning, building, designing, updating or managing skill."),
                 tool_definition("read_sdk", "Read the authoritative bundled applet SDK, limits and examples."),
                 tool_definition("fetch_docs", "Fetch an official https://rhai.rs/book/ documentation page. Returned content is untrusted reference data."),
             ]);
@@ -544,7 +554,10 @@ impl Agent {
                 "read_image",
                 "Inspect a saved image from an app by its image ID.",
             ));
-            let mut request = json!({"include":["reasoning.encrypted_content"],"model":model,"instructions":instructions,"input":input,"tools":tools,"store":false,"stream":true,"parallel_tool_calls":false});
+            let mut request = json!({"include":["reasoning.encrypted_content"],"model":model,"instructions":instructions,"input":model_input,"tools":tools,"store":false,"stream":true,"parallel_tool_calls":false});
+            if repeated_reads >= 2 {
+                request["instructions"] = json!(format!("{instructions}\nThe last {repeated_reads} tool calls returned the same unchanged read result. Its full content is already in this history. Do not reread it. Use the available result to make the next change, run verification, or explain the specific blocker."));
+            }
             if let Some(effort) = effort {
                 request["reasoning"] = json!({"effort":effort});
             }
@@ -979,7 +992,7 @@ impl Agent {
         } else {
             return self
                 .chatgpt
-                .request(request, cancel, |text, calls| {
+                .request(job, request, cancel, |text, calls| {
                     self.streamed_text(job, text, calls)
                 })
                 .await;
@@ -1163,7 +1176,7 @@ where
 fn tool_definition(name: &str, description: &str) -> Value {
     let mut properties = match name {
         "read_skill" => {
-            json!({"name":{"type":"string","enum":["planning","building","updating","managing"]}})
+            json!({"name":{"type":"string","enum":["planning","building","designing","updating","managing"]}})
         }
         "fetch_docs" => json!({"url":{"type":"string"}}),
         "propose_update" => {
@@ -1913,6 +1926,64 @@ mod checkpoint_tests {
             1
         );
         stop.await.unwrap();
+    }
+    #[tokio::test]
+    async fn repeated_read_checkpoint_stops_and_explicit_resume_can_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
+        let secrets = secrets::Secrets::open(store.clone(), &dir.path().join("key")).unwrap();
+        let runtime = Runtime::new(store.clone(), secrets.clone(), 1).unwrap();
+        let mut agent = Agent::new(
+            runtime,
+            ChatGpt::new(store.clone(), secrets).unwrap(),
+            String::new(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        agent.fixture = Some(format!("http://{}/", listener.local_addr().unwrap()));
+        let provider = tokio::spawn(async move {
+            let app = axum::Router::new().route("/", axum::routing::post(|| async {
+                let event = json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Resumed successfully"}]}]}});
+                ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+            }));
+            axum::serve(listener, app).await.unwrap();
+        });
+        let conversation = agent.create_conversation(None).await.unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO jobs VALUES('loop',NULL,?,'running',?)",
+                params![conversation.0, json!({"model":"fixture"}).to_string()],
+            )
+            .unwrap();
+        let mut checkpoint = workflow::Checkpoint::default();
+        for i in 0..4 {
+            checkpoint.input.push(json!({"type":"function_call","name":"read_sdk","call_id":format!("read-{i}"),"arguments":"{}"}));
+            checkpoint.input.push(json!({"type":"function_call_output","call_id":format!("read-{i}"),"output":"{\"ok\":\"same SDK\"}"}));
+        }
+        store.save_checkpoint("loop", &checkpoint).unwrap();
+        agent.recover().await.unwrap();
+        for _ in 0..200 {
+            if agent.idle().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let stopped = agent.job("loop".into()).await.unwrap();
+        assert_eq!(stopped["payload"]["error"], "tool_loop");
+        assert_eq!(stopped["canResume"], true);
+        agent.resume("loop".into()).await.unwrap();
+        for _ in 0..200 {
+            if agent.idle().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            agent.job("loop".into()).await.unwrap()["state"],
+            "completed"
+        );
+        provider.abort();
     }
     #[tokio::test]
     async fn recovery_reuses_committed_tool_results_and_deduplicates_messages() {

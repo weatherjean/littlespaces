@@ -17,6 +17,19 @@ export async function testMobileReview({ context, origin, app, api, snapshots })
   await page.route('**/api/models', (r) =>
     r.fulfill({ json: [{ slug: 'fixture', display_name: 'Fixture model' }] }),
   );
+  await page.route('**/api/notifications', (r) =>
+    r.fulfill({
+      json: [
+        {
+          id: 'mobile-review',
+          title: 'Reply ready',
+          body: 'A long conversation about tracking meals and daily totals with enough detail to wrap on a phone',
+          href: '/chat/mobile-review',
+          read: false,
+        },
+      ],
+    }),
+  );
   async function snapshot(name, width) {
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
@@ -57,6 +70,17 @@ export async function testMobileReview({ context, origin, app, api, snapshots })
     await snapshot('search-empty', width);
     await page.getByRole('button', { name: 'Clear app search', exact: true }).click();
     await page.getByRole('region', { name: 'Notifications', exact: true }).scrollIntoViewIfNeeded();
+    await page.locator('.notification-card').waitFor();
+    assert.ok(
+      await page
+        .locator('.notification-preview')
+        .evaluate(
+          (el) =>
+            el.getBoundingClientRect().height <=
+            parseFloat(getComputedStyle(el).lineHeight) * 2 + 1,
+        ),
+      `Notification preview stays within two lines at ${width}px`,
+    );
     await snapshot('notifications', width);
 
     await page

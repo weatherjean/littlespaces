@@ -16,3 +16,5 @@ Tool arguments are specific to each operation: test_draft takes expected_version
 SQL errors are fatal to the host action even inside Rhai try/catch; prevalidate user FTS query syntax. In async UI flows disable editing until record loading finishes so late responses cannot overwrite typed input. Browser tests must wait for actual loaded values (value step) and save completion, not static headings; enabled assertions can check readiness. Never remove useful assertions just to publish.
 
 Rhai string `trim()` mutates its receiver and returns unit: use `let title = input.title; title.trim();`, not `let title = input.title.trim();`. Backend tests require `action`, `input`, and exact `expected` JSON, with optional `http` mocks. There is no `expected_error` test field. Preserve input validation rather than weakening contracts to work around the test format.
+
+Before creating an interface or changing its visual design, read_skill(name:"designing"). Apply its mobile-first guidance within the SDK. Preserve the existing visual language for targeted repairs.

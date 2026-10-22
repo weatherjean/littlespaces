@@ -4,3 +4,5 @@ Discover the target with list_apps and app_info; resolve ambiguity before changi
 Inspect current data and release snapshots first. Use authoring release to validate migrations on a copy and automatically publish. Use prepare_release and apply_release for code reverts, repairs and selective preservation from newer data. Existing data changes or snapshot restoration require owner review of the exact saved plan. See read_sdk for tool shapes.
 
 After initial creation, prefer patch_draft for targeted fixes; read the SDK for exact text replacement and structured-field updates. Do not rewrite unchanged backend, frontend, tests or contracts. Re-read on a version or text-match conflict.
+
+For new interfaces or visual changes, read the designing skill before implementation. For a targeted repair, preserve the existing visual language.
