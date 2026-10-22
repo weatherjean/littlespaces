@@ -4,7 +4,7 @@ A self-hosted workspace for building and using personal apps through conversatio
 
 Describe what you need, approve the proposed app, and let LittleSpaces build and verify it. Your apps run in your own workspace, with persistent data, chat, schedules, and recovery points. Ordinary app use does not require a model request.
 
-This branch experiments with **one owner and invited guests** in a shared workspace. The owner builds applets through chat; guests sign in with email/password and can use selected published applets. There is still one active ChatGPT connection, available only to the owner. See [the guest-sharing experiment](docs/guest-sharing.md) for setup and boundaries.
+Version 0.1.0 supports **one owner and invited guests** in a shared workspace. The owner builds applets through chat; guests sign in with email/password and can use selected published applets. There is still one active ChatGPT connection, available only to the owner. See [guest sharing](docs/guest-sharing.md) for setup and boundaries.
 
 ## What it does
 
@@ -18,10 +18,10 @@ This branch experiments with **one owner and invited guests** in a shared worksp
 
 Docker Compose is the supported deployment on Linux servers and Docker Desktop. Install Docker with Compose 2.24+ and Python 3.9+ for the configuration helper. The containers include Rust, Node and browser runtime dependencies; no host compiler is required. Allow at least 4 GiB RAM (8 GiB for source builds).
 
-The single-user implementation currently lives on `rework/rust-monolith-rhai`; `main` still contains the older implementation.
+Version `v0.1.0` is the first experimental release of the Rust implementation. Ongoing development lives on `main`.
 
 ```sh
-git clone --branch rework/rust-monolith-rhai https://github.com/weatherjean/appsappsapps.git
+git clone --branch v0.1.0 https://github.com/weatherjean/appsappsapps.git
 cd appsappsapps
 python3 scripts/configure-compose.py
 docker compose up -d --build --wait
@@ -56,7 +56,7 @@ docker compose cp app:/data/backup-before-upgrade ./backups/
 docker compose start app
 ```
 
-Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; this experimental branch upgrades workspace versions 4/5 → 6. See [guest-sharing migration notes](docs/guest-sharing.md) before trying it. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
+Backups contain credentials. Protect them like the original workspace and encrypt off-host copies. Restore using a compatible executable; version 0.1.0 upgrades workspace versions 4/5 → 6. See [guest-sharing migration notes](docs/guest-sharing.md) before trying it. Do not open a newer-format workspace with an older binary. See [recovery procedures](CONTRIBUTING.md#cli-and-recovery).
 
 ## Status and boundaries
 

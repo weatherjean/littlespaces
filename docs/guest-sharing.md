@@ -1,6 +1,6 @@
 # Guest-sharing experiment
 
-Branch: `experiment/guest-applet-sharing`.
+Available in `v0.1.0` and on `main`; originally developed on `experiment/guest-applet-sharing`.
 
 The owner registers an email and password. Email is a case-insensitive sign-in identifier; this experiment sends no email and provides no email verification or password recovery. Existing owners sign in with their existing password and an empty email once, then add their email. Existing owner sessions remain valid through migration.
 

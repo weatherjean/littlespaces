@@ -1,8 +1,8 @@
 # Contributing to LittleSpaces
 
-LittleSpaces is an experimental single-user workspace. The current priority is making the existing implementation easy to install, understand, verify, and maintain. Focus contributions on reproducible bugs, documentation, accessibility, tests, and reliability. Discuss new features, multi-user designs, dependency additions, or architectural changes in an issue before starting substantial work.
+LittleSpaces is an experimental workspace with one owner and invited applet guests. The current priority is making the existing implementation easy to install, understand, verify, and maintain. Focus contributions on reproducible bugs, documentation, accessibility, tests, and reliability. Discuss new features, multi-user designs, dependency additions, or architectural changes in an issue before starting substantial work.
 
-The supported source currently lives on `rework/rust-monolith-rhai`. Base pull requests on that branch while `main` still contains the older implementation. Read [terminology](CONTEXT.md), the [frontend guide](docs/rhai/frontend.md), and the [SDK](docs/rhai/sdk.md). The [rewrite sequence](docs/monolith-rework.md) and [implementation history](docs/rhai/status.md) are historical context, not a list of requested features. The supported Rust workspace upgrade is version 4 → 5. Never delete local databases, vault keys or authentication files during source cleanup.
+The supported source lives on `main`. Base pull requests on that branch. Read [terminology](CONTEXT.md), the [frontend guide](docs/rhai/frontend.md), and the [SDK](docs/rhai/sdk.md). The [rewrite sequence](docs/monolith-rework.md) and [implementation history](docs/rhai/status.md) are historical context, not a list of requested features. The supported Rust workspace upgrade is versions 4/5 → 6. Never delete local databases, vault keys or authentication files during source cleanup.
 
 ## Reporting issues and opening pull requests
 
@@ -25,7 +25,7 @@ rust/target/debug/little-spaces init .data-monolith-rework
 node scripts/dev.mjs .data-monolith-rework 5175
 ```
 
-Rust 1.88+; Node 24+ for builds/browser tests only. Web Push encryption links OpenSSL; install `pkg-config libssl-dev` on Linux or `openssl@3` with Homebrew on macOS. Frontend assets are embedded by `rust/build.rs`. Cargo can compile core tests without assets, but `serve` requires a frontend build. The CLI upgrades compatible version-4 workspaces transactionally to version 5. Before the first upgrade it writes `workspace.pre-v5.sqlite`; the encryption key is unchanged. Unknown versions and incompatible table columns are rejected. Never edit user_version to force compatibility.
+Rust 1.88+; Node 24+ for builds/browser tests only. Web Push encryption links OpenSSL; install `pkg-config libssl-dev` on Linux or `openssl@3` with Homebrew on macOS. Frontend assets are embedded by `rust/build.rs`. Cargo can compile core tests without assets, but `serve` requires a frontend build. The CLI upgrades compatible version-4/5 workspaces transactionally to version 6. It preserves a pre-upgrade database (`workspace.pre-v5.sqlite` for version 4, `workspace.pre-v6.sqlite` for version 5); the encryption key is unchanged. Unknown versions and incompatible table columns are rejected. Never edit user_version to force compatibility.
 
 The owner-setup link is private. Never commit passwords, OAuth tokens, owner databases, encryption keys, account screenshots or generated output. The PEM under `rust/tests/fixtures/` is an intentionally generated synthetic signing key, trusted only by its matching fixture JWKS; production identity validation fetches OpenAI's JWKS.
 

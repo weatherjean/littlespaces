@@ -1,12 +1,12 @@
 # Preparing a public release
 
-The project is an experimental single-user application. Repository polish and source publication do not establish production readiness. Keep the product scope fixed while improving documentation, reproducibility, and release evidence.
+The project is an experimental application with one owner and invited applet guests. Repository polish and source publication do not establish production readiness. Keep the product scope fixed while improving documentation, reproducibility, and release evidence.
 
 The [2026-10-16 release review](release-review-2026-10-16.md) records the bounded single-user review and its local evidence; remote candidate checks remain a separate gate.
 
 ## Source repository
 
-- Confirm that the intended revision contains the single-user Rust implementation. Until it is promoted, the README and contribution instructions must name `rework/rust-monolith-rhai`; `main` contains the older application.
+- Confirm that the intended revision contains the Rust implementation on `main` and that installation instructions name the intended release tag.
 - Review the tracked tree and Git history for private data before changing repository visibility or publishing a new public mirror. Ignore rules do not remove previously committed secrets. Rotate exposed credentials if any are found.
 - Verify the README from a clean checkout, including browser installation, owner setup, restart, and a synthetic app workflow. Confirm local documentation links and advertised commands.
 - Configure GitHub private vulnerability reporting or publish a maintainer-approved private contact. Keep `SECURITY.md` accurate. GitHub community templates may require the maintained version to be on the default branch to appear normally.
@@ -41,7 +41,7 @@ Use `scripts/package-release.py` with a new destination. It reinstalls locked np
 
 The allowlist names individual license files as well as application files; extra local files are excluded. Packaging rejects symlinked inputs, unsafe notice paths, missing files, and checksum mismatches before creating output. Run `python3 scripts/test-release.py` to verify these boundaries. To keep an earlier notice inventory, generate into a new directory and pass that directory with `--notices`. Optimized Rust builds require the frontend assets to exist. CI uploads each architecture's package only after its synthetic browser suite passes; still require all candidate jobs to be green before publishing.
 
-Release notes should state the experimental single-user scope, platform/toolchain requirements, workspace format, setup instructions, known limitations, and tested upgrade/rollback path. Do not promise compatibility with the discarded public-app workspace format or older Svelte/QuickJS data.
+Release notes should state the experimental one-owner/shared-applet scope, platform/toolchain requirements, workspace format, setup instructions, known limitations, and tested upgrade/rollback path. Do not promise compatibility with the discarded public-app workspace format or older Svelte/QuickJS data.
 
 ## Deployment qualification
 
