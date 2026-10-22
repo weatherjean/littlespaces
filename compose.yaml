@@ -7,7 +7,6 @@ services:
     command:
       - --entrypoints.app.address=:${LITTLESPACES_PORT:-8080}
       - --entrypoints.app.transport.respondingtimeouts.writeTimeout=360s
-      - --entrypoints.callback.address=:1455
       - --entrypoints.ping.address=:8082
       - --ping.entrypoint=ping
       - --providers.file.filename=/etc/traefik/routes.yml
@@ -85,7 +84,6 @@ services:
     environment:
       LITTLESPACES_PUBLIC_URL: ${LITTLESPACES_PUBLIC_URL:-http://127.0.0.1:8080}
       LITTLESPACES_AUTHORITY: ${LITTLESPACES_AUTHORITY:-127.0.0.1:8080}
-      LITTLESPACES_OAUTH_CALLBACK: http://127.0.0.1:1455/auth/callback
       LITTLESPACES_TRUST_PROXY: "1"
       LITTLESPACES_BROWSER_HARNESS: http://127.0.0.1:5176
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:operator@example.com}

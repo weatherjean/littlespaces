@@ -6,6 +6,11 @@ RUN npm ci --prefix web
 COPY web web
 RUN npm run build --prefix web
 
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS codex
+WORKDIR /opt/codex
+COPY runtime/package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
 FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS build
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
@@ -29,16 +34,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS app
 ARG IMAGE_REVISION=local
 LABEL org.opencontainers.image.source="https://github.com/weatherjean/littlespaces" org.opencontainers.image.revision=$IMAGE_REVISION
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 app && useradd -u 10001 -g app -m app \
     && install -d -m 0700 -o app -g app /data
+COPY --from=codex /usr/local/bin/node /usr/local/bin/node
+COPY --from=codex /usr/local/LICENSE /usr/share/doc/node/LICENSE
+COPY --from=codex /opt/codex /opt/codex
+ENV LITTLESPACES_CODEX_BIN=/opt/codex/node_modules/.bin/codex
 COPY --from=build /usr/local/bin/little-spaces /usr/local/bin/little-spaces
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/littlespaces/
 COPY licenses /usr/share/doc/littlespaces/licenses
 COPY --from=build /notices /usr/share/doc/littlespaces/third-party
 COPY deploy/container/app-entrypoint.sh deploy/container/app-health.sh /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/app-*.sh
+RUN chmod 0755 /usr/local/bin/app-*.sh && /opt/codex/node_modules/.bin/codex --version
 USER 10001:10001
 WORKDIR /data
 ENTRYPOINT ["/usr/local/bin/app-entrypoint.sh"]

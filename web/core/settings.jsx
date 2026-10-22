@@ -30,6 +30,19 @@ export function Settings({
   selected,
   onSelectApp,
 }) {
+  const [connecting, setConnecting] = useState(false);
+  const connectRef = useRef(false);
+  async function startConnection() {
+    if (connectRef.current) return;
+    connectRef.current = true;
+    setConnecting(true);
+    try {
+      await onConnect();
+    } finally {
+      connectRef.current = false;
+      setConnecting(false);
+    }
+  }
   const [secretOpen, setSecretOpen] = useState(false),
     [secretName, setSecretName] = useState(''),
     [scheduleOpen, setScheduleOpen] = useState(false),
@@ -84,20 +97,13 @@ export function Settings({
         </button>
       </header>
       <div class="settings-content">
-        <SharingSettings api={api} apps={apps} />
+        {/* ChatGPT connection must always be the first Settings option, before account and sharing controls. */}
         <section class="setting-card chatgpt-card">
           <span class="setting-icon">
             <Icon name="spark" size={24} />
           </span>
           <div>
             <h3>ChatGPT</h3>
-            {connection?.requiresLocalCallback && (
-              <p class="callback-note">
-                For this VPS connection, first forward local port {connection.callbackPort} to the
-                server over SSH. OpenAI will return to that local callback; tokens stay on the
-                server.
-              </p>
-            )}
             <p>
               {connection?.connected
                 ? `Connected${connection.email ? ' as ' + connection.email : ''}`
@@ -130,12 +136,53 @@ export function Settings({
             >
               Disconnect
             </button>
+          ) : connection?.login?.status === 'pending' ? (
+            <div class="device-signin" aria-live="polite">
+              <p>Open ChatGPT and enter this one-time code.</p>
+              <code class="device-code" aria-label="ChatGPT sign-in code">
+                {connection.login.userCode}
+              </code>
+              <a
+                class="primary-button"
+                href={connection.login.verificationUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open ChatGPT
+              </a>
+              <p>Waiting for approval… This code expires in 10 minutes.</p>
+              <p class="muted">
+                If asked, enable device-code sign-in in ChatGPT → Settings → Security.
+              </p>
+              <button
+                class="secondary-button"
+                onClick={() =>
+                  attempt(async () => {
+                    await api('/api/chatgpt/cancel', {});
+                    await onRefresh();
+                  })
+                }
+              >
+                Cancel sign-in
+              </button>
+            </div>
           ) : (
-            <button class="primary-button" onClick={onConnect}>
-              Continue with ChatGPT
-            </button>
+            <div>
+              {connection?.login?.status === 'error' && (
+                <p class="error" role="alert">
+                  Sign-in expired or was declined. Please try again.
+                </p>
+              )}
+              <button class="primary-button" onClick={startConnection} disabled={connecting}>
+                {connecting ? 'Getting sign-in code…' : 'Continue with ChatGPT'}
+              </button>
+              <p class="muted">
+                Sign in with a one-time code. No terminal or callback setup needed.
+              </p>
+            </div>
           )}
         </section>
+        <SharingSettings api={api} apps={apps} />
         <PushSettings api={api} />
         <StorageSettings api={api} />
         <section class="setting-card">

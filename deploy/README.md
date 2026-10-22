@@ -14,7 +14,7 @@ docker compose up -d --build --wait
 
 Open http://127.0.0.1:8080. Retrieve the private first-time setup link with `docker compose logs app`; do not share those logs. The app creates a fresh workspace only if its directory does not exist. Existing data and encryption keys survive container replacement. Set your own owner password and connect ChatGPT in Settings. Local mode publishes only loopback ports, not your LAN.
 
-For a different local port, use `--origin http://127.0.0.1:18080` when configuring. Port 1455 is reserved for the ChatGPT callback. Stop any other application using it while signing in.
+For a different local port, use `--origin http://127.0.0.1:18080` when configuring. Local mode is for development diagnostics; VPS HTTPS is the supported user deployment.
 
 Run the same production images through a disposable test project:
 
@@ -69,13 +69,9 @@ To switch an existing deployment, stop with `docker compose down` (retain volume
 
 ## ChatGPT sign-in on a remote host
 
-The callback remains `http://127.0.0.1:1455/auth/callback`. The stack exposes a callback-only gateway listener on host loopback 1455. On the computer running your browser, keep this tunnel open during sign-in:
+Open Settings → Continue with ChatGPT. Open the displayed OpenAI page, enter the one-time code, and approve the connection. LittleSpaces detects completion automatically. If required, enable device-code sign-in in ChatGPT Settings → Security or workspace permissions. This is the sole supported connection flow; no terminal, local callback, port forwarding or token-file transfer is required.
 
-```sh
-ssh -N -L 1455:127.0.0.1:1455 user@your-server
-```
-
-The SSH hostname may be your Tailscale-connected host. Tailscale Serve does not replace this OAuth loopback callback. Normal API/UI traffic cannot use the callback listener. Local Docker Desktop needs no tunnel. Never forward port 1455 publicly. Tokens stay encrypted in the workspace; verifier and Tailscale containers cannot mount that volume.
+ChatGPT credentials live at `/data/workspace/codex/auth.json` in the persistent workspace volume. The app image includes pinned Codex 0.163.0 and Node 24. The provider process uses private stdin/stdout; no Codex network port is exposed. Workspace backups include its credential file. Do not share those backups or mount the workspace in other containers. See [connection details](../docs/rhai/sign-in.md).
 
 ## Health, sandbox and recovery
 

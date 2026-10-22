@@ -6,7 +6,6 @@ services:
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=app
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --entrypoints.callback.address=:1455
       - --entrypoints.ping.address=:8082
       - --ping.entrypoint=ping
       - --providers.file.filename=/etc/traefik/routes.yml
@@ -19,7 +18,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "127.0.0.1:1455:1455"
     volumes:
       - acme:/acme
 volumes:

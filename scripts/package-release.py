@@ -18,7 +18,7 @@ PUBLIC_FILES = ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "CONTRIBUTING.
                  "compose.traefik.yaml", "compose.tailscale.yaml",
                  "scripts/configure-compose.py", "deploy/container/routes.yml",
                  "deploy/container/tailscale-serve.json", "deploy/container/chromium-seccomp.json",
-                 "licenses/PLAYWRIGHT-APACHE.txt"] + ["licenses/HTM.txt", "licenses/MARKED.txt", "licenses/PREACT.txt",
+                 "licenses/PLAYWRIGHT-APACHE.txt", "licenses/CODEX-APACHE.txt", "runtime/package.json", "runtime/package-lock.json"] + ["licenses/HTM.txt", "licenses/MARKED.txt", "licenses/PREACT.txt",
                  "licenses/RHAI-APACHE.txt", "licenses/RHAI-MIT.txt",
                  "licenses/upstream/JSONSCHEMA-MIT.txt", "licenses/upstream/RHAI-CODEGEN-MIT.txt",
                  "licenses/upstream/SIMD-MIT.txt", "licenses/upstream/SOURCES.md"]

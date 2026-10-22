@@ -29,3 +29,5 @@ deploy/secrets/
 # Python verification caches
 __pycache__/
 *.py[cod]
+
+runtime/node_modules/

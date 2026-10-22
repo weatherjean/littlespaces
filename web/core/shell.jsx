@@ -306,10 +306,29 @@ function App() {
       setModelsLoading(false);
     }
   }
+  useEffect(() => {
+    if (connection?.login?.status !== 'pending') return;
+    let disposed = false,
+      timer;
+    const poll = async () => {
+      try {
+        const value = await api('/api/chatgpt');
+        if (!disposed) setConnection(value);
+      } catch (error) {
+        if (!disposed) setError(error.message);
+      } finally {
+        if (!disposed) timer = setTimeout(poll, 2500);
+      }
+    };
+    timer = setTimeout(poll, 1500);
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
+  }, [connection?.login?.status]);
   async function connect() {
     await attempt(async () => {
-      const value = await api('/api/chatgpt/start', {});
-      location.assign(value.url);
+      setConnection(await api('/api/chatgpt/start', {}));
     });
   }
   function openConversation(c, overlay = false) {

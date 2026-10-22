@@ -970,21 +970,19 @@ impl Agent {
         let fixture: Option<String> = None;
         #[cfg(test)]
         let fixture = self.fixture.clone().or(fixture);
-        let auth_control = super::control::Control::new(cancel.clone(), Duration::from_secs(1));
-        let (endpoint, access) = if let Some(endpoint) = fixture {
+        let endpoint = if let Some(endpoint) = fixture {
             let url = url::Url::parse(&endpoint).map_err(|_| Error::Validation)?;
             if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") {
                 return Err(Error::Validation);
             }
-            (endpoint, None)
+            endpoint
         } else {
-            (
-                "https://api.openai.com/v1/responses".to_string(),
-                Some(tokio::select! {
-                    _ = auth_control.cancelled() => return Err(Error::Cancelled),
-                    result = self.chatgpt.access_token() => result?,
-                }),
-            )
+            return self
+                .chatgpt
+                .request(request, cancel, |text, calls| {
+                    self.streamed_text(job, text, calls)
+                })
+                .await;
         };
         let started = std::time::Instant::now();
         let client = reqwest::Client::builder()
@@ -995,10 +993,7 @@ impl Agent {
             // three-minute wall-clock timeout while the model is still generating code.
             .build()
             .map_err(|_| Error::Network)?;
-        let mut outgoing = client.post(endpoint).json(&request);
-        if let Some(access) = &access {
-            outgoing = outgoing.bearer_auth(access.as_str());
-        }
+        let outgoing = client.post(endpoint).json(&request);
         let control = super::control::Control::new(cancel.clone(), Duration::from_secs(600));
         self.request_diagnostic(job, "connect", started, None, None)
             .await?;

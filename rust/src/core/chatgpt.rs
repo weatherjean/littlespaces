@@ -1,683 +1,652 @@
-//! Direct supported Sign in with ChatGPT. No Codex cache, executable, or browser token storage.
-use super::{
-    owner::{now, token},
-    secrets::Secrets,
-    *,
-};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
-use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
+//! VPS-only ChatGPT connection through pinned Codex app-server device authorization.
+//! The child owns its private credential file; neither browser nor app tools receive tokens.
+use super::{owner::now, *};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::{sync::Arc, time::Duration};
-use zeroize::{Zeroize, Zeroizing};
-const ISSUER: &str = "https://auth.openai.com";
-const AUTHORIZE: &str = "https://auth.openai.com/api/accounts/authorize";
-const TOKEN: &str = "https://auth.openai.com/api/accounts/oauth/token";
-const JWKS: &str = "https://auth.openai.com/.well-known/jwks.json";
-const RESOURCE: &str = "https://api.openai.com/v1";
-#[derive(Clone, Serialize, Deserialize)]
-struct Credentials {
-    subject: String,
-    email: Option<String>,
-    client_id: String,
-    access_token: String,
-    refresh_token: String,
-    id_token: String,
-    expires_at: i64,
-    scope: String,
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, ChildStdout},
+};
+
+const RPC_LIMIT: usize = 8 * 1024 * 1024;
+struct Rpc {
+    child: Child,
+    input: ChildStdin,
+    output: BufReader<ChildStdout>,
+    sequence: u64,
+    login_result: Option<(String, bool)>,
+    queued: std::collections::VecDeque<Value>,
 }
-impl Drop for Credentials {
-    fn drop(&mut self) {
-        self.access_token.zeroize();
-        self.refresh_token.zeroize();
-        self.id_token.zeroize();
+impl Rpc {
+    async fn start(home: &Path, executable: &Path) -> Result<Self> {
+        let cwd = home.join("empty-workspace");
+        std::fs::create_dir_all(&cwd).map_err(|_| Error::Storage)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| Error::Storage)?;
+        }
+        let mut command = tokio::process::Command::new(executable);
+        command.args(["app-server", "--listen", "stdio://"]);
+        // No local tools, plugins, MCP, project config, or inherited account/environment.
+        // All application effects return through Rust's durable, authorized tool dispatcher.
+        for setting in [
+            "cli_auth_credentials_store=\"file\"",
+            "analytics.enabled=false",
+            "check_for_update_on_startup=false",
+            "features.shell_tool=false",
+            "features.unified_exec=false",
+            "features.apply_patch_freeform=false",
+            "features.code_mode=false",
+            "features.multi_agent=false",
+            "features.apps=false",
+            "features.plugins=false",
+            "tools.view_image=false",
+            "web_search=\"live\"",
+            "approval_policy=\"never\"",
+            "sandbox_mode=\"read-only\"",
+            "project_doc_max_bytes=0",
+            "mcp_servers={}",
+        ] {
+            command.args(["-c", setting]);
+        }
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", home)
+            .env("CODEX_HOME", home)
+            .env("TMPDIR", "/tmp")
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(|_| Error::ProviderUnavailable)?;
+        let input = child.stdin.take().ok_or(Error::ProviderUnavailable)?;
+        let output = BufReader::new(child.stdout.take().ok_or(Error::ProviderUnavailable)?);
+        let mut rpc = Self {
+            child,
+            input,
+            output,
+            sequence: 0,
+            login_result: None,
+            queued: std::collections::VecDeque::new(),
+        };
+        rpc.call("initialize", json!({"clientInfo":{"name":"little_spaces","title":"LittleSpaces","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
+        rpc.send(json!({"method":"initialized"})).await?;
+        Ok(rpc)
+    }
+    async fn send(&mut self, value: Value) -> Result<()> {
+        let mut bytes = serde_json::to_vec(&value).map_err(|_| Error::Model)?;
+        if bytes.len() > RPC_LIMIT {
+            return Err(Error::ContextLimit);
+        }
+        bytes.push(b'\n');
+        self.input
+            .write_all(&bytes)
+            .await
+            .map_err(|_| Error::StreamInterrupted)?;
+        self.input
+            .flush()
+            .await
+            .map_err(|_| Error::StreamInterrupted)
+    }
+    async fn read(&mut self) -> Result<Value> {
+        if let Some(message) = self.queued.pop_front() {
+            return Ok(message);
+        }
+        self.read_wire().await
+    }
+    async fn read_wire(&mut self) -> Result<Value> {
+        let mut bytes = Vec::new();
+        loop {
+            let buffer = self
+                .output
+                .fill_buf()
+                .await
+                .map_err(|_| Error::StreamInterrupted)?;
+            if buffer.is_empty() {
+                return Err(Error::StreamInterrupted);
+            }
+            let end = buffer.iter().position(|b| *b == b'\n');
+            let count = end.map(|n| n + 1).unwrap_or(buffer.len());
+            if bytes.len() + count > RPC_LIMIT {
+                return Err(Error::Limit);
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            self.output.consume(count);
+            if end.is_some() {
+                break;
+            }
+        }
+        let message: Value = serde_json::from_slice(&bytes).map_err(|_| Error::Model)?;
+        if message["method"] == "account/login/completed" {
+            if let (Some(id), Some(success)) = (
+                message["params"]["loginId"].as_str(),
+                message["params"]["success"].as_bool(),
+            ) {
+                self.login_result = Some((id.into(), success));
+            }
+        }
+        Ok(message)
+    }
+    async fn deny(&mut self, message: &Value) -> Result<()> {
+        if message.get("id").is_some() && message.get("method").is_some() {
+            self.send(json!({"id":message["id"],"error":{"code":-32601,"message":"Unavailable in LittleSpaces"}})).await?;
+        }
+        Ok(())
+    }
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.sequence += 1;
+        let id = self.sequence;
+        self.send(json!({"id":id,"method":method,"params":params}))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(45), async {
+            loop {
+                let message = self.read_wire().await?;
+                if message["id"] == id && message.get("method").is_none() {
+                    if message.get("error").is_some() {
+                        return Err(Error::ProviderRequest);
+                    }
+                    return message.get("result").cloned().ok_or(Error::Model);
+                }
+                if method == "turn/start"
+                    && message["method"]
+                        .as_str()
+                        .is_some_and(|m| m.starts_with("item/") || m.starts_with("turn/"))
+                {
+                    if self.queued.len() >= 256 {
+                        return Err(Error::Limit);
+                    }
+                    self.queued.push_back(message);
+                } else {
+                    self.deny(&message).await?;
+                }
+            }
+        })
+        .await
+        .map_err(|_| Error::ModelTimeout)?
     }
 }
-#[derive(Deserialize)]
-struct Tokens {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
-    #[serde(default)]
-    id_token: String,
-    expires_in: i64,
-    #[serde(default)]
-    scope: String,
-    token_type: String,
-}
-impl Drop for Tokens {
+impl Drop for Rpc {
     fn drop(&mut self) {
-        self.access_token.zeroize();
-        self.refresh_token.zeroize();
-        self.id_token.zeroize();
+        let _ = self.child.start_kill();
     }
 }
-#[derive(Clone)]
-struct Attempt {
-    state: String,
-    verifier: String,
-    nonce: String,
-    redirect: String,
+struct Login {
     owner: String,
+    id: String,
     expires: i64,
-    client_id: Option<String>,
-    subject: Option<String>,
+    code: String,
+    url: String,
 }
-impl Drop for Attempt {
-    fn drop(&mut self) {
-        self.verifier.zeroize();
-        self.nonce.zeroize();
-        self.state.zeroize();
-    }
-}
-#[derive(Deserialize)]
-struct Identity {
-    sub: String,
-    #[serde(default)]
-    email: Option<String>,
-    nonce: String,
-    iat: i64,
+#[derive(Default)]
+struct Connection {
+    rpc: Option<Rpc>,
+    login: Option<Login>,
+    failed: bool,
 }
 #[derive(Clone)]
 pub struct ChatGpt {
     store: Store,
-    secrets: Secrets,
-    client: reqwest::Client,
-    pending: Arc<tokio::sync::Mutex<Option<Attempt>>>,
-    gate: Arc<tokio::sync::Mutex<()>>,
+    home: PathBuf,
+    executable: PathBuf,
+    connection: Arc<tokio::sync::Mutex<Connection>>,
 }
 impl ChatGpt {
-    pub fn new(store: Store, secrets: Secrets) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| Error::Network)?;
+    pub fn new(store: Store, _secrets: super::secrets::Secrets) -> Result<Self> {
+        let home = store.directory().join("codex");
         Ok(Self {
             store,
-            secrets,
-            client,
-            pending: Arc::new(tokio::sync::Mutex::new(None)),
-            gate: Arc::new(tokio::sync::Mutex::new(())),
+            home,
+            executable: std::env::var_os("LITTLESPACES_CODEX_BIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("codex")),
+            connection: Arc::new(tokio::sync::Mutex::new(Connection::default())),
         })
     }
-    async fn saved(&self) -> Result<Option<Credentials>> {
-        let secrets = self.secrets.clone();
+    async fn ensure<'a>(&self, connection: &'a mut Connection) -> Result<&'a mut Rpc> {
+        if connection
+            .rpc
+            .as_mut()
+            .is_some_and(|r| r.child.try_wait().ok().flatten().is_some())
+        {
+            connection.rpc = None;
+            connection.login = None;
+            connection.failed = true;
+        }
+        if connection.rpc.is_none() {
+            connection.rpc = Some(Rpc::start(&self.home, &self.executable).await?);
+        }
+        connection.rpc.as_mut().ok_or(Error::ProviderUnavailable)
+    }
+    async fn owner_valid(&self, owner: String) -> Result<bool> {
         self.store
-            .blocking(move |store| {
-                let encrypted: Option<Vec<u8>> = store
-                    .open()?
-                    .query_row("SELECT ciphertext FROM chatgpt_auth WHERE id=1", [], |r| {
-                        r.get(0)
-                    })
-                    .optional()?;
-                encrypted
-                    .map(|bytes| {
-                        serde_json::from_slice(&secrets.unseal("chatgpt_auth", &bytes)?)
-                            .map_err(|_| Error::Storage)
-                    })
-                    .transpose()
-            })
-            .await
-    }
-    async fn save(&self, credentials: Credentials) -> Result<()> {
-        let secrets = self.secrets.clone();
-        self.store.blocking(move |store| {
-            let bytes=Zeroizing::new(serde_json::to_vec(&credentials).map_err(|_|Error::Storage)?);
-            let encrypted=secrets.seal("chatgpt_auth",&bytes)?;
-            let mut db=store.open()?;let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute("INSERT INTO chatgpt_auth VALUES(1,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext",[encrypted])?;
-            tx.execute("INSERT INTO chatgpt_registration VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET subject=excluded.subject,client_id=excluded.client_id,email=excluded.email",rusqlite::params![credentials.subject,credentials.client_id,credentials.email])?;
-            tx.commit()?;Ok(())
-        }).await
-    }
-    pub async fn status(&self) -> Result<Value> {
-        Ok(match self.saved().await? {
-            Some(c) => {
-                json!({"connected":true,"email":c.email,"planUsage":c.scope.split_whitespace().any(|s|s=="chatgpt.tokens.use.direct")})
-            }
-            None => json!({"connected":false}),
-        })
-    }
-    pub async fn begin(&self, owner: String, redirect: String) -> Result<String> {
-        let _gate = self.gate.lock().await;
-        let url = url::Url::parse(&redirect).map_err(|_| Error::Validation)?;
-        if url.scheme() != "http"
-            || url.host_str() != Some("127.0.0.1")
-            || url.path() != "/auth/callback"
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(Error::Validation);
-        }
-        let saved = self.saved().await?;
-        let registered = self
-            .store
-            .blocking(|store| {
-                Ok(store
-                    .open()?
-                    .query_row(
-                        "SELECT client_id,subject FROM chatgpt_registration WHERE id=1",
-                        [],
-                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                    )
-                    .optional()?)
-            })
-            .await?;
-        let client_id = saved
-            .as_ref()
-            .map(|c| c.client_id.clone())
-            .or_else(|| registered.as_ref().map(|r| r.0.clone()));
-        let subject = saved
-            .as_ref()
-            .map(|c| c.subject.clone())
-            .or_else(|| registered.as_ref().map(|r| r.1.clone()));
-        let host = self
-            .store
-            .blocking(|store| {
-                let db = store.open()?;
-                db.execute(
-                    "INSERT OR IGNORE INTO host_identity VALUES(1,?)",
-                    [format!("urn:uuid:{}", uuid::Uuid::new_v4())],
-                )?;
-                Ok(
-                    db.query_row("SELECT host_id FROM host_identity WHERE id=1", [], |r| {
-                        r.get::<_, String>(0)
-                    })?,
-                )
-            })
-            .await?;
-        let state = token();
-        let nonce = token();
-        let verifier = token();
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let mut url = url::Url::parse(AUTHORIZE).map_err(|_| Error::Authentication)?;
-        {
-            let mut q = url.query_pairs_mut();
-            q.append_pair(
-                "client_id",
-                client_id.as_deref().unwrap_or("dynamic_agent_client"),
-            );
-            q.append_pair("ext_agent_host_id", &host)
-                .append_pair("response_type", "code")
-                .append_pair("redirect_uri", &redirect)
-                .append_pair(
-                    "scope",
-                    "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
-                )
-                .append_pair("resource", RESOURCE)
-                .append_pair("state", &state)
-                .append_pair("nonce", &nonce)
-                .append_pair("code_challenge_method", "S256")
-                .append_pair("code_challenge", &challenge);
-            if client_id.is_none() {
-                q.append_pair("agent_name_hint", "LittleSpaces");
-            }
-        }
-        *self.pending.lock().await = Some(Attempt {
-            state,
-            nonce,
-            verifier,
-            redirect,
-            owner,
-            expires: now() + 600,
-            client_id,
-            subject,
-        });
-        Ok(url.into())
-    }
-    pub async fn tunnel_callback(
-        &self,
-        query: std::collections::BTreeMap<String, String>,
-    ) -> Result<()> {
-        let owner = self
-            .pending
-            .lock()
-            .await
-            .as_ref()
-            .ok_or(Error::Authentication)?
-            .owner
-            .clone();
-        let hash = owner.clone();
-        let valid = self
-            .store
-            .blocking(move |store| {
-                Ok(store.open()?.query_row(
+            .blocking(move |s| {
+                Ok(s.open()?.query_row(
                     "SELECT EXISTS(SELECT 1 FROM owner_sessions WHERE id=? AND expires_at>?)",
-                    rusqlite::params![hash, now()],
-                    |r| r.get::<_, bool>(0),
+                    rusqlite::params![owner, now()],
+                    |r| r.get(0),
                 )?)
             })
+            .await
+    }
+    async fn inspect(&self, c: &mut Connection) -> Result<Value> {
+        if let Some(login) = &c.login {
+            if login.expires < now() || !self.owner_valid(login.owner.clone()).await? {
+                self.ensure(c)
+                    .await?
+                    .call("account/logout", json!({}))
+                    .await?;
+                c.login = None;
+                c.failed = true;
+            }
+        }
+        let result = self
+            .ensure(c)
+            .await?
+            .call("account/read", json!({"refreshToken":false}))
             .await?;
-        if !valid {
+        if let Some(login) = &c.login {
+            if c.rpc
+                .as_ref()
+                .and_then(|r| r.login_result.as_ref())
+                .is_some_and(|(id, success)| id == &login.id && !success)
+            {
+                c.failed = true;
+                c.login = None;
+            } else if result["account"]["type"] == "chatgpt" {
+                c.login = None;
+                c.failed = false;
+            }
+        }
+        let connected = result["account"]["type"] == "chatgpt" && c.login.is_none();
+        let mut status = json!({"connected":connected,"planUsage":connected,"email":result["account"]["email"],"deviceCode":true});
+        if let Some(login) = &c.login {
+            status["login"] = json!({"status":"pending","userCode":login.code,"verificationUrl":login.url,"expiresAt":login.expires});
+        } else if c.failed {
+            status["login"] = json!({"status":"error"});
+        }
+        Ok(status)
+    }
+    pub async fn status(&self) -> Result<Value> {
+        let mut c = self.connection.lock().await;
+        // Fresh installations and fixture tests need not start Codex just to render Settings.
+        if c.rpc.is_none() && !self.home.join("auth.json").exists() {
+            return Ok(json!({"connected":false,"deviceCode":true}));
+        }
+        self.inspect(&mut c).await
+    }
+    pub async fn begin(&self, owner: String) -> Result<Value> {
+        let mut c = self.connection.lock().await;
+        if !self.owner_valid(owner.clone()).await? {
             return Err(Error::Unauthorized);
         }
-        self.callback(&owner, query).await
-    }
-    pub async fn callback(
-        &self,
-        owner: &str,
-        query: std::collections::BTreeMap<String, String>,
-    ) -> Result<()> {
-        let _gate = self.gate.lock().await;
-        let attempt = {
-            let mut pending = self.pending.lock().await;
-            let p = pending.as_ref().ok_or(Error::Authentication)?;
-            use subtle::ConstantTimeEq;
-            if p.expires < now()
-                || p.owner != owner
-                || !bool::from(
-                    p.state
-                        .as_bytes()
-                        .ct_eq(query.get("state").ok_or(Error::Authentication)?.as_bytes()),
-                )
-            {
-                return Err(Error::Authentication);
-            }
-            pending.take().ok_or(Error::Authentication)?
-        };
-        if query.contains_key("error") {
+        if let Some(login) = &c.login {
+            let id = login.id.clone();
+            self.ensure(&mut c)
+                .await?
+                .call("account/login/cancel", json!({"loginId":id}))
+                .await?;
+            c.login = None;
+        }
+        let v = self
+            .ensure(&mut c)
+            .await?
+            .call("account/login/start", json!({"type":"chatgptDeviceCode"}))
+            .await?;
+        let url = v["verificationUrl"].as_str().ok_or(Error::Authentication)?;
+        let parsed = url::Url::parse(url).map_err(|_| Error::Authentication)?;
+        if parsed.origin().ascii_serialization() != "https://auth.openai.com"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || v["type"] != "chatgptDeviceCode"
+        {
             return Err(Error::Authentication);
         }
-        let client_id = match (&attempt.client_id, query.get("client_id")) {
-            (Some(saved), Some(received)) if saved != received => {
-                return Err(Error::Authentication)
-            }
-            (Some(saved), _) => saved.clone(),
-            (None, Some(issued)) if issued.starts_with("oaiapp_") => issued.clone(),
-            _ => return Err(Error::Authentication),
-        };
-        let code = query
-            .get("code")
-            .filter(|c| c.len() < 8192)
+        let code = v["userCode"]
+            .as_str()
+            .filter(|s| {
+                !s.is_empty()
+                    && s.len() <= 64
+                    && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
             .ok_or(Error::Authentication)?;
-        let response = self
-            .client
-            .post(TOKEN)
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("client_id", client_id.as_str()),
-                ("code", code),
-                ("code_verifier", attempt.verifier.as_str()),
-                ("redirect_uri", attempt.redirect.as_str()),
-                ("resource", RESOURCE),
-            ])
-            .send()
-            .await
-            .map_err(|_| Error::Network)?;
-        let tokens: Tokens = self.bounded_json(response).await?;
-        validate_tokens(&tokens)?;
-        let keys: JwkSet = self
-            .bounded_json(
-                self.client
-                    .get(JWKS)
-                    .send()
-                    .await
-                    .map_err(|_| Error::Network)?,
-            )
-            .await?;
-        let identity = validate_identity(&tokens.id_token, &client_id, &attempt.nonce, &keys)?;
-        if attempt.subject.as_ref().is_some_and(|s| s != &identity.sub) {
-            return Err(Error::Authentication);
-        }
-        self.save(Credentials {
-            subject: identity.sub,
-            email: identity.email,
-            client_id,
-            access_token: tokens.access_token.clone(),
-            refresh_token: tokens.refresh_token.clone(),
-            id_token: tokens.id_token.clone(),
-            expires_at: now() + tokens.expires_in,
-            scope: tokens.scope.clone(),
-        })
-        .await
+        let id = v["loginId"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256)
+            .ok_or(Error::Authentication)?;
+        c.login = Some(Login {
+            owner,
+            id: id.into(),
+            expires: now() + 600,
+            code: code.into(),
+            url: url.into(),
+        });
+        c.failed = false;
+        self.inspect(&mut c).await
     }
-    async fn bounded_json<T: serde::de::DeserializeOwned>(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<T> {
-        self.json_with_budget(response, 128 * 1024, Error::Limit)
-            .await
-    }
-    async fn json_with_budget<T: serde::de::DeserializeOwned>(
-        &self,
-        mut response: reqwest::Response,
-        max_bytes: usize,
-        limit_error: Error,
-    ) -> Result<T> {
-        if !response.status().is_success() {
-            return Err(super::provider_errors::response_error(response).await);
+    pub async fn cancel_login(&self) -> Result<()> {
+        let mut c = self.connection.lock().await;
+        if let Some(login) = c.login.take() {
+            self.ensure(&mut c)
+                .await?
+                .call("account/login/cancel", json!({"loginId":login.id}))
+                .await?;
         }
-        let mut bytes = Zeroizing::new(Vec::new());
-        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Network)? {
-            if bytes.len() + chunk.len() > max_bytes {
-                return Err(limit_error);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice(&bytes).map_err(|_| Error::Authentication)
-    }
-    pub(crate) async fn access_token(&self) -> Result<Zeroizing<String>> {
-        let _gate = self.gate.lock().await;
-        let mut c = self.saved().await?.ok_or(Error::Authentication)?;
-        if !c
-            .scope
-            .split_whitespace()
-            .any(|s| s == "chatgpt.tokens.use.direct")
-        {
-            return Err(Error::Authentication);
-        }
-        if c.expires_at <= now() + 60 {
-            if c.refresh_token.is_empty() {
-                return Err(Error::Authentication);
-            }
-            let response = self
-                .client
-                .post(TOKEN)
-                .form(&[
-                    ("grant_type", "refresh_token"),
-                    ("client_id", c.client_id.as_str()),
-                    ("refresh_token", c.refresh_token.as_str()),
-                    ("resource", RESOURCE),
-                ])
-                .send()
-                .await
-                .map_err(|_| Error::Network)?;
-            let t: Tokens = self.bounded_json(response).await?;
-            validate_tokens(&t)?;
-            c.access_token = t.access_token.clone();
-            if !t.refresh_token.is_empty() {
-                c.refresh_token = t.refresh_token.clone();
-            }
-            // Refresh does not establish a new identity; preserve the last validated ID token.
-            if !t.scope.is_empty() {
-                c.scope = t.scope.clone();
-            }
-            c.expires_at = now() + t.expires_in;
-            self.save(c.clone()).await?;
-        }
-        if !c
-            .scope
-            .split_whitespace()
-            .any(|s| s == "chatgpt.tokens.use.direct")
-        {
-            return Err(Error::Authentication);
-        }
-        Ok(Zeroizing::new(c.access_token.clone()))
-    }
-    pub async fn models(&self) -> Result<Value> {
-        let token = self.access_token().await?;
-        let value: Value = self
-            .json_with_budget(
-                self.client
-                    .get("https://api.openai.com/v1/models")
-                    .bearer_auth(token.as_str())
-                    .send()
-                    .await
-                    .map_err(|_| Error::Network)?,
-                4 * 1024 * 1024,
-                Error::ModelCatalogLimit,
-            )
-            .await?;
-        let models = value["models"].as_array().ok_or(Error::Model)?;
-        Ok(json!(models
-            .iter()
-            .filter(|m| m["visibility"] == "list")
-            .filter_map(|m| Some(
-                json!({"slug":m["slug"].as_str()?,"display_name":m["display_name"].as_str()?,"efforts":m["supported_reasoning_levels"].as_array().map(|levels| levels.iter().filter_map(|level|level.as_str().or_else(||level["effort"].as_str())).filter(|level|["none","minimal","low","medium","high","xhigh","max","ultra"].contains(level)).collect::<Vec<_>>()).unwrap_or_default()})
-            ))
-            .collect::<Vec<_>>()))
+        c.failed = false;
+        Ok(())
     }
     pub async fn disconnect(&self) -> Result<bool> {
-        let _gate = self.gate.lock().await;
-        let mut confirmed = true;
-        if let Some(c) = self.saved().await? {
-            let result = async {
-                let response = self
-                    .client
-                    .get("https://auth.openai.com/.well-known/openid-configuration")
-                    .send()
-                    .await
-                    .map_err(|_| Error::Network)?;
-                let document: Value = self.bounded_json(response).await?;
-                let endpoint = document["revocation_endpoint"]
-                    .as_str()
-                    .ok_or(Error::Authentication)?;
-                let url = url::Url::parse(endpoint).map_err(|_| Error::Authentication)?;
-                if url.scheme() != "https"
-                    || url.host_str() != Some("auth.openai.com")
-                    || url.port_or_known_default() != Some(443)
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                {
-                    return Err(Error::Authentication);
-                }
-                self.client
-                    .post(url)
-                    .form(&[
-                        ("client_id", c.client_id.as_str()),
-                        ("token", c.refresh_token.as_str()),
-                        ("token_type_hint", "refresh_token"),
-                    ])
-                    .send()
-                    .await
-                    .map_err(|_| Error::Network)
-            }
-            .await;
-            confirmed = result.is_ok_and(|r| r.status().is_success());
-        }
-        *self.pending.lock().await = None;
-        self.store
-            .blocking(|store| {
-                store.open()?.execute("DELETE FROM chatgpt_auth", [])?;
-                Ok(())
-            })
+        let mut c = self.connection.lock().await;
+        self.ensure(&mut c)
+            .await?
+            .call("account/logout", json!({}))
             .await?;
-        Ok(confirmed)
+        c.login = None;
+        c.failed = false;
+        Ok(false) // Local logout; do not claim provider-side revocation.
     }
-}
-fn validate_tokens(t: &Tokens) -> Result<()> {
-    if !t.token_type.eq_ignore_ascii_case("bearer")
-        || t.access_token.is_empty()
-        || t.access_token.len() > 32768
-        || t.expires_in <= 0
-        || t.expires_in > 86400 * 7
+    pub async fn models(&self) -> Result<Value> {
+        let mut c = self.connection.lock().await;
+        if self.inspect(&mut c).await?["connected"] != true {
+            return Err(Error::Authentication);
+        }
+        let mut models = Vec::new();
+        let mut cursor = Value::Null;
+        for _ in 0..20 {
+            let result = self
+                .ensure(&mut c)
+                .await?
+                .call("model/list", json!({"limit":100,"cursor":cursor}))
+                .await?;
+            for m in result["data"].as_array().ok_or(Error::Model)? {
+                if m["hidden"] == true {
+                    continue;
+                }
+                models.push(json!({"slug":m["model"],"display_name":m["displayName"],"efforts":m["supportedReasoningEfforts"].as_array().into_iter().flatten().filter_map(|v|v["reasoningEffort"].as_str()).collect::<Vec<_>>()}));
+            }
+            cursor = result["nextCursor"].clone();
+            if cursor.is_null() {
+                return Ok(json!(models));
+            }
+        }
+        Err(Error::Limit)
+    }
+    pub async fn request<F, Fut>(
+        &self,
+        request: Value,
+        cancel: Cancellation,
+        mut on_text: F,
+    ) -> Result<Vec<Value>>
+    where
+        F: FnMut(String, Vec<Value>) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
     {
-        return Err(Error::Authentication);
+        if self.status().await?["connected"] != true {
+            return Err(Error::Authentication);
+        }
+        let control = super::control::Control::new(cancel, Duration::from_secs(600));
+        let run = async {
+            let mut rpc = Rpc::start(&self.home, &self.executable).await?;
+            let tools = request["tools"].as_array().ok_or(Error::Model)?;
+            let dynamic: Vec<Value> = tools.iter().filter(|t|t["type"]=="function").map(|t|json!({"type":"function","name":t["name"],"description":t["description"],"inputSchema":t["parameters"]})).collect();
+            let thread = rpc.call("thread/start", json!({"model":request["model"],"ephemeral":true,"environments":[],"sandbox":"read-only","approvalPolicy":"never","baseInstructions":request["instructions"],"dynamicTools":dynamic})).await?;
+            let thread_id = thread["thread"]["id"]
+                .as_str()
+                .ok_or(Error::Model)?
+                .to_owned();
+            // Preserve roles, images, and completed tool outcomes in the model-visible history.
+            rpc.call(
+                "thread/inject_items",
+                json!({"threadId":thread_id,"items":codex_history(&request["input"])?}),
+            )
+            .await?;
+            let turn = rpc.call("turn/start", json!({"threadId":thread_id,"input":[{"type":"text","text":"Continue from the conversation above. Use the provided application tools when needed."}],"environments":[],"effort":request["reasoning"]["effort"]})).await?;
+            let turn_id = turn["turn"]["id"].as_str().ok_or(Error::Model)?.to_owned();
+            let mut text = String::new();
+            let mut output = Vec::new();
+            loop {
+                let message = tokio::time::timeout(Duration::from_secs(600), rpc.read())
+                    .await
+                    .map_err(|_| Error::ModelTimeout)??;
+                let p = &message["params"];
+                if p["threadId"] != thread_id {
+                    rpc.deny(&message).await?;
+                    continue;
+                }
+                match message["method"].as_str() {
+                    Some("item/agentMessage/delta") => {
+                        text.push_str(p["delta"].as_str().ok_or(Error::Model)?);
+                        if text.len() > 4 * 1024 * 1024 {
+                            return Err(Error::Limit);
+                        }
+                        on_text(text.clone(), vec![]).await?;
+                    }
+                    Some("item/completed") if p["item"]["type"] == "agentMessage" => {
+                        if let Some(value) = p["item"]["text"].as_str() {
+                            output.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":value}]}));
+                        }
+                    }
+                    Some("item/tool/call") if message.get("id").is_some() => {
+                        let call = validated_call(p, tools)?;
+                        // A complete RPC tool request is the handoff boundary, not a partial delta.
+                        // Rust checkpoints it before executing. Stop this ephemeral turn; the next
+                        // round receives the durable result through thread/inject_items.
+                        let _ = rpc
+                            .call(
+                                "turn/interrupt",
+                                json!({"threadId":thread_id,"turnId":turn_id}),
+                            )
+                            .await;
+                        output.push(call);
+                        return Ok(output);
+                    }
+                    Some("turn/completed") => {
+                        if p["turn"]["status"] != "completed" {
+                            return Err(Error::ModelIncomplete);
+                        }
+                        if output.is_empty() {
+                            return Err(Error::ModelIncomplete);
+                        }
+                        return Ok(output);
+                    }
+                    _ => rpc.deny(&message).await?,
+                }
+            }
+        };
+        tokio::select! { biased; _ = control.cancelled() => Err(Error::Cancelled), result = run => result }
     }
-    Ok(())
 }
-fn validate_identity(token: &str, client_id: &str, nonce: &str, keys: &JwkSet) -> Result<Identity> {
-    let header = decode_header(token).map_err(|_| Error::Authentication)?;
-    if header.alg != Algorithm::RS256 {
-        return Err(Error::Authentication);
-    }
-    let key = keys
-        .find(header.kid.as_deref().ok_or(Error::Authentication)?)
-        .ok_or(Error::Authentication)?;
-    let mut validation = Validation::new(Algorithm::RS256);
-    validation.set_issuer(&[ISSUER]);
-    validation.set_audience(&[client_id]);
-    validation.set_required_spec_claims(&["sub", "exp", "iat", "iss", "aud"]);
-    validation.leeway = 5;
-    validation.validate_nbf = true;
-    let claims = decode::<Identity>(
-        token,
-        &DecodingKey::from_jwk(key).map_err(|_| Error::Authentication)?,
-        &validation,
-    )
-    .map_err(|_| Error::Authentication)?
-    .claims;
-    if claims.sub.is_empty() || claims.nonce != nonce || claims.iat > now() + 5 {
-        return Err(Error::Authentication);
-    }
-    Ok(claims)
+// App-server raw history requires explicit message tags and structured content.
+fn codex_history(input: &Value) -> Result<Vec<Value>> {
+    input
+        .as_array()
+        .ok_or(Error::Model)?
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            if item.get("role").is_some() {
+                item["type"] = json!("message");
+                if let Some(text) = item["content"].as_str() {
+                    let kind = if item["role"] == "assistant" {
+                        "output_text"
+                    } else {
+                        "input_text"
+                    };
+                    item["content"] = json!([{"type":kind,"text":text}]);
+                }
+            }
+            Ok(item)
+        })
+        .collect()
 }
-
+fn validated_call(p: &Value, tools: &[Value]) -> Result<Value> {
+    let name = p["tool"].as_str().ok_or(Error::Model)?;
+    if p["namespace"].as_str().is_some_and(|n| !n.is_empty())
+        || !tools
+            .iter()
+            .any(|t| t["type"] == "function" && t["name"] == name)
+    {
+        return Err(Error::Validation);
+    }
+    let args = &p["arguments"];
+    if !args.is_object() || args.to_string().len() >= 256 * 1024 {
+        return Err(Error::Validation);
+    }
+    let id = p["callId"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() < 256)
+        .ok_or(Error::Model)?;
+    Ok(json!({"type":"function_call","call_id":id,"name":name,"arguments":args.to_string()}))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn validates_signed_identity_nonce_audience_issuer_and_expiry() {
-        let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
-            "../../tests/fixtures/oidc-test-only.pem"
-        ))
-        .unwrap();
-        let keys: JwkSet = serde_json::from_str(include_str!(
-            "../../tests/fixtures/oidc-test-only-jwks.json"
-        ))
-        .unwrap();
-        let mut header = jsonwebtoken::Header::new(Algorithm::RS256);
-        header.kid = Some("test-key".into());
-        let claims = json!({"sub":"synthetic-owner","iss":ISSUER,"aud":"oaiapp_test","iat":now(),"exp":now()+600,"nonce":"test-nonce"});
-        let jwt = jsonwebtoken::encode(&header, &claims, &key).unwrap();
-        assert_eq!(
-            validate_identity(&jwt, "oaiapp_test", "test-nonce", &keys)
-                .unwrap()
-                .sub,
-            "synthetic-owner"
-        );
-        for (client, nonce) in [
-            ("wrong-client", "test-nonce"),
-            ("oaiapp_test", "wrong-nonce"),
-        ] {
-            assert!(validate_identity(&jwt, client, nonce, &keys).is_err());
-        }
-        let mut expired = claims.clone();
-        expired["exp"] = json!(now() - 60);
-        let jwt = jsonwebtoken::encode(&header, &expired, &key).unwrap();
-        assert!(validate_identity(&jwt, "oaiapp_test", "test-nonce", &keys).is_err());
-        let mut wrong = claims;
-        wrong["iss"] = json!("https://example.com");
-        let jwt = jsonwebtoken::encode(&header, &wrong, &key).unwrap();
-        assert!(validate_identity(&jwt, "oaiapp_test", "test-nonce", &keys).is_err());
-    }
-    #[tokio::test]
-    async fn oauth_state_is_bound_and_tokens_are_separate_encrypted_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
-        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
-        let auth = ChatGpt::new(store.clone(), secrets.clone()).unwrap();
-        let url = auth
-            .begin(
-                "owner-session".into(),
-                "http://127.0.0.1:54321/auth/callback".into(),
-            )
-            .await
-            .unwrap();
-        let url = url::Url::parse(&url).unwrap();
-        let q = url
-            .query_pairs()
-            .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(q["client_id"], "dynamic_agent_client");
-        assert_eq!(q["code_challenge_method"], "S256");
-        assert_eq!(q["agent_name_hint"], "LittleSpaces");
-        assert!(q["ext_agent_host_id"].starts_with("urn:uuid:"));
-        assert_eq!(
-            auth.callback(
-                "other-owner",
-                std::collections::BTreeMap::from([("state".into(), q["state"].to_string())])
-            )
-            .await,
-            Err(Error::Authentication)
-        );
-        let c = Credentials {
-            subject: "synthetic".into(),
-            email: None,
-            client_id: "oaiapp_test".into(),
-            access_token: "not-a-real-access-token".into(),
-            refresh_token: "not-a-real-refresh-token".into(),
-            id_token: "not-a-real-id-token".into(),
-            expires_at: now() + 1000,
-            scope: "chatgpt.tokens.use.direct".into(),
-        };
-        auth.save(c).await.unwrap();
-        assert!(secrets.list().unwrap().is_empty());
-        assert_eq!(
-            auth.access_token().await.unwrap().as_str(),
-            "not-a-real-access-token"
-        );
-        let bytes = std::fs::read(dir.path().join("db.sqlite")).unwrap();
-        assert!(!bytes
-            .windows(b"not-a-real-access-token".len())
-            .any(|w| w == b"not-a-real-access-token"));
-    }
-}
-
-#[cfg(test)]
-mod catalog_budget_tests {
-    use super::*;
-    #[tokio::test]
-    async fn model_catalog_can_exceed_auth_budget_without_weakening_auth_limits() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
-        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
-        let auth = ChatGpt::new(store, secrets).unwrap();
-        let body=json!({"models":[{"slug":"fixture","display_name":"Fixture","visibility":"list","metadata":"x".repeat(256*1024)}]}).to_string();
-        let app = axum::Router::new().route(
-            "/",
-            axum::routing::get(move || {
-                let body = body.clone();
-                async move { body }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let response = auth.client.get(&url).send().await.unwrap();
-        let catalog: Value = auth
-            .json_with_budget(response, 4 * 1024 * 1024, Error::ModelCatalogLimit)
-            .await
-            .unwrap();
-        assert_eq!(catalog["models"][0]["slug"], "fixture");
-        let response = auth.client.get(&url).send().await.unwrap();
-        assert!(matches!(
-            auth.bounded_json::<Value>(response).await,
-            Err(Error::Limit)
-        ));
-        server.abort();
-    }
-}
-
-#[cfg(test)]
-mod tunnel_owner_tests {
-    use super::*;
-    #[tokio::test]
-    async fn callback_without_domain_cookie_requires_live_originating_owner_session_and_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::create(&dir.path().join("db.sqlite")).unwrap();
-        let secrets = Secrets::open(store.clone(), &dir.path().join("secrets.key")).unwrap();
-        let owner = super::super::owner::OwnerAuth::new(store.clone());
-        owner
-            .setup(owner.setup_token().into(), "synthetic long password".into())
-            .await
-            .unwrap();
-        let (token, _) = owner.login("synthetic long password".into()).await.unwrap();
-        let auth = ChatGpt::new(store, secrets).unwrap();
-        auth.begin(
-            super::super::owner::hash_token(&token),
-            "http://127.0.0.1:1455/auth/callback".into(),
+    fn only_complete_known_application_calls_can_cross_dispatch_boundary() {
+        let tools = vec![json!({"type":"function","name":"read_sdk"})];
+        assert!(validated_call(
+            &json!({"tool":"read_sdk","callId":"call-1","arguments":{}}),
+            &tools
         )
-        .await
+        .is_ok());
+        for p in [
+            json!({"tool":"exec_command","callId":"x","arguments":{}}),
+            json!({"tool":"read_sdk","namespace":"shell","callId":"x","arguments":{}}),
+            json!({"tool":"read_sdk","callId":"x","arguments":"partial"}),
+            json!({"tool":"read_sdk","arguments":{}}),
+        ] {
+            assert!(validated_call(&p, &tools).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn device_login_is_owner_bound_persistent_cancellable_and_dispatch_is_atomic() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::create(&dir.path().join("workspace.sqlite")).unwrap();
+        let secrets =
+            super::super::secrets::Secrets::open(store.clone(), &dir.path().join("secrets.key"))
+                .unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO owner_sessions VALUES('owner-hash',?, 'csrf')",
+                [now() + 3600],
+            )
+            .unwrap();
+        let fake = dir.path().join("codex-fake");
+        std::fs::write(
+            &fake,
+            include_str!("../../tests/fixtures/codex-device-fake.py"),
+        )
         .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut auth = ChatGpt::new(store.clone(), secrets.clone()).unwrap();
+        auth.executable = fake.clone();
+        assert!(auth.begin("guest-or-expired".into()).await.is_err());
         assert_eq!(
-            auth.tunnel_callback(std::collections::BTreeMap::from([(
-                "state".into(),
-                "wrong-state".into()
-            )]))
-            .await,
-            Err(Error::Authentication)
+            auth.begin("owner-hash".into()).await.unwrap()["login"]["userCode"],
+            "TEST-1234"
         );
-        owner.logout(&token).unwrap();
+        auth.cancel_login().await.unwrap();
+        assert!(auth.status().await.unwrap().get("login").is_none());
+        auth.begin("owner-hash".into()).await.unwrap();
+        // Expired/revoked owner sessions cannot complete an outstanding authorization.
+        store
+            .open()
+            .unwrap()
+            .execute("UPDATE owner_sessions SET expires_at=0", [])
+            .unwrap();
+        std::fs::write(auth.home.join("approve"), "yes").unwrap();
+        assert_eq!(auth.status().await.unwrap()["connected"], false);
+        assert!(!auth.home.join("auth.json").exists());
+        std::fs::remove_file(auth.home.join("approve")).unwrap();
+        store
+            .open()
+            .unwrap()
+            .execute("UPDATE owner_sessions SET expires_at=?", [now() + 3600])
+            .unwrap();
+        auth.begin("owner-hash".into()).await.unwrap();
+        std::fs::write(auth.home.join("approve"), "yes").unwrap();
+        assert_eq!(auth.status().await.unwrap()["connected"], true);
+        drop(auth);
+        let mut auth = ChatGpt::new(store.clone(), secrets).unwrap();
+        auth.executable = fake;
+        assert_eq!(auth.status().await.unwrap()["connected"], true);
+        assert_eq!(auth.models().await.unwrap()[0]["slug"], "synthetic");
+        let request = json!({"model":"synthetic","instructions":"test","input":[{"role":"user","content":"hello"}],"tools":[{"type":"function","name":"read_sdk","description":"read","parameters":{"type":"object"}}]});
+        let mut deltas = vec![];
+        let output = auth
+            .request(request.clone(), Cancellation::default(), |text, _| {
+                deltas.push(text);
+                async { Ok(()) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(deltas, vec!["Hello"]);
+        assert_eq!(output[0]["content"][0]["text"], "Hello");
+        for scenario in ["crash", "failed", "unknown"] {
+            std::fs::write(auth.home.join("scenario"), scenario).unwrap();
+            assert!(auth
+                .request(request.clone(), Cancellation::default(), |_, _| async {
+                    Ok(())
+                })
+                .await
+                .is_err());
+        }
+        std::fs::write(auth.home.join("scenario"), "tool").unwrap();
+        let output = auth
+            .request(request.clone(), Cancellation::default(), |_, _| async {
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(output[0]["type"], "function_call");
+        std::fs::write(auth.home.join("scenario"), "wait").unwrap();
+        let cancel = Cancellation::default();
+        let other = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            other.cancel();
+        });
         assert_eq!(
-            auth.tunnel_callback(std::collections::BTreeMap::new())
-                .await,
-            Err(Error::Unauthorized)
+            auth.request(request, cancel, |_, _| async { Ok(()) })
+                .await
+                .unwrap_err(),
+            Error::Cancelled
         );
+        super::super::maintenance::backup(
+            &store,
+            &dir.path().join("backup"),
+            &dir.path().join("secrets.key"),
+        )
+        .unwrap();
+        assert!(dir.path().join("backup/codex/auth.json").exists());
+        auth.disconnect().await.unwrap();
+        assert_eq!(auth.status().await.unwrap()["connected"], false);
+    }
+    #[tokio::test]
+    #[ignore = "requires the pinned Codex runtime; uses an isolated home with no account"]
+    async fn real_codex_protocol_initializes_without_user_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = std::env::var_os("LITTLESPACES_CODEX_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("codex"));
+        let mut rpc = Rpc::start(dir.path(), &bin).await.unwrap();
+        let result = rpc
+            .call("account/read", json!({"refreshToken":false}))
+            .await
+            .unwrap();
+        assert!(result["account"].is_null());
+        let thread = rpc.call("thread/start", json!({"ephemeral":true,"environments":[],"sandbox":"read-only","approvalPolicy":"never"})).await.unwrap();
+        rpc.call("thread/inject_items", json!({"threadId":thread["thread"]["id"],"items":codex_history(&json!([{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}])).unwrap()})).await.unwrap();
     }
 }

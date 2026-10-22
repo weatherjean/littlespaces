@@ -95,6 +95,23 @@ pub fn backup(store: &Store, destination: &std::path::Path, key: &std::path::Pat
             .map_err(|_| Error::Storage)?;
         }
     }
+    let auth = store.directory().join("codex/auth.json");
+    if auth.exists() {
+        let folder = destination.join("codex");
+        std::fs::create_dir(&folder).map_err(|_| Error::Storage)?;
+        std::fs::copy(auth, folder.join("auth.json")).map_err(|_| Error::Storage)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| Error::Storage)?;
+            std::fs::set_permissions(
+                folder.join("auth.json"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .map_err(|_| Error::Storage)?;
+        }
+    }
     Ok(())
 }
 

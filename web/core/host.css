@@ -162,3 +162,16 @@
   flex: 1;
   min-height: 0;
 }
+
+.device-signin {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.device-code {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  overflow-wrap: anywhere;
+  user-select: all;
+}

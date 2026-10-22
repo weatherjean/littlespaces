@@ -16,19 +16,21 @@ Version 0.1.0 supports **one owner and invited guests** in a shared workspace. T
 
 ## Run with Docker Compose
 
-Docker Compose is the supported deployment on Linux servers and Docker Desktop. Install Docker with Compose 2.24+ and Python 3.9+ for the configuration helper. The containers include Rust, Node and browser runtime dependencies; no host compiler is required. Allow at least 4 GiB RAM (8 GiB for source builds).
-
-Version `v0.1.0` is the first experimental release of the Rust implementation. Ongoing development lives on `main`.
+Docker Compose on a VPS is the supported user deployment. Install Docker with Compose 2.24+ and Python 3.9+ for the configuration helper. Point a domain at the VPS and allow ports 80/443. Use at least 4 GiB RAM. The images include the application, Codex runtime and sandboxed browser verifier.
 
 ```sh
-git clone --branch v0.1.0 https://github.com/weatherjean/littlespaces.git
+git clone https://github.com/weatherjean/littlespaces.git
 cd littlespaces
-python3 scripts/configure-compose.py
-docker compose up -d --build --wait
-docker compose logs app
+python3 scripts/configure-compose.py --mode traefik \
+  --origin https://apps.example.com --acme-email you@example.com \
+  --image-tag sha-REPLACE_WITH_TESTED_COMMIT
+docker compose pull
+docker compose up -d --no-build --wait
 ```
 
-Open the private owner-setup link from the logs, choose an email and password, and connect ChatGPT in Settings. The local app is at http://127.0.0.1:8080. Only loopback ports are exposed. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
+Use a matching tested image tag for the app and verifier from the [releases](https://github.com/weatherjean/littlespaces/releases). Version 0.1.0 predates device-code sign-in; use a later build for this flow.
+
+Open the private owner-setup link from the logs, choose an email and password, and connect ChatGPT in Settings. ChatGPT is always first in Settings: open the displayed OpenAI link and enter the one-time code. No tunnel or localhost callback is needed. Model requests consume your connected account's usage. See [connection details](docs/rhai/sign-in.md).
 
 `docker compose stop` stops the stack; `docker compose up -d --wait` resumes it. Data persists in named volumes. **Do not use `docker compose down --volumes` on your workspace.**
 

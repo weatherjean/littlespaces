@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { testDeviceLogin } from './test-device-login.mjs';
 import { testSharing, testOwnerAccount } from './test-sharing.mjs';
 import { testHistoryAndStorage } from './test-history.mjs';
 // Focused development fixture: actual streamed Rust agent/tools/backend/Preact/browser path.
@@ -454,6 +455,7 @@ checks: try {
         .published,
     );
     await signedOut.close();
+    await testDeviceLogin({ context, origin, snapshots });
     await testSharing({ browser, context, origin, api, app: app.app, snapshots });
     await testOwnerAccount({ browser, context, origin, workspace });
     break checks;

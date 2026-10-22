@@ -69,9 +69,6 @@ pub(crate) fn classify(status: u16, value: &Value) -> Error {
         },
     }
 }
-pub(crate) async fn response_error(response: reqwest::Response) -> Error {
-    response_failure(response).await.0
-}
 pub(crate) async fn response_failure(mut response: reqwest::Response) -> (Error, Value) {
     let status = response.status().as_u16();
     let body = async {

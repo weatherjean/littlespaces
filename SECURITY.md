@@ -20,6 +20,8 @@ In a private report, include the affected commit, OS, reproduction using synthet
 - External calls may have effects that local rollback cannot undo. Interrupted or uncertain effects require owner review; do not blindly replay them.
 - Linux and macOS have different resource-containment guarantees. See [execution details](CONTRIBUTING.md#durability-execution-isolation-and-maintenance) and the [deployment guide](deploy/README.md). Restricted execution is not a claim of a general native-code sandbox.
 
+Codex authentication is stored in the private workspace `codex/auth.json` file. It is included in offline backups and must never be exposed to applets, the verifier, public artifacts, or logs. Provider subprocesses run with a dedicated home, no inherited credentials, and environment access disabled.
+
 ## Operating safely
 
 Keep the default loopback listener private. Remote access needs the documented TLS reverse proxy and explicit trusted-origin configuration. Do not expose the browser verifier or use development-fixture builds as production artifacts.

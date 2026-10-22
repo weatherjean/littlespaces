@@ -34,17 +34,15 @@ def main():
         assert "workspace" in [m.get("source") for m in services["app"]["volumes"]]
         ports = services["gateway"].get("ports", [])
         if mode == "local":
-            assert len(ports) == 2 and all(p["host_ip"] == "127.0.0.1" for p in ports)
+            assert len(ports) == 1 and all(p["host_ip"] == "127.0.0.1" for p in ports)
         elif mode == "tailscale":
-            assert len(ports) == 1 and ports[0]["host_ip"] == "127.0.0.1"
-            assert ports[0]["target"] == 1455
+            assert not ports
             tail = services["tailscale"]
             assert tail["environment"]["TS_USERSPACE"] == "true"
             assert not tail.get("privileged") and not tail.get("devices") and not tail.get("cap_add")
             assert "workspace" not in [m.get("source") for m in tail["volumes"]]
         else:
-            assert {p["target"] for p in ports} == {80, 443, 1455}
-            assert next(p for p in ports if p["target"] == 1455)["host_ip"] == "127.0.0.1"
+            assert {p["target"] for p in ports} == {80, 443}
         for service in services.values():
             assert not any("docker.sock" in m.get("target", "") for m in service.get("volumes", []))
     serve = json.loads((ROOT / "deploy/container/tailscale-serve.json").read_text())

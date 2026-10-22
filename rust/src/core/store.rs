@@ -68,6 +68,12 @@ impl Store {
         super::migrations::install(&mut db)?;
         Ok(store)
     }
+    pub(crate) fn directory(&self) -> std::path::PathBuf {
+        self.path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf()
+    }
     pub(crate) fn open(&self) -> Result<Connection> {
         let db = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         // Rollback-journal commits briefly exclude readers as well as writers.

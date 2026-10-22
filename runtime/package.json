@@ -1,0 +1,7 @@
+{
+  "name": "littlespaces-codex-runtime",
+  "private": true,
+  "version": "0.1.1",
+  "license": "MIT",
+  "dependencies": { "@openai/codex": "0.163.0" }
+}

@@ -19,7 +19,7 @@ use axum::{
 
 use serde_json::{json, Value};
 use std::future::IntoFuture;
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 mod sharing;
 mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
@@ -72,15 +72,6 @@ fn cookie(headers: &HeaderMap) -> String {
         .find(|(k, _)| *k == "little_session")
         .map(|(_, v)| v.to_owned())
         .unwrap_or_default()
-}
-async fn owner_session(server: &Server, headers: &HeaderMap) -> Result<super::owner::Session> {
-    let owner = server.owner.clone();
-    let token = cookie(headers);
-    server
-        .runtime
-        .store
-        .blocking(move |_| owner.session(&token))
-        .await
 }
 async fn account_session(server: &Server, headers: &HeaderMap) -> Result<super::owner::Session> {
     let owner = server.owner.clone();
@@ -235,6 +226,7 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/api/secrets/:name/delete", post(secret_delete))
         .route("/api/chatgpt", get(chatgpt_status))
         .route("/api/chatgpt/start", post(chatgpt_start))
+        .route("/api/chatgpt/cancel", post(chatgpt_cancel))
         .route("/api/chatgpt/disconnect", post(chatgpt_disconnect))
         .route("/api/models", get(models))
         .route("/api/logout", post(logout))
@@ -267,7 +259,6 @@ pub fn router(server: Arc<Server>) -> Router {
         .route("/preview-test/:ticket", get(preview_test))
         .route("/preview-test/:ticket/frame", get(preview_frame))
         .route("/preview-test/:ticket/action", post(preview_test_action))
-        .route("/auth/callback", get(callback))
         .fallback(public_asset)
         .merge(private)
         .layer(DefaultBodyLimit::max(512 * 1024))
@@ -601,32 +592,14 @@ async fn secret_delete(State(s): State<Arc<Server>>, Path(name): Path<String>) -
 async fn chatgpt_status(State(s): State<Arc<Server>>) -> Api<Value> {
     let mut status = s.chatgpt.status().await?;
     status["managementOrigin"] = json!(s.chatgpt_management_origin);
-    status["requiresLocalCallback"] = json!(s.origin.starts_with("https:"));
-    status["callbackPort"] = json!(url::Url::parse(&s.host.callback)
-        .map_err(|_| Error::Validation)?
-        .port_or_known_default());
     Ok(Json(status))
 }
 async fn chatgpt_start(State(s): State<Arc<Server>>, h: HeaderMap) -> Api<Value> {
-    let owner = hash_token(&cookie(&h));
-    Ok(Json(
-        json!({"url":s.chatgpt.begin(owner,s.host.callback.clone()).await?}),
-    ))
+    Ok(Json(s.chatgpt.begin(hash_token(&cookie(&h))).await?))
 }
-async fn callback(
-    State(s): State<Arc<Server>>,
-    h: HeaderMap,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Response {
-    let result = if owner_session(&s, &h).await.is_ok() {
-        s.chatgpt.callback(&hash_token(&cookie(&h)), query).await
-    } else {
-        s.chatgpt.tunnel_callback(query).await
-    };
-    match result {
-        Ok(()) => axum::response::Redirect::to(&s.origin).into_response(),
-        Err(e) => ApiError(e).into_response(),
-    }
+async fn chatgpt_cancel(State(s): State<Arc<Server>>) -> Api<Value> {
+    s.chatgpt.cancel_login().await?;
+    Ok(Json(json!({"cancelled":true})))
 }
 async fn chatgpt_disconnect(State(s): State<Arc<Server>>) -> Api<Value> {
     s.agent.cancel_all().await;

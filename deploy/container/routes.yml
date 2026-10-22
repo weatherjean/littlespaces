@@ -17,10 +17,7 @@ http:
       {{ if eq (env "LITTLESPACES_TLS") "true" }}
       tls: {certResolver: letsencrypt}
       {{ end }}
-    callback:
-      rule: 'Host(`127.0.0.1`) && Path(`/auth/callback`)'
-      entryPoints: [callback]
-      middlewares: [request-limit]
+  middlewares: [request-limit]
       service: workspace
   middlewares:
     login-limit:

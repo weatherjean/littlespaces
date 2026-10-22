@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--verifier-image", default="ghcr.io/weatherjean/littlespaces-verifier:local")
     args = parser.parse_args()
     project = "littlespaces-smoke-" + secrets.token_hex(4)
-    port, callback_port = free_port(), free_port()
+    port = free_port()
     origin = f"http://127.0.0.1:{port}"
     with tempfile.TemporaryDirectory(prefix="littlespaces-compose-") as temporary:
         stage = Path(temporary)
@@ -48,7 +48,7 @@ def main():
         )
         override = stage / "ports.json"
         override.write_text(json.dumps({"services": {"gateway": {"ports": [
-            f"127.0.0.1:{port}:{port}", f"127.0.0.1:{callback_port}:1455"
+            f"127.0.0.1:{port}:{port}"
         ]}}}))
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("COMPOSE_", "LITTLESPACES_", "TAILSCALE_"))}
@@ -117,16 +117,6 @@ def main():
             assert request("/api/apps")[0] == 401
             assert request("/api/test-runs", {"allowRealModel": True})[0] == 404
             assert request("/api/session", headers={"Host": "attacker.invalid"})[0] == 404
-            # The callback tunnel is not a second route into the owner API.
-            callback_client = urllib.request.build_opener()
-            for route, expected in [("/api/session", 404), ("/auth/callback?error=access_denied", 400)]:
-                req = urllib.request.Request(f"http://127.0.0.1:{callback_port}{route}",
-                                             headers={"Host": "127.0.0.1:1455"})
-                try:
-                    callback_client.open(req, timeout=10)
-                    raise AssertionError("Callback listener accepted an invalid request")
-                except urllib.error.HTTPError as error:
-                    assert error.code == expected, (route, error.code)
             logs = compose("logs", "--no-color", "app")
             setup = re.search(r"/#setup=(\S+)", logs)
             assert setup, "First start must offer owner setup"

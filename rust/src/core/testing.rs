@@ -138,6 +138,7 @@ async fn create(
             // Test clients may exercise inference, but cannot alter the shared ChatGPT sign-in.
             if [
                 "/api/chatgpt/start",
+                "/api/chatgpt/cancel",
                 "/api/chatgpt/disconnect",
                 "/auth/callback",
             ]
@@ -275,7 +276,11 @@ mod connection_tests {
             .await
             .unwrap();
         assert_eq!(status["managementOrigin"], "http://127.0.0.1:5175");
-        for route in ["/api/chatgpt/start", "/api/chatgpt/disconnect"] {
+        for route in [
+            "/api/chatgpt/start",
+            "/api/chatgpt/cancel",
+            "/api/chatgpt/disconnect",
+        ] {
             let response = client
                 .post(format!("{origin}{route}"))
                 .header("cookie", &cookie)
