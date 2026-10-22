@@ -10,7 +10,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_FILES = ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.md", "CONTRIBUTING.md",
-                 "SECURITY.md", "CONTEXT.md", "docs/releasing.md", "docs/release-review-2026-10-16.md", "docs/production-readiness.md",
+                 "SECURITY.md", "CONTEXT.md", "docs/releasing.md", "docs/guest-sharing.md", "docs/release-0.1.0.md", "docs/release-review-2026-10-16.md", "docs/production-readiness.md",
                  "docs/monolith-rework.md", "docs/rhai/sdk.md", "docs/rhai/frontend.md",
                  "docs/rhai/status.md", "docs/rhai/sign-in.md", "rust/Cargo.lock",
                  "web/package.json", "web/package-lock.json", "web/browser-harness.mjs",
