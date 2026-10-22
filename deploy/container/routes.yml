@@ -17,8 +17,6 @@ http:
       {{ if eq (env "LITTLESPACES_TLS") "true" }}
       tls: {certResolver: letsencrypt}
       {{ end }}
-  middlewares: [request-limit]
-      service: workspace
   middlewares:
     login-limit:
       rateLimit:
