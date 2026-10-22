@@ -31,6 +31,8 @@ export function Settings({
   onSelectApp,
 }) {
   const [connecting, setConnecting] = useState(false);
+  const [deviceOpened, setDeviceOpened] = useState(false);
+  useEffect(() => setDeviceOpened(false), [connection?.login?.userCode]);
   const connectRef = useRef(false);
   async function startConnection() {
     if (connectRef.current) return;
@@ -142,32 +144,39 @@ export function Settings({
               <code class="device-code" aria-label="ChatGPT sign-in code">
                 {connection.login.userCode}
               </code>
-              <a
-                class="primary-button"
-                href={connection.login.verificationUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Open ChatGPT
-              </a>
-              <p>Waiting for approval… This code expires in 10 minutes.</p>
+              <p class="device-progress" role="status">
+                {deviceOpened && <span class="signin-spinner" aria-hidden="true" />}
+                {deviceOpened ? 'Waiting for approval…' : 'This code expires in 10 minutes.'}
+              </p>
+              <div class={`device-actions ${deviceOpened ? 'is-waiting' : ''}`}>
+                <a
+                  class={deviceOpened ? 'secondary-button' : 'primary-button'}
+                  href={connection.login.verificationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setDeviceOpened(true)}
+                >
+                  {deviceOpened ? 'Open again' : 'Open ChatGPT'}
+                </a>
+                <button
+                  class="secondary-button"
+                  aria-label="Cancel sign-in"
+                  onClick={() =>
+                    attempt(async () => {
+                      await api('/api/chatgpt/cancel', {});
+                      await onRefresh();
+                    })
+                  }
+                >
+                  Cancel
+                </button>
+              </div>
               <p class="muted">
                 If asked, enable device-code sign-in in ChatGPT → Settings → Security.
               </p>
-              <button
-                class="secondary-button"
-                onClick={() =>
-                  attempt(async () => {
-                    await api('/api/chatgpt/cancel', {});
-                    await onRefresh();
-                  })
-                }
-              >
-                Cancel sign-in
-              </button>
             </div>
           ) : (
-            <div>
+            <div class="chatgpt-actions">
               {connection?.login?.status === 'error' && (
                 <p class="error" role="alert">
                   Sign-in expired or was declined. Please try again.
@@ -176,9 +185,7 @@ export function Settings({
               <button class="primary-button" onClick={startConnection} disabled={connecting}>
                 {connecting ? 'Getting sign-in code…' : 'Continue with ChatGPT'}
               </button>
-              <p class="muted">
-                Sign in with a one-time code. No terminal or callback setup needed.
-              </p>
+              <p class="muted">Connect your account with a one-time code.</p>
             </div>
           )}
         </section>

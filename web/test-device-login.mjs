@@ -5,6 +5,9 @@ export async function testDeviceLogin({ context, origin, snapshots }) {
   const isolated = await context
     .browser()
     .newContext({ storageState: await context.storageState(), serviceWorkers: 'block' });
+  await isolated.route('https://auth.openai.com/**', (route) =>
+    route.fulfill({ body: 'Synthetic authorization page' }),
+  );
   const page = await isolated.newPage();
   page.setDefaultTimeout(15000);
   let starts = 0;
@@ -28,9 +31,23 @@ export async function testDeviceLogin({ context, origin, snapshots }) {
     status = { connected: false, deviceCode: true };
     return route.fulfill({ json: { cancelled: true } });
   });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(origin);
+  await page.getByRole('link', { name: 'LittleSpaces home', exact: true }).hover();
+  await page.screenshot({ path: `${snapshots}/logo-hover-1280.png` });
   await page.goto(`${origin}/settings`);
   const first = page.locator('.settings-content > :first-child');
   await first.getByRole('heading', { name: 'ChatGPT', exact: true }).waitFor();
+  for (const width of [320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const heading = await first
+      .getByRole('heading', { name: 'ChatGPT', exact: true })
+      .boundingBox();
+    const button = await first.getByRole('button', { name: 'Continue with ChatGPT' }).boundingBox();
+    assert.ok(Math.abs(button.x - heading.x) < 2, 'Connect action aligns beneath the description');
+    assert.ok(button.y > heading.y + heading.height, 'Connect action stays below the description');
+    await page.screenshot({ path: `${snapshots}/device-start-${width}.png`, fullPage: true });
+  }
   await page.getByRole('button', { name: 'Continue with ChatGPT' }).evaluate((button) => {
     button.click();
     button.click();
@@ -48,8 +65,20 @@ export async function testDeviceLogin({ context, origin, snapshots }) {
       await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
       false,
     );
+    const code = await page.getByLabel('ChatGPT sign-in code').boundingBox();
+    assert.ok(code.width >= 200, 'Device code must use the card width, not the icon column');
     await page.screenshot({ path: `${snapshots}/device-signin-${width}.png`, fullPage: true });
   }
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('link', { name: 'Open ChatGPT', exact: true }).click();
+  const popup = await popupPromise;
+  await page.getByRole('link', { name: 'Open again', exact: true }).waitFor();
+  await page.getByRole('status').filter({ hasText: 'Waiting for approval' }).waitFor();
+  for (const width of [320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: `${snapshots}/device-waiting-${width}.png`, fullPage: true });
+  }
+  await popup.close();
   await page.getByRole('button', { name: 'Cancel sign-in' }).click();
   await page.getByRole('button', { name: 'Continue with ChatGPT' }).waitFor();
   await page.getByRole('button', { name: 'Continue with ChatGPT' }).click();

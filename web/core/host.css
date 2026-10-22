@@ -164,6 +164,8 @@
 }
 
 .device-signin {
+  grid-column: 1 / -1;
+  width: 100%;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -174,4 +176,73 @@
   letter-spacing: 0.1em;
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+/* Connection controls stay beneath their description at every viewport size. */
+.shell .settings-content .chatgpt-card {
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+}
+.shell .settings-content .chatgpt-card > .chatgpt-actions,
+.shell .settings-content .chatgpt-card > button,
+.shell .settings-content .chatgpt-card > a {
+  grid-column: 2;
+  justify-self: start;
+}
+.chatgpt-actions {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+.device-signin > :is(a, button) {
+  justify-self: start;
+}
+.shell .launcher-header .wordmark {
+  width: fit-content;
+  margin: -8px;
+  padding: 8px;
+  border-radius: var(--control-radius);
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.shell .launcher-header .wordmark:hover {
+  background: #dbeaff0a;
+  box-shadow: inset 0 0 0 1px #dbeaff0c;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell .launcher-header .wordmark {
+    transition: none;
+  }
+}
+
+.device-actions,
+.device-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.device-actions.is-waiting > :is(a, button) {
+  min-height: 36px;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.signin-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #dbeaff30;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: signin-spin 1s linear infinite;
+}
+@keyframes signin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signin-spinner {
+    animation: none;
+  }
 }
